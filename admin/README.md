@@ -1,0 +1,59 @@
+# FindRSS 管理后台模块
+
+本目录是纯前端模块，由 `findrss-worker/index.js` 所在的主 Worker 提供页面与接口。统一安装、启动与部署见 [Worker README](../README.md)。
+
+
+完整的部署、初始配置和后台使用说明见[部署指南](../README.md#一键部署到-cloudflare-workers)。
+
+本目录保存管理后台模块，所有页面位于同一个 Worker 的 `/admin/`。
+
+业务源码按 `pages/`、`components/` 拆分；每个页面使用 `pages/xx.js`（View）与 `pages/xx.model.js`（Model）配对，模型维护状态、请求、校验和业务行为，视图只渲染并调用模型方法。`store.js` 集中声明路由、生成导航菜单并实现认证初始化、会话检查、登录、退出和鉴权请求，`app.js` 是浏览器入口，测试在 `__tests__/`。根构建从 `public/` 复制公共资源，`scripts/build_admin_ui.js` 从本目录构建后台文件，直接写入同一个临时资源目录；不再单独复制或构建 `admin/dist/`。两站共享品牌与 manifest 基础配置。后台 `style.css` 只声明单属性原子类；具体尺寸在页面的 `style` 中维护，响应式原子类通过显式传入的 CSS 变量调整同一个属性。组件与页面统一使用原子类；焦点、禁用和 ARIA 状态使用单节点原子变体，禁止业务类和父子选择器。共用组件的内部布局通过 `bodyProps`、`headerProps`、`listProps` 等参数传入；CodeMirror 通过 `wrapperStyle` 设置尺寸。
+
+管理界面直接复用 `components/frui/` 的按钮、表单控件、Card 和 PageHeader，组件源码、主题 token 和 SVG 图标注册表全部保存在本目录；`style.css` 保存单属性原子类，`components/frui/tokens.css` 提供主题变量，构建后输出为 `frui.css`。`admin/components/ui.js` 只接入宿主和兼容后台的事件形状，不引入阅读器账号或业务状态；`scripts/build_admin_ui.js` 用 esbuild 打包本目录源码，根构建从 `public/assets/timeless/0.34.2/` 提供共用的 Timeless Core/DOM ，依赖由统一项目安装。修改组件后重新构建 admin 即可同步，产物不依赖运行时访问阅读器站点。
+
+## 请求结构
+
+HTML 先通过 script 标签加载 Timeless 全局运行时。`components/ui.js` 首先导入 `store.js`，将 `vm`、`kit`、`ui` 命名空间挂到全局，再导入 `components/icons/index.js` 注册本地图标，组件直接使用 `vm.DialogCore`、`kit.RequestCore` 等。
+
+```text
+Browser
+  ├── /admin/login.html ── 登录表单
+  ├── /admin/index.html, /admin/app.js, /admin/style.css ── Worker ASSETS
+  ├── /admin/auth/* ── 管理 HTTP 边界 登录与会话接口
+  └── /admin/api/* ── 主 Worker 管理路由 ── 直接调用 API 处理函数
+```
+
+主 Worker 的 `admin.js` 提供后台登录、会话和页面路由；本目录没有 Worker 入口。登录表单只需输入密码，请求只提交 `password`；后端固定使用用户名 `admin`，密码来自 Worker secret `ADMIN_PASSWORD`；验证成功后签发 12 小时有效、`HttpOnly`、`SameSite=Strict` 的签名 Session Cookie。各管理页在 `beforeReady` 阶段检查当前路由是否需要登录，未登录时通过 `location.replace` 进入登录页；会话失效或主动退出也会回到登录页。代理管理 API 时，管理 HTTP 边界 在服务端注入管理员 Bearer Token，不向浏览器暴露 Secret。
+
+管理后台页面统一由 `components/shell.js` 承载：桌面端使用固定侧边栏，移动端切换为底部导航；各业务页面共用这套外壳、页头和组件样式。新增子页面时，先建立 `xx.js` 与 `xx.model.js`，再在 `store.js` 的 `routes_configure.admin.children` 中声明路径、页面、标题和图标，并让页面根 View 调用 `FindRSSAdminShell.Page({ page_id, title, description }, children)`，业务 View 作为 `children` 传入，并导出页面函数供路由绑定；页面不再通过 `window.FindRSSAdminPages` 注册或自行挂载。
+
+每张设备卡片通过“日志”按钮打开右侧抽屉，并调用 `/admin/api/devices/:device_id/logs` 查看最近 7 天的设备行为。连接、心跳、调用、响应和系统事件均以结构化日志保存；抽屉支持分类、自动刷新、向前分页和详情展开。敏感字段落库前会脱敏，超大详情会截断。
+
+“消息”进入 `/admin/messages`，汇总所有脚本的错误，包括订阅请求、测试运行与保存校验。错误复用 `script_logs` 持久化并保留 7 天，`/admin/api/messages` 按 `before_id` 分页；`/admin/api/messages/ws` 实时通知后台加载新消息，断线自动重连并补拉记录。消息显示脚本名称、路由、源码行列、错误堆栈、实际传入的 params/query 与日志；敏感参数脱敏。旧日志的包装行号标为“沙箱行号”，没有位置的错误不猜测行号。默认打开“未读” Tab，标记已读后消息从未读列表移至“已读” Tab，两边分别显示空态与历史分页。未读徽标与“全部标记已读”使用当前浏览器的本地已读位置。Cloudflare Worker 和 Go API 均支持消息接口。
+
+订阅源列表的“强制刷新快照”绕过 10 分钟有效期，重新生成完整 RSS/Atom XML，并更新快照状态。公开源同时更新广场的三篇文章预览；私密源只更新订阅 XML，不发布文章预览。外部订阅地址的 XML 由上游管理。
+
+侧边栏的“订阅源”进入 `/admin/discovery` 子页面。该页面调用 `/admin/api/discovery/sources` 新增、编辑、启停、排序和删除 RSS/Atom 订阅源；启用中的订阅源会出现在 Discovery 页面默认列表，并优先参与搜索结果。表单里的「需要 token 访问」复选框始终显示，不随地址形态隐藏；自有脚本源可填 `{{hostname}}/rss/<路由>` 或 `{{hostname}}/atom/<路由>`，登记校验与公开性匹配都不区分这两个前缀。列表里的 `{{hostname}}` 模板地址由 API 按本环境 `FINDRSS_HOSTNAME` 展开后返回（可直接打开），编辑时则回填存储原文，不会把模板固化成本环境地址。
+
+列表页的「导入 JSON」弹窗可粘贴 JSON 或通过 FilePicker 拖拽、选择 `.json` 文件（最大 2 MB）。支持当前「导出 JSON」的 `{ "sources": [...] }` 格式及订阅源数组，每项至少含 `title`、`feed_url`；保留模板地址与源配置，仅新增并跳过已有及批内重复地址，不导入 ID、头像或快照。逐项复用新增接口校验与保存，失败保留已保存结果及剩余 JSON，可继续重试。
+
+
+“Token”子页面（`/admin/tokens`）调用 `/admin/api/access-tokens`，创建、立即过期和移除用户凭证。Token 可以留空自动生成，也可以手动指定；用途或使用人可选填，还可成对填写 email + password 作为 Reader 的第二种登录方式。用户 Token 明文只在创建响应中出现一次并仅保存 SHA-256 摘要；密码使用随机盐和 PBKDF2-SHA-256 保存。
+
+“设备管理 → Device Token”通过 `/admin/api/device-tokens` 管理多个设备接入凭证，支持名称、备注、有效期、最近使用时间和撤销。列表默认脱敏，管理员点击「查看明文」时才通过独立的 `POST /admin/api/device-tokens/:id/reveal` 接口获取解密结果，30 秒自动隐藏；撤销删除密文并断开关联连接。旧 `DEVICE_TOKEN` 自动导入，部署时不再必填。设备 Token 与用户 Token 分开保存；设备 Token 的加密副本依赖部署的 `ADMIN_PASSWORD`，轮换后台密码后应创建新设备 Token 替换原凭证。
+
+`/admin/overview` 每 5 秒读取 `/admin/api/overview` 的 `statistics` 快照：脚本、订阅源、Cookie 数量，去重后的有效路由声明、平台和标签数量，以及每个订阅源的累计调用次数与总次数。数量包含停用项；平台沿用目录规则，包含默认「网站」，标签包含旧分类对应的标签。快照只读元数据，不回传脚本正文或 Cookie 值。
+
+调用计数存于 SQLite `discovery_source_calls`，从部署此功能后累计，DO 重启保留。通过鉴权、匹配到脚本的真实 RSS/Atom 请求按已登记且启用的源计数，包含缓存命中及后续失败；调试、管理预览、测试和后台刷新不计入。源身份沿用路由 pathname（忽略 host 和 RSS/Atom 前缀）加归一化 query，不包含 token；同一身份登记多个地址时，每个源都加一次，总次数为当前源计数之和。改名、编辑及停用保留计数，删除源同时删除计数。外部 RSS 源和未到达 Worker 的客户端/CDN 缓存请求无法统计。
+
+“Cookie 管理”进入 `/cookies`，按域名分组显示已提交的 Cookie 键值列表，值可逐条编辑保存，也可在组内添加键值对、删除已有条目。`GET /admin/api/cookies` 读取，`POST|PATCH|DELETE /admin/api/cookies` 按域名 + key + 路径只增改删目标 Cookie，修改值保留路径、过期时间等属性。同名但不同路径的 Cookie 分别显示；新增键值对默认路径 `/`。「导入 Cookies」弹窗支持填写域名并粘贴 `key=value; k2=v2`；默认使用当前域名，也可填写新域名，按 `/` 路径新增或更新同名条目，值中的等号保留。导入中断时保留已保存结果和剩余输入，可继续重试。操作复用推送校验和缓存失效流程，失败保留草稿；重新读取前确认放弃未保存的修改。接口由 Cloudflare API Worker 提供，原 `POST /admin/api/cookies/update` 全量推送接口保持兼容。
+
+## 构建与检查
+
+在项目根目录执行 `npm run dev`、`npm run build`、`npm test` 或 `npm run deploy`。
+
+后台测试集中在 `admin/__tests__/`，由项目根目录的 `npm test` 统一运行。原子样式检查递归覆盖本目录下的页面、组件与图标；主题变量和编辑器依赖 CSS 单独构建。组件通过 `atomic_classes` 合并默认原子类与调用方覆盖，同一属性保留最后一个类。
+
+脚本管理页面使用 `pages/script.js`、`pages/script.model.js` 和 `pages/script.default.js`，统一承载 RSS、热榜等脚本类型；页面地址为 `/admin/scripts`。
+
+登录页使用 Timeless `Form` 和 `Img` 原语，通过 `onSubmit` 提交，不使用 `View({ as })`。内置 0.34.2 核心与 DOM 运行时同步自本地 Timeless 构建。脚本编辑已移除 Mock 上下文、模板、抽屉与模拟测试，只保留真实请求调试。

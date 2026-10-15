@@ -1,0 +1,2138 @@
+import { ScriptDebugOutputModel } from "../components/script_output.js";
+import { ScriptAgentPanelView } from "../components/script_agent.js";
+import { PaginationView } from "../components/pagination.js";
+import { discovery_platform_label } from "../components/discovery_platform.js";
+
+import { normalize_log_lines, ScriptViewModel } from "./script.model.js";
+
+const Timeless = window.FindRSSAdminUI;
+
+if (!Timeless || !Timeless.DOM) {
+  throw new Error("脚本源管理页无法启动：Timeless 运行时未加载");
+}
+
+if (!window.FindRSSAdminAuth) {
+  throw new Error("脚本源管理页无法启动：认证模块未加载");
+}
+
+if (!window.FindRSSAdminShell) {
+  throw new Error("脚本源管理页无法启动：管理 Shell 未加载");
+}
+const {
+  Button,
+  CodeEditor,
+  Dialog,
+  Field,
+  For,
+  Icon,
+  Img,
+  Input,
+  Link,
+  Select,
+  Show,
+  Switch,
+  TableField,
+  Tabs,
+  Tooltip,
+  TooltipHost,
+  View,
+  combine,
+  computed,
+} = Timeless;
+
+/** @param {unknown} value */
+function source_value(value) {
+  return value && value.__is_ref ? value.value : value;
+}
+
+function format_time(value) {
+  if (!value) return "未知";
+  const date = new Date(Number(value));
+  return Number.isNaN(date.getTime()) ? "未知" : date.toLocaleString();
+}
+
+const source_labels = {
+  request: "真实请求",
+  test: "测试运行",
+  save: "保存校验",
+};
+
+/** 单条日志的摘要行：时间 · 来源 · 状态/相位 · 耗时 · 请求。 */
+function format_log_summary(log) {
+  const parts = [
+    format_time(log.created_at),
+    source_labels[log.source] || log.source || "未知来源",
+    log.phase === "ok" ? "成功" : (log.status || "error") + "/" + log.phase,
+    log.elapsed_ms + "ms",
+  ];
+  if (log.invoked) parts.push("调用设备");
+  if (log.method !== "" && log.pathname !== "")
+    parts.push(log.method + " " + log.pathname);
+  return parts.join(" · ");
+}
+
+function FieldView(
+  { semantic_name, label, controlProps = {}, style = {} },
+  children = [],
+) {
+  return Field(
+    {
+      controlProps: {
+        class: "box-border grid min-w-0",
+        style: {
+          gap: "12px",
+        },
+        ...controlProps,
+      },
+      messageProps: { class: "box-border hidden" },
+      class: "box-border min-w-0 m-0 grid text-muted",
+      style: {
+        gap: "6px",
+        "font-size": "11px",
+        ...style,
+      },
+      attributes: { n: semantic_name },
+      label,
+    },
+    children,
+  );
+}
+
+function ScriptCookieConsentView({ store: vm$ }) {
+  const read = (map) => computed(vm$.state.cookie_consent, map);
+  return Dialog(
+    {
+      headerProps: {
+        class: "box-border flex-none m-0",
+        style: { padding: "20px 24px" },
+      },
+      bodyProps: {
+        class: "box-border flex-1 min-h-0 overflow-auto p-0",
+        style: {},
+      },
+      footerProps: {
+        class: "box-border flex-none m-0",
+        style: {
+          padding: "16px 24px",
+          "border-top": "1px solid var(--frui-color-border-soft)",
+        },
+      },
+      overlayProps: {
+        style: {
+          "z-index": "10004",
+        },
+      },
+      open: read((value) => value.open),
+      title: "确认脚本 Cookie 权限",
+      closable: false,
+      maskClosable: false,
+      class: "box-border flex flex-col overflow-hidden p-0",
+      style: {
+        "z-index": "10005",
+        width: "min(640px, calc(100vw - 32px))",
+        "max-height": "calc(100dvh - 32px)",
+      },
+      attributes: {
+        n: "script-cookie-consent",
+        "aria-label": "确认脚本 Cookie 权限",
+      },
+      onClose: vm$.methods.cancel_cookie_consent,
+      footer: [
+        Button(
+          {
+            class: "box-border",
+            variant: "ghost",
+            disabled: read((value) => value.busy),
+            attributes: { n: "script-cookie-cancel" },
+            onClick: vm$.methods.cancel_cookie_consent,
+          },
+          ["取消"],
+        ),
+        Button(
+          {
+            class: "box-border",
+            disabled: read((value) => value.busy),
+            attributes: { n: "script-cookie-confirm" },
+            onClick: vm$.methods.confirm_cookie_consent,
+          },
+          [read((value) => (value.busy ? "授权中…" : "确认授权并继续"))],
+        ),
+      ],
+    },
+    [
+      View(
+        {
+          class: "box-border",
+          style: {
+            margin: "0",
+            padding: "10px 24px",
+            "overflow-wrap": "anywhere",
+            "white-space": "pre-wrap",
+          },
+          as: "p",
+          attributes: { n: "script-cookie-source" },
+        },
+        [read((value) => value.info?.source || "")],
+      ),
+      View(
+        {
+          class: "box-border",
+          style: {
+            margin: "0",
+            padding: "10px 24px",
+            "overflow-wrap": "anywhere",
+            "white-space": "pre-wrap",
+          },
+          as: "p",
+          attributes: { n: "script-cookie-audience" },
+        },
+        [read((value) => value.info?.audience || "")],
+      ),
+      View(
+        {
+          class: "box-border",
+          style: {
+            margin: "0",
+            padding: "10px 24px",
+            "overflow-wrap": "anywhere",
+            "white-space": "pre-wrap",
+          },
+          as: "pre",
+          attributes: { n: "script-cookie-permissions" },
+        },
+        [
+          read((value) =>
+            JSON.stringify(value.info?.permissions || {}, null, 2),
+          ),
+        ],
+      ),
+      View(
+        {
+          class: "box-border",
+          style: {
+            margin: "0",
+            padding: "10px 24px",
+            "overflow-wrap": "anywhere",
+            "white-space": "pre-wrap",
+          },
+          as: "pre",
+          attributes: { n: "script-cookie-visibility" },
+        },
+        [
+          read(
+            (value) =>
+              "输出访问范围：\n" +
+              JSON.stringify(value.info?.visibility || {}, null, 2),
+          ),
+        ],
+      ),
+      View(
+        {
+          class: "box-border",
+          style: {
+            margin: "0",
+            padding: "10px 24px",
+            "overflow-wrap": "anywhere",
+            "white-space": "pre-wrap",
+          },
+          as: "p",
+          attributes: { n: "script-cookie-version" },
+        },
+        [read((value) => "版本：" + (value.info?.version || "未编号草稿"))],
+      ),
+      View(
+        {
+          class: "box-border",
+          style: {
+            margin: "0",
+            padding: "10px 24px",
+            "overflow-wrap": "anywhere",
+            "white-space": "pre-wrap",
+          },
+          as: "p",
+          attributes: { n: "script-cookie-hash" },
+        },
+        [read((value) => "源码 SHA-256：" + (value.info?.script_hash || ""))],
+      ),
+      View(
+        {
+          class: "box-border",
+          style: {
+            margin: "0",
+            padding: "10px 24px",
+            "overflow-wrap": "anywhere",
+            "white-space": "pre-wrap",
+          },
+          as: "p",
+          attributes: { n: "script-cookie-policy" },
+        },
+        [
+          "授权仅适用于此版本号、源码哈希和权限范围；代码或版本号修改后需重新确认。Cookie 值不会提供给脚本。",
+        ],
+      ),
+      View(
+        {
+          class: "box-border",
+          style: {
+            margin: "0",
+            padding: "10px 24px",
+            "overflow-wrap": "anywhere",
+            "white-space": "pre-wrap",
+          },
+          as: "p",
+          attributes: { n: "script-cookie-error" },
+        },
+        [read((value) => value.error)],
+      ),
+    ],
+  );
+}
+
+function ScriptDebugResultView({ store: vm$ }) {
+  const read = (map) => computed(vm$.state.debug_result, map);
+  const output = read((result) =>
+    ScriptDebugOutputModel(result.rss_debug?.output),
+  );
+  const block = (name, title, value) =>
+    View(
+      {
+        as: "section",
+        class:
+          "box-border " +
+          ("p-var-frui-space-4-0 " + (name === "stack" ? "text-danger" : "")),
+        style: {
+          "border-bottom": "1px solid var(--frui-color-border-soft)",
+        },
+        attributes: { n: "script-debug-" + name },
+      },
+      [
+        View(
+          {
+            class: "box-border",
+            style: {
+              margin: "0 0 var(--frui-space-2)",
+              "font-size": "var(--frui-font-size-sm)",
+            },
+            as: "h3",
+            attributes: { n: "script-debug-" + name + "-title" },
+          },
+          [title],
+        ),
+        View(
+          {
+            class: "box-border m-0 whitespace-pre-wrap break-anywhere",
+            style: {
+              font: "12px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace",
+            },
+            as: "pre",
+            attributes: { n: "script-debug-" + name + "-content" },
+          },
+          [value],
+        ),
+      ],
+    );
+  const panel = (name, children) =>
+    View(
+      {
+        class: "box-border flex-1 min-w-0 min-h-0 overflow-auto p-space-5",
+        attributes: {
+          n: "script-debug-" + name + "-panel",
+          id: "script-debug-" + name + "-panel",
+          tabindex: "0",
+          role: "region",
+          "aria-label": {
+            output: "调试输出",
+            context: "调试上下文",
+            logs: "调试日志",
+          }[name],
+        },
+      },
+      children,
+    );
+  return View(
+    {
+      class: "box-border flex-1 min-h-0 flex flex-col overflow-hidden",
+      attributes: {
+        n: "script-debug-content",
+        role: "region",
+        "aria-label": "调试详情",
+      },
+    },
+    [
+      View(
+        {
+          class: "box-border text-danger whitespace-pre-wrap break-anywhere",
+          attributes: { n: "script-debug-error", role: "alert" },
+        },
+        [read((result) => result.error)],
+      ),
+      Show({
+        when: read((result) => Boolean(result.rss_debug)),
+        ok: () =>
+          View(
+            {
+              class: "box-border flex-none p-var-frui-space-3-var-frui-space-5",
+              attributes: { n: "script-debug-details" },
+            },
+            [
+              View(
+                {
+                  class: "box-border text-muted text-sm break-anywhere",
+                  attributes: { n: "script-debug-summary", role: "status" },
+                },
+                [
+                  read(({ status, rss_debug: debug, stale }) =>
+                    debug
+                      ? `HTTP ${status} · ${debug.phase} · ${debug.elapsed_ms} ms${debug.invoked ? " · 已调用设备" : ""}${stale ? " · 代码或链接已修改，等待重新调试" : ""}`
+                      : "",
+                  ),
+                ],
+              ),
+            ],
+          ),
+      }),
+      Tabs({
+        listProps: {
+          class: "box-border flex-none",
+          style: {
+            padding: "0 var(--frui-space-5)",
+          },
+        },
+        panelProps: { class: "box-border flex-1 min-h-0 flex overflow-hidden" },
+        class: "box-border flex-1 min-h-0 flex flex-col gap-0",
+        attributes: { n: "script-debug-tabs", "aria-label": "调试数据" },
+        items: [
+          {
+            id: "output",
+            label: "输出",
+            panel_id: "script-debug-output-panel",
+            get content() {
+              return [
+                panel("output", [
+                  Show({
+                    when: read((result) =>
+                      Boolean(result.rss_debug?.error_text),
+                    ),
+                    ok: () =>
+                      block(
+                        "stack",
+                        "错误详情与堆栈",
+                        read((result) => result.rss_debug?.error_text || ""),
+                      ),
+                  }),
+                  Show({
+                    when: read((result) => Boolean(result.rss_debug)),
+                    ok: () =>
+                      View(
+                        {
+                          as: "section",
+                          class: "box-border p-var-frui-space-4-0",
+                          style: {
+                            "border-bottom":
+                              "1px solid var(--frui-color-border-soft)",
+                          },
+                          attributes: { n: "script-debug-output" },
+                        },
+                        [
+                          View(
+                            {
+                              class: "box-border",
+                              style: {
+                                margin: "0 0 var(--frui-space-2)",
+                                "font-size": "var(--frui-font-size-sm)",
+                              },
+                              as: "h3",
+                              attributes: {
+                                n: "script-debug-output-title",
+                              },
+                            },
+                            [
+                              computed(
+                                output,
+                                (result) => "路由输出 · " + result.label,
+                              ),
+                            ],
+                          ),
+                          View(
+                            {
+                              class:
+                                "box-border min-w-0 overflow-hidden rounded-control",
+                              style: {
+                                border:
+                                  "1px solid var(--frui-color-border-soft)",
+                              },
+                              attributes: {
+                                n: "script-debug-output-editor",
+                              },
+                            },
+                            [
+                              CodeEditor({
+                                rootStyle: { "min-width": "0" },
+                                wrapperStyle: {
+                                  height: "clamp(240px, 45dvh, 640px)",
+                                  font: "13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace",
+                                },
+                                style: {
+                                  "min-height": "240px",
+                                },
+                                value: computed(
+                                  output,
+                                  (result) => result.formatted,
+                                ),
+                                mode: computed(output, (result) => result.mode),
+                                readOnly: true,
+                                attributes: {
+                                  n: "script-debug-output-content",
+                                  "aria-label": "格式化路由输出",
+                                  readonly: "",
+                                  spellcheck: "false",
+                                },
+                              }),
+                            ],
+                          ),
+                        ],
+                      ),
+                  }),
+                ]),
+              ];
+            },
+          },
+          {
+            id: "context",
+            label: "上下文",
+            panel_id: "script-debug-context-panel",
+            get content() {
+              return [
+                panel("context", [
+                  block(
+                    "request",
+                    "请求上下文",
+                    read((result) =>
+                      JSON.stringify(result.rss_debug?.request || {}, null, 2),
+                    ),
+                  ),
+                  block(
+                    "cookies",
+                    "Cookie 使用（不含值）",
+                    read((result) =>
+                      JSON.stringify(
+                        result.rss_debug?.cookie_accesses || [],
+                        null,
+                        2,
+                      ),
+                    ),
+                  ),
+                  block(
+                    "upstream",
+                    "上游请求",
+                    read((result) =>
+                      JSON.stringify(
+                        result.rss_debug?.upstream_requests || [],
+                        null,
+                        2,
+                      ),
+                    ),
+                  ),
+                  block(
+                    "route",
+                    "脚本路由",
+                    read((result) =>
+                      JSON.stringify(result.rss_debug?.script || {}, null, 2),
+                    ),
+                  ),
+                ]),
+              ];
+            },
+          },
+          {
+            id: "logs",
+            label: "日志",
+            panel_id: "script-debug-logs-panel",
+            get content() {
+              return [
+                panel("logs", [
+                  block(
+                    "logs",
+                    "执行日志",
+                    read(
+                      (result) =>
+                        normalize_log_lines(result.rss_debug?.lines)
+                          .map(format_log_line)
+                          .join("\n") || "无执行日志",
+                    ),
+                  ),
+
+                ]),
+              ];
+            },
+          },
+        ],
+      }),
+    ],
+  );
+}
+
+function ScriptFormView({ store: vm$ }) {
+  const trigger = document.activeElement;
+  const busy = vm$.state.saving;
+  function handle_keydown(event) {
+    if (event.key === "Escape") {
+      if (vm$.state.cookie_consent.value.open) return;
+      event.stopPropagation();
+      vm$.methods.close_form();
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      vm$.methods.debug_script();
+    }
+    if (event.key !== "Tab") return;
+    const dialog = document.querySelector('[n="script-form-dialog"]');
+    const controls = Array.from(
+      dialog?.querySelectorAll(
+        'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex="0"]',
+      ) || [],
+    ).filter((node) => node.getClientRects().length);
+    const next = event.shiftKey ? controls.at(-1) : controls[0];
+    const edge = event.shiftKey ? controls[0] : controls.at(-1);
+    if (
+      document.activeElement === edge ||
+      !controls.includes(document.activeElement)
+    ) {
+      event.preventDefault();
+      next?.focus();
+    }
+  }
+  return Dialog(
+    {
+      headerProps: {
+        class: "box-border flex-none m-0 p-var-frui-space-3-var-frui-space-5",
+        style: {
+          "border-bottom": "1px solid var(--frui-color-border-soft)",
+          "padding-right": "64px",
+        },
+      },
+      bodyProps: {
+        class:
+          "box-border flex-1 min-h-0 overflow-hidden p-0 bg-canvas flex max-1100-overflow max-1100-display max-760-overflow max-760-display",
+        style: {
+          "--max-1100-overflow": "auto",
+          "--max-1100-display": "block",
+          "--max-760-overflow": "auto",
+          "--max-760-display": "block",
+        },
+      },
+      footerProps: {
+        class:
+          "box-border flex-none flex-wrap m-0 p-var-frui-space-3-var-frui-space-5 items-center",
+        style: { "border-top": "1px solid var(--frui-color-border-soft)" },
+      },
+      open: vm$.state.form_open,
+      title: computed(vm$.state.editing_id, (id) =>
+        id ? "编辑脚本" : "新增脚本",
+      ),
+      class:
+        "box-border max-h-none flex flex-col overflow-hidden p-0 top-0 left-0 transform-none rounded-0 box-shadow-none",
+      style: {
+        width: "100vw",
+        height: "100dvh",
+      },
+      closable: false,
+      maskClosable: false,
+      attributes: { n: "script-form-dialog", "aria-label": "脚本表单" },
+      onMounted() {
+        window.FindRSSAdminAgent?.set_editor_open?.(true);
+      },
+      onClose: vm$.methods.close_form,
+      onUnmounted() {
+        window.FindRSSAdminAgent?.set_editor_open?.(false);
+        document.removeEventListener("keydown", handle_keydown);
+        trigger?.focus?.();
+      },
+      footer: [
+        View(
+          {
+            class:
+              "box-border m-0 text-danger whitespace-pre-wrap flex-1 text-sm",
+            attributes: { n: "script-form-error", role: "alert" },
+          },
+          [vm$.state.form_error],
+        ),
+        FieldView(
+          {
+            semantic_name: "script-version-field",
+            label: "版本号",
+            style: {
+              display: "flex",
+              "align-items": "center",
+              gap: "var(--frui-space-2)",
+              "margin-right": "auto",
+            },
+            controlProps: {
+              style: {
+                width: "100px",
+              },
+            },
+          },
+          [
+            Input({
+              class: "box-border",
+              value: vm$.state.draft_version,
+              disabled: busy,
+              placeholder: "1.0.0",
+              attributes: {
+                n: "script-version-input",
+                "aria-label": "脚本版本号",
+                maxlength: "64",
+                title: "发布正式时必填，并高于上次正式版本",
+              },
+              onInput(event) {
+                vm$.methods.set_draft("version", event.target.value);
+              },
+            }),
+          ],
+        ),
+        View(
+          {
+            class: "box-border flex items-center gap-space-2 whitespace-nowrap",
+            attributes: { n: "script-debug-actions" },
+          },
+          [
+            Switch({
+              class: "box-border",
+              checked: vm$.state.live_debug,
+              label: "实时调试",
+              disabled: vm$.state.saving,
+              attributes: {
+                n: "script-live-debug",
+                "aria-label": "实时调试",
+              },
+              onChange: vm$.methods.set_live_debug,
+            }),
+            Tooltip(
+              {
+                class: "box-border",
+                as: "button",
+                side: "top",
+                align: "end",
+                content:
+                  "首次运行后，修改代码或链接会自动调试。使用真实抓取、Cookie 和在线设备；无需保存，不扣积分。",
+                attributes: {
+                  n: "script-live-debug-help",
+                  type: "button",
+                  "aria-label": "实时调试说明",
+                },
+              },
+              [Icon("circle-help", 16)],
+            ),
+          ],
+        ),
+        Switch({
+          class: "box-border",
+          checked: vm$.state.draft_debug,
+          disabled: vm$.state.saving,
+          label: "保存后开放 /debug",
+          attributes: {
+            n: "script-draft-debug",
+            "aria-label": "脚本 Debug",
+            title: "控制保存后的 /debug 路由；草稿调试始终可用",
+          },
+          onChange: (value) => vm$.methods.set_draft("debug", value),
+        }),
+        Button(
+          {
+            class: "box-border",
+            variant: "secondary",
+            attributes: { n: "script-cancel-button" },
+            disabled: busy,
+            onClick: vm$.methods.close_form,
+          },
+          ["取消"],
+        ),
+        Button(
+          {
+            class: "box-border",
+            variant: "secondary",
+            attributes: { n: "script-save-button" },
+            disabled: combine(
+              { busy, agent_busy: vm$.agent.state.busy },
+              (value) => value.busy || value.agent_busy || undefined,
+            ),
+            onClick() {
+              return vm$.methods.save_script("draft");
+            },
+          },
+          [
+            computed(vm$.state.saving, (saving) =>
+              saving ? "保存中…" : "保存草稿",
+            ),
+          ],
+        ),
+        Button(
+          {
+            class: "box-border",
+            attributes: { n: "script-publish-button" },
+            disabled: combine(
+              { busy, agent_busy: vm$.agent.state.busy },
+              (value) => value.busy || value.agent_busy || undefined,
+            ),
+            onClick() {
+              return vm$.methods.save_script("published");
+            },
+          },
+          ["发布正式"],
+        ),
+      ],
+    },
+    [
+      Button(
+        {
+          variant: "ghost",
+          size: "small",
+          class: "box-border absolute flex-none",
+          style: {
+            top: "14px",
+            right: "14px",
+          },
+          icon: Icon("x", 16),
+          attributes: {
+            n: "script-form-close-button",
+            "aria-label": "关闭脚本表单",
+          },
+          disabled: busy,
+          onClick: vm$.methods.close_form,
+        },
+        [],
+      ),
+      View(
+        {
+          class:
+            "box-border grid gap-0 mt-0 flex-1 min-w-0 min-h-0 max-1100-grid-template-columns max-760-grid-template-columns",
+          style: {
+            "grid-template-columns":
+              "minmax(0, 1.05fr) minmax(0, .85fr) minmax(0, 1.1fr)",
+            "--max-1100-grid-template-columns": "minmax(0, 1fr) minmax(0, 1fr)",
+            "--max-760-grid-template-columns": "minmax(0, 1fr)",
+          },
+          attributes: { n: "script-form" },
+          onMounted() {
+            document.addEventListener("keydown", handle_keydown);
+          },
+        },
+        [
+          View(
+            {
+              class:
+                "box-border flex flex-col min-w-0 min-h-0 overflow-hidden p-0 max-1100-height max-760-min-height max-760-border-right max-760-border-bottom",
+              style: {
+                "border-right": "1px solid var(--frui-color-border-soft)",
+                "--max-1100-height": "70dvh",
+                "--max-760-min-height": "60dvh",
+                "--max-760-border-right": "0",
+                "--max-760-border-bottom":
+                  "1px solid var(--frui-color-border-soft)",
+              },
+              attributes: { n: "script-code-pane" },
+            },
+            [
+              View(
+                {
+                  class:
+                    "box-border col-span-full flex-1 min-h-0 flex flex-col",
+                  attributes: { n: "script-code-field" },
+                },
+                [
+                  View(
+                    {
+                      class:
+                        "box-border relative min-w-0 flex-1 min-h-0 flex flex-col",
+                      attributes: { n: "script-code-input" },
+                    },
+                    [
+                      CodeEditor({
+                        rootStyle: {
+                          display: "flex",
+                          "flex-direction": "column",
+                          flex: "1",
+                          "min-height": "0",
+                        },
+                        wrapperStyle: {
+                          flex: "1",
+                          "min-height": "0",
+                          width: "100%",
+                          height: "100%",
+                          border: "0",
+                          "border-radius": "0",
+                          font: "13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace",
+                        },
+                        style: {
+                          flex: "1",
+                          "min-height": "160px",
+                        },
+                        value: vm$.state.draft_script,
+                        disabled: busy,
+                        attributes: {
+                          n: "script-code-textarea",
+                          "aria-label": "脚本内容",
+                          rows: "16",
+                          spellcheck: "false",
+                        },
+                        onInput(event) {
+                          vm$.methods.set_draft("script", event.target.value);
+                        },
+                      }),
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
+          ScriptAgentPanelView({ ui: Timeless, agent: vm$.agent }),
+          View(
+            {
+              class:
+                "box-border flex flex-col min-w-0 min-h-0 overflow-hidden max-1100-grid-column max-1100-height max-1100-border-top max-760-min-height",
+              style: {
+                "--max-1100-grid-column": "1 / -1",
+                "--max-1100-height": "70dvh",
+                "--max-1100-border-top":
+                  "1px solid var(--frui-color-border-soft)",
+                "--max-760-min-height": "50dvh",
+              },
+              attributes: { n: "script-debug-pane" },
+            },
+            [
+              View(
+                {
+                  class: "box-border flex-none grid gap-space-2 p-space-5",
+                  style: {
+                    "border-bottom": "1px solid var(--frui-color-border-soft)",
+                  },
+                  attributes: { n: "script-debug-toolbar" },
+                },
+                [
+                  View(
+                    {
+                      class: "box-border grid gap-space-2",
+                      attributes: { n: "script-debug-routes" },
+                    },
+                    [
+                      For({
+                        key: "path",
+                        each: vm$.state.debug_routes,
+                        render(route_value_) {
+                          const route = source_value(route_value_);
+                          const url = computed(
+                            vm$.state.debug_routes,
+                            (rows) =>
+                              rows.find((row) => row.path === route.path)
+                                ?.url || "",
+                          );
+                          return View(
+                            {
+                              class: "box-border grid items-center gap-space-2",
+                              style: {
+                                "grid-template-columns": "minmax(0, 1fr) auto",
+                              },
+                              attributes: {
+                                n: "script-debug-route-row",
+                                role: "group",
+                                "aria-label": route.name,
+                                title: route.path,
+                              },
+                            },
+                            [
+                              Input({
+                                class: "box-border",
+                                value: url,
+                                disabled: vm$.state.saving,
+                                placeholder: route.path,
+                                attributes: {
+                                  n: "script-debug-url",
+                                  "aria-label": route.name + "调试地址",
+                                  spellcheck: "false",
+                                },
+                                onInput(event) {
+                                  vm$.methods.set_debug_url(
+                                    event.target.value,
+                                    route.path,
+                                  );
+                                },
+                              }),
+                              Button(
+                                {
+                                  class: "box-border",
+                                  attributes: {
+                                    n: "script-debug-run-button",
+                                    "aria-label": "运行调试：" + route.name,
+                                    title: "运行当前草稿（⌘/Ctrl + Enter）",
+                                  },
+                                  disabled: combine(
+                                    {
+                                      busy,
+                                      debugging: vm$.state.debugging,
+                                      script: vm$.state.draft_script,
+                                      url,
+                                      agent_busy: vm$.agent.state.busy,
+                                    },
+                                    (deps) =>
+                                      deps.busy ||
+                                      deps.debugging ||
+                                      deps.agent_busy ||
+                                      !deps.script.trim() ||
+                                      !deps.url.trim() ||
+                                      undefined,
+                                  ),
+                                  icon: Icon("play", 16),
+                                  onClick: () =>
+                                    vm$.methods.debug_script(route.path),
+                                },
+                                [
+                                  combine(
+                                    {
+                                      running: vm$.state.debugging,
+                                      path: vm$.state.debug_route_path,
+                                    },
+                                    (deps) =>
+                                      deps.running && deps.path === route.path
+                                        ? "调试中…"
+                                        : "运行调试",
+                                  ),
+                                ],
+                              ),
+                            ],
+                          );
+                        },
+                      }),
+                    ],
+                  ),
+                  View(
+                    {
+                      class:
+                        "box-border text-danger whitespace-pre-wrap break-anywhere",
+                      attributes: {
+                        n: "script-debug-routes-error",
+                        role: "alert",
+                      },
+                    },
+                    [vm$.state.debug_routes_error],
+                  ),
+                  View(
+                    {
+                      class: "box-border col-span-full text-link text-sm",
+                      attributes: {
+                        n: "script-debug-progress",
+                        role: "status",
+                      },
+                    },
+                    [
+                      computed(vm$.state.debugging, (running) =>
+                        running ? "正在执行当前草稿，可继续编辑…" : "",
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              ScriptDebugResultView({ store: vm$ }),
+            ],
+          ),
+        ],
+      ),
+    ],
+  );
+}
+
+/** ctx.log/ctx.error 行的展示文本：卡片日志条目与测试结果块共用同一套前缀。 */
+function format_log_line(line) {
+  return (line.level === "error" ? "[error] " : "[log] ") + line.text;
+}
+
+/** 单条执行日志：摘要、params、错误全文（保留 stack 与换行）、ctx.log 行。 */
+function ScriptLogEntryView({ log }) {
+  return View(
+    {
+      class: "box-border grid rounded-card bg-surface",
+      style: {
+        gap: "8px",
+        "border-left":
+          "3px solid " +
+          (log.level === "error"
+            ? "var(--frui-color-danger)"
+            : "var(--frui-color-border-soft)"),
+        padding: "11px 12px",
+      },
+      attributes: { n: "script-log-entry" },
+    },
+    [
+      View(
+        {
+          class: "box-border text-muted break-anywhere",
+          style: {
+            font: "10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace",
+          },
+          attributes: { n: "script-log-meta" },
+        },
+        [format_log_summary(log)],
+      ),
+      Show({
+        when: Object.keys(log.params).length > 0,
+        ok() {
+          return View(
+            {
+              class:
+                "box-border m-0 overflow-auto rounded-control whitespace-pre-wrap break-anywhere bg-canvas text-muted",
+              style: {
+                "max-height": "300px",
+                padding: "10px",
+                font: "10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace",
+                "font-size": "12px",
+              },
+              attributes: { n: "script-log-params" },
+            },
+            [JSON.stringify(log.params, null, 2)],
+          );
+        },
+      }),
+      Show({
+        when: log.error_text !== "",
+        ok() {
+          return View(
+            {
+              class:
+                "box-border m-0 overflow-auto rounded-control whitespace-pre-wrap break-anywhere bg-danger-bg text-danger",
+              style: {
+                "max-height": "300px",
+                padding: "10px",
+                font: "10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace",
+                "font-size": "12px",
+              },
+              attributes: { n: "script-log-error" },
+            },
+            [log.error_text],
+          );
+        },
+      }),
+      Show({
+        when: log.lines.length > 0,
+        ok() {
+          return View(
+            {
+              class:
+                "box-border m-0 overflow-auto rounded-control whitespace-pre-wrap break-anywhere grid bg-canvas text-muted",
+              style: {
+                "max-height": "300px",
+                padding: "10px",
+                font: "10px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace",
+                gap: "4px",
+                "font-size": "12px",
+              },
+              attributes: { n: "script-log-lines" },
+            },
+            log.lines.map((line) =>
+              View(
+                {
+                  class:
+                    line.level === "error"
+                      ? "box-border text-danger"
+                      : "box-border ",
+                  style: {},
+                  attributes: { n: "script-log-line" },
+                },
+                [format_log_line(line)],
+              ),
+            ),
+          );
+        },
+      }),
+    ],
+  );
+}
+
+/** 卡片内展开的执行日志区：最新一页 + before_id 翻页。 */
+function ScriptLogsPanelView({ store, script }) {
+  const vm$ = store;
+  return View(
+    {
+      class: "box-border grid rounded-card bg-surface",
+      style: {
+        gap: "10px",
+        padding: "16px",
+        border: "1px solid var(--frui-color-border-soft)",
+      },
+      attributes: { n: "script-logs-panel" },
+    },
+    [
+      View(
+        {
+          class: "box-border grid text-muted",
+          style: {
+            gap: "4px",
+            "font-size": "11px",
+          },
+          attributes: { n: "script-logs-heading" },
+        },
+        [
+          "执行日志（/rss 与 /atom 共用）" + script.path,
+          "只记失败的真实请求与每次测试运行，保留 7 天。",
+        ],
+      ),
+      Show({
+        when: computed(vm$.state.script_logs_error, Boolean),
+        ok() {
+          return View(
+            {
+              class: "box-border text-danger",
+              style: {
+                "font-size": "12px",
+              },
+              attributes: { n: "script-logs-error", role: "alert" },
+            },
+            [vm$.state.script_logs_error],
+          );
+        },
+      }),
+      Show({
+        when: vm$.state.script_logs_loading,
+        ok() {
+          return View(
+            {
+              class: "box-border rounded-card text-muted text-center",
+              style: {
+                padding: "16px",
+                "font-size": "12px",
+              },
+              attributes: { n: "script-logs-loading" },
+            },
+            ["正在加载执行日志…"],
+          );
+        },
+      }),
+      Show({
+        when: combine(
+          {
+            loading: vm$.state.script_logs_loading,
+            logs: vm$.state.script_logs,
+          },
+          (deps) => !deps.loading && deps.logs.length === 0,
+        ),
+        ok() {
+          return View(
+            {
+              class: "box-border rounded-card text-muted text-center",
+              style: {
+                padding: "16px",
+                "font-size": "12px",
+              },
+              attributes: { n: "script-logs-empty" },
+            },
+            ["还没有执行日志。"],
+          );
+        },
+      }),
+      View(
+        {
+          class: "box-border grid",
+          style: {
+            gap: "9px",
+          },
+          attributes: { n: "script-logs-list" },
+        },
+        [
+          For({
+            key: "id",
+            each: vm$.state.script_logs,
+            render(log_value_) {
+              return ScriptLogEntryView({ log: source_value(log_value_) });
+            },
+          }),
+        ],
+      ),
+      Show({
+        when: vm$.state.script_logs_loading_more,
+        ok() {
+          return View(
+            {
+              class: "box-border rounded-card text-muted text-center",
+              style: {
+                padding: "16px",
+                "font-size": "12px",
+              },
+              attributes: { n: "script-logs-loading-more" },
+            },
+            ["正在加载更早日志…"],
+          );
+        },
+      }),
+      Show({
+        when: vm$.state.script_logs_has_more,
+        ok() {
+          return View(
+            {
+              class: "box-border flex justify-center",
+              attributes: { n: "script-logs-older" },
+            },
+            [
+              Button(
+                {
+                  class: "box-border flex-none justify-self-center",
+                  attributes: { n: "script-logs-older-button" },
+                  disabled: computed(
+                    vm$.state.script_logs_loading_more,
+                    (loading) => loading || undefined,
+                  ),
+                  onClick() {
+                    return vm$.methods.load_older_script_logs();
+                  },
+                },
+                ["加载更早日志"],
+              ),
+            ],
+          );
+        },
+      }),
+    ],
+  );
+}
+
+function ScriptCardView({ store, script }) {
+  const vm$ = store;
+  return View(
+    {
+      class: "box-border grid rounded-card bg-surface-raised min-w-0",
+      style: {
+        gap: "11px",
+        padding: "15px",
+        border: "1px solid var(--frui-color-border)",
+        "grid-template-columns": "minmax(0, 1fr)",
+      },
+      attributes: { n: "script-card" },
+    },
+    [
+      View(
+        {
+          class: "box-border flex flex-wrap items-flex-start justify-between",
+          style: {
+            gap: "15px",
+          },
+          attributes: { n: "script-card-header" },
+        },
+        [
+          View(
+            {
+              class: "box-border flex-1 min-w-0",
+              attributes: { n: "script-card-identity" },
+            },
+            [
+              View(
+                {
+                  class: "box-border min-w-0 break-anywhere",
+                  style: {
+                    "font-size": "16px",
+                    "font-weight": "680",
+                  },
+                  attributes: { n: "script-card-title" },
+                },
+                [
+                  combine({ scripts: vm$.state.scripts }, (deps) => {
+                    const current = deps.scripts.find(
+                      (item) => item.id === script.id,
+                    );
+                    return current?.name || script.name || "未命名模块";
+                  }),
+                ],
+              ),
+              Show({
+                when: script.description !== "",
+                ok() {
+                  return View(
+                    {
+                      class: "box-border text-muted break-anywhere",
+                      style: {
+                        "margin-top": "5px",
+                        "font-size": "12px",
+                        "line-height": "1.6",
+                      },
+                      attributes: { n: "script-card-description" },
+                    },
+                    [script.description],
+                  );
+                },
+              }),
+              View(
+                {
+                  class: "box-border text-muted break-anywhere",
+                  style: {
+                    "margin-top": "5px",
+                    "font-size": "11px",
+                  },
+                  attributes: { n: "script-card-updated" },
+                },
+                ["更新于 " + format_time(script.updated_at)],
+              ),
+            ],
+          ),
+          View(
+            {
+              class: "box-border flex items-center min-w-0 max-w-full",
+              style: {
+                gap: "8px",
+              },
+              attributes: { n: "script-card-release" },
+            },
+            [
+              View(
+                {
+                  class:
+                    "box-border " +
+                    ("flex-none rounded-pill " +
+                      (script.status !== "published" || !script.enabled
+                        ? "bg-surface-raised text-muted"
+                        : "bg-selected text-link")),
+                  style: {
+                    padding: "5px 9px",
+                    "font-size": "11px",
+                  },
+                  attributes: { n: "script-status" },
+                },
+                [script.status === "draft" ? "草稿" : "正式"],
+              ),
+              View(
+                {
+                  class: "box-border min-w-0 break-anywhere text-muted",
+                  style: {
+                    "font-size": "11px",
+                  },
+                  attributes: {
+                    n: "script-card-version",
+                    title: script.script_hash
+                      ? "源码 SHA-256：" + script.script_hash
+                      : "",
+                  },
+                },
+                [
+                  "版本 " +
+                    (script.version ||
+                      (script.status === "draft" ? "未指定" : "未编号")),
+                ],
+              ),
+              Switch({
+                class: "box-border",
+                attributes: {
+                  n: "script-enabled",
+                  "aria-label": script.name + " 启用状态",
+                },
+                checked: combine(
+                  {
+                    scripts: vm$.state.scripts,
+                    pending: vm$.state.enabled_pending,
+                  },
+                  (deps) =>
+                    deps.pending[script.id] ??
+                    deps.scripts.find((item) => item.id === script.id)
+                      ?.enabled ??
+                    false,
+                ),
+                disabled: computed(
+                  vm$.state.enabled_pending,
+                  (pending) => pending[script.id] !== undefined,
+                ),
+                onChange: (value) =>
+                  vm$.methods.set_script_enabled(script.id, value),
+              }),
+            ],
+          ),
+        ],
+      ),
+      View(
+        {
+          class: "box-border flex flex-wrap items-center text-muted",
+          style: {
+            gap: "8px 16px",
+            "font-size": "11px",
+          },
+          attributes: { n: "script-card-metadata" },
+        },
+        [
+          ...(script.cookie_authorization.status !== "none"
+            ? [
+                View(
+                  {
+                    class:
+                      script.cookie_authorization.status === "required"
+                        ? "box-border text-danger"
+                        : "box-border ",
+                    attributes: {
+                      n: "script-cookie-status",
+                      title: script.cookie_authorization.message,
+                    },
+                  },
+                  [
+                    script.cookie_authorization.status === "active"
+                      ? "Cookie 已授权"
+                      : "Cookie 需要重新确认",
+                  ],
+                ),
+              ]
+            : []),
+          View(
+            {
+              class: "box-border flex items-center",
+              style: {
+                gap: "5px",
+              },
+              attributes: {
+                n: "script-card-website",
+                "aria-label": "来源网站",
+                title: "来源网站",
+              },
+            },
+            [
+              Icon("globe", 14),
+              script.website_url
+                ? Link(
+                    {
+                      class: "box-border",
+                      href: script.website_url,
+                      target: "_blank",
+                      attributes: {
+                        n: "script-card-website-link",
+                        rel: "noopener noreferrer",
+                      },
+                    },
+                    [script.url],
+                  )
+                : script.url || "未填写",
+            ],
+          ),
+          View(
+            {
+              class: "box-border flex items-center",
+              style: {
+                gap: "5px",
+              },
+              attributes: {
+                n: "script-card-maintainers",
+                "aria-label": "维护者",
+                title: "维护者",
+              },
+            },
+            [
+              Icon("users", 14),
+              View(
+                {
+                  as: "span",
+                  class: "box-border inline-flex items-center flex-wrap",
+                  style: {
+                    gap: "6px",
+                  },
+                  attributes: { n: "script-card-maintainers-value" },
+                },
+                script.maintainers.length
+                  ? script.maintainers.flatMap((value, index) => [
+                      ...(index ? [", "] : []),
+                      typeof value === "string"
+                        ? value
+                        : View(
+                            {
+                              as: "span",
+                              class:
+                                "box-border inline-flex items-center flex-wrap",
+                              style: {
+                                gap: "6px",
+                              },
+                              attributes: { n: "script-maintainer" },
+                            },
+                            [
+                              ...(value.avatar
+                                ? [
+                                    Img({
+                                      src: value.avatar,
+                                      class:
+                                        "box-border rounded-full object-cover",
+                                      style: {
+                                        width: "20px",
+                                        height: "20px",
+                                      },
+                                      attributes: {
+                                        n: "script-maintainer-avatar",
+                                        alt: "",
+                                        loading: "lazy",
+                                        referrerpolicy: "no-referrer",
+                                      },
+                                    }),
+                                  ]
+                                : []),
+                              value.url
+                                ? Link(
+                                    {
+                                      class: "box-border",
+                                      href: value.url,
+                                      target: "_blank",
+                                      attributes: {
+                                        n: "script-maintainer-link",
+                                        rel: "noopener noreferrer",
+                                      },
+                                    },
+                                    [value.nickname],
+                                  )
+                                : View(
+                                    {
+                                      class: "box-border",
+                                      as: "span",
+                                      attributes: {
+                                        n: "script-maintainer-nickname",
+                                      },
+                                    },
+                                    [value.nickname],
+                                  ),
+                            ],
+                          ),
+                    ])
+                  : ["未填写"],
+              ),
+            ],
+          ),
+          View(
+            {
+              class: "box-border",
+              attributes: { n: "script-card-platform" },
+            },
+            [discovery_platform_label(script.platform)],
+          ),
+          View(
+            { class: "box-border", attributes: { n: "script-card-size" } },
+            [Math.ceil(script.script.length / 1024) + " KB"],
+          ),
+        ],
+      ),
+      View(
+        {
+          class: "box-border grid items-start",
+          style: {
+            "grid-template-columns":
+              "repeat(auto-fit, minmax(min(280px, 100%), 1fr))",
+            gap: "14px 24px",
+          },
+          attributes: { n: "script-card-routes" },
+        },
+        vm$.methods.script_routes(script).map((entry) =>
+          View(
+            {
+              class: "box-border grid min-w-0",
+              style: {
+                gap: "5px",
+              },
+              attributes: {
+                n: "script-route-group",
+                role: "group",
+                "aria-label": entry.name || entry.path || "路由",
+              },
+            },
+            [
+              View(
+                {
+                  class: "box-border flex flex-wrap align-items-baseline",
+                  style: {
+                    gap: "5px 12px",
+                  },
+                  attributes: { n: "script-route-address" },
+                },
+                [
+                  View(
+                    {
+                      class: "box-border text-link break-anywhere",
+                      style: {
+                        font: "12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace",
+                      },
+                      attributes: { n: "script-card-route" },
+                    },
+                    [entry.path || "未声明路由"],
+                  ),
+                  View(
+                    {
+                      class: "box-border text-muted break-anywhere",
+                      style: {
+                        "font-size": "11px",
+                      },
+                      attributes: { n: "script-route-name" },
+                    },
+                    [entry.name],
+                  ),
+                ],
+              ),
+              View(
+                {
+                  class: "box-border text-muted break-anywhere",
+                  style: {
+                    "font-size": "11px",
+                  },
+                  attributes: { n: "script-card-example" },
+                },
+                ["示例 " + entry.example],
+              ),
+              TableField({
+                class: "box-border",
+                labelProps: {
+                  class: "box-border break-anywhere font-mono",
+                  style: {
+                    "max-width": "10rem",
+                  },
+                },
+                attributes: { n: "script-route-parameters" },
+                items: Object.entries(entry.parameters).map(
+                  ([name, description]) => ({
+                    key: name,
+                    label: name,
+                    value: description,
+                  }),
+                ),
+              }),
+            ],
+          ),
+        ),
+      ),
+      View(
+        {
+          class: "box-border flex flex-wrap",
+          style: {
+            gap: "7px",
+          },
+          attributes: { n: "script-card-actions" },
+        },
+        [
+          Button(
+            {
+              class: "box-border flex-none justify-self-center",
+              attributes: { n: "script-edit-button" },
+              onClick() {
+                vm$.methods.edit_script(script.id);
+              },
+            },
+            ["编辑"],
+          ),
+          ...(script.cookie_grant_id
+            ? [
+                Button(
+                  {
+                    class: "box-border",
+                    attributes: { n: "script-cookie-revoke" },
+                    onClick() {
+                      return vm$.methods.revoke_cookie_consent(script.id);
+                    },
+                  },
+                  ["撤销 Cookie 授权"],
+                ),
+              ]
+            : []),
+          ...(script.cookie_authorization.status === "required"
+            ? [
+                Button(
+                  {
+                    class: "box-border",
+                    attributes: { n: "script-cookie-check" },
+                    onClick() {
+                      return vm$.methods.check_cookie_permissions(script.id);
+                    },
+                  },
+                  ["重新确认 Cookie 权限"],
+                ),
+              ]
+            : []),
+          Button(
+            {
+              class: "box-border flex-none justify-self-center",
+              attributes: { n: "script-logs-toggle-button" },
+              onClick() {
+                return vm$.methods.toggle_script_logs(script.id);
+              },
+            },
+            [
+              combine({ route: vm$.state.script_logs_route }, (deps) =>
+                deps.route === script.id ? "收起执行日志" : "执行日志",
+              ),
+            ],
+          ),
+          Button(
+            {
+              class: "box-border",
+              variant: "secondary",
+              attributes: { n: "script-status-button" },
+              disabled: computed(
+                vm$.state.status_pending,
+                (pending) => pending[script.id] || undefined,
+              ),
+              onClick() {
+                return vm$.methods.set_script_status(
+                  script.id,
+                  script.status === "draft" ? "published" : "draft",
+                );
+              },
+            },
+            [script.status === "draft" ? "发布正式" : "退回草稿"],
+          ),
+          Button(
+            {
+              class: "box-border flex-none",
+              attributes: { n: "script-delete-button" },
+              onClick() {
+                return vm$.methods.remove_script(script.id);
+              },
+            },
+            ["删除"],
+          ),
+        ],
+      ),
+      Show({
+        when: combine(
+          { route: vm$.state.script_logs_route },
+          (deps) => deps.route === script.id,
+        ),
+        ok() {
+          return ScriptLogsPanelView({ store: vm$, script });
+        },
+      }),
+    ],
+  );
+}
+
+function ScriptListView({ store }) {
+  const vm$ = store;
+  return View(
+    {
+      class: "box-border min-w-0",
+      attributes: { n: "script-list-section" },
+    },
+    [
+      View(
+        {
+          class:
+            "box-border grid rounded-card bg-surface max-760-align-items max-760-flex-direction max-760-display max-760-grid-template-columns",
+          style: {
+            "grid-template-columns": "minmax(0, 1fr) minmax(120px, 200px)",
+            gap: "13px",
+            "margin-top": "16px",
+            padding: "16px",
+            border: "1px solid var(--frui-color-border-soft)",
+            "--max-760-align-items": "stretch",
+            "--max-760-flex-direction": "column",
+            "--max-760-display": "grid",
+            "--max-760-grid-template-columns": "1fr",
+          },
+          attributes: { n: "script-filter-form" },
+        },
+        [
+          FieldView(
+            { semantic_name: "script-filter-query-field", label: "搜索" },
+            [
+              Input({
+                class: "box-border",
+                value: vm$.state.query,
+                placeholder: "名称、路由、来源网站或描述",
+                attributes: {
+                  n: "script-filter-query-input",
+                  "aria-label": "搜索脚本",
+                },
+                onInput(event) {
+                  vm$.methods.set_filter("query", event.target.value);
+                },
+              }),
+            ],
+          ),
+          FieldView(
+            { semantic_name: "script-filter-status-field", label: "状态" },
+            [
+              Select({
+                class: "box-border",
+                value: vm$.state.filter_status,
+                options: [
+                  { value: "all", label: "全部" },
+                  { value: "draft", label: "草稿" },
+                  { value: "published", label: "正式" },
+                  { value: "enabled", label: "启用" },
+                  { value: "disabled", label: "停用" },
+                ],
+                attributes: {
+                  n: "script-filter-status-select",
+                  "aria-label": "筛选脚本状态",
+                },
+                onChange(event) {
+                  vm$.methods.set_filter("status", event.target.value);
+                },
+              }),
+            ],
+          ),
+        ],
+      ),
+      Show({
+        when: computed(vm$.state.list_error, Boolean),
+        ok() {
+          return View(
+            {
+              class: "box-border text-danger whitespace-pre-wrap",
+              style: {
+                margin: "12px 0 0",
+              },
+              attributes: { n: "script-list-error", role: "alert" },
+            },
+            [vm$.state.list_error],
+          );
+        },
+      }),
+      View(
+        {
+          class: "box-border grid",
+          style: {
+            gap: "14px",
+            "margin-top": "16px",
+          },
+          attributes: { n: "script-list" },
+        },
+        [
+          Show({
+            when: vm$.state.loading,
+            ok() {
+              return View(
+                {
+                  class: "box-border m-0 rounded-card text-muted text-center",
+                  style: {
+                    padding: "22px",
+                  },
+                  attributes: { n: "script-list-loading" },
+                },
+                ["正在加载脚本…"],
+              );
+            },
+          }),
+          Show({
+            when: combine(
+              { loading: vm$.state.loading, visible: vm$.visible_scripts },
+              (deps) => !deps.loading && deps.visible.length === 0,
+            ),
+            ok() {
+              return View(
+                {
+                  class: "box-border m-0 rounded-card text-muted text-center",
+                  style: {
+                    padding: "22px",
+                  },
+                  attributes: { n: "script-list-empty" },
+                },
+                [
+                  computed(vm$.state.scripts, (scripts) =>
+                    scripts.length === 0
+                      ? "还没有脚本。点击“新增脚本”，保存后路由即时生效。"
+                      : "没有匹配的脚本。",
+                  ),
+                ],
+              );
+            },
+          }),
+          For({
+            key: "render_key",
+            each: vm$.paged_scripts,
+            render(script_value_) {
+              const script = source_value(script_value_);
+              return ScriptCardView({ store: vm$, script });
+            },
+          }),
+        ],
+      ),
+      PaginationView(Timeless, {
+        model: vm$.pagination,
+        name: "scripts-pagination",
+        label: "脚本列表分页",
+      }),
+    ],
+  );
+}
+
+function ScriptEditorView({ store }) {
+  return View({ class: "box-border", attributes: { n: "script-editor" } }, [
+    TooltipHost({ style: { "z-index": "10002" } }),
+    Show({ when: store.state.form_open, ok: () => ScriptFormView({ store }) }),
+    ScriptCookieConsentView({ store }),
+  ]);
+}
+
+function ScriptApplicationView(embedded = false) {
+  const vm$ = ScriptViewModel();
+  let detach_agent;
+  const content = View(
+    {
+      class: "box-border min-w-0",
+      attributes: { n: "scripts-content" },
+      onMounted() {
+        vm$.methods.start();
+        detach_agent = window.FindRSSAdminAgent?.register_page(
+          "/admin/scripts",
+          {
+            read_context: () => ({
+              editor_open: vm$.state.form_open.value,
+              script_id: vm$.state.editing_id.value,
+              kind: vm$.state.script_type.value,
+              query: vm$.state.query.value,
+              filter_status: vm$.state.filter_status.value,
+              debug_url: vm$.state.debug_url.value,
+              draft_characters: vm$.state.draft_script.value.length,
+            }),
+          },
+        );
+      },
+      onUnmounted() {
+        detach_agent?.();
+        vm$.methods.destroy();
+      },
+    },
+    [
+      View(
+        {
+          class: "box-border text-success",
+          style: {
+            margin: "6px 0 0",
+            "font-size": "12px",
+          },
+          attributes: { n: "script-form-status", role: "status" },
+        },
+        [vm$.state.form_message],
+      ),
+      ScriptEditorView({ store: vm$ }),
+
+    ],
+  );
+  const page_options = {
+    page_id: "scripts",
+    eyebrow: "Scripts",
+    title: "脚本管理",
+    count: combine(
+      { scripts: vm$.state.scripts, visible: vm$.visible_scripts },
+      ({ scripts, visible }) =>
+        visible.length === scripts.length
+          ? String(scripts.length)
+          : visible.length + " / " + scripts.length,
+    ),
+    actions: [
+      Button(
+        {
+          class: "box-border",
+          attributes: {
+            n: "script-create-button",
+            "aria-haspopup": "dialog",
+            "aria-expanded": vm$.state.form_open,
+          },
+          disabled: vm$.state.saving,
+          onClick: vm$.methods.create_script,
+        },
+        ["新增脚本"],
+      ),
+    ],
+  };
+  page_options.header = View(
+    {
+      class: "box-border grid items-center gap-space-4",
+      style: {
+        "grid-template-columns": "minmax(0, 1fr) auto",
+      },
+      attributes: { n: "script-page-tabs" },
+    },
+    [
+      Tabs({
+        listProps: {
+          class: "box-border justify-self-start",
+          style: {
+            "grid-column": "1",
+            "grid-row": "1",
+          },
+        },
+        panelProps: {
+          class: "box-border min-w-0 col-span-full",
+          style: {
+            "grid-row": "2",
+          },
+        },
+        class: "box-border contents",
+        value: computed(vm$.state.script_type, (type) => type),
+        attributes: { n: "script-type-tabs", "aria-label": "脚本类型" },
+        onChange: vm$.methods.select_script_type,
+        items: [
+          { id: "rss", label: "RSS" },
+          { id: "hot", label: "Hot" },
+        ].map((item) => ({
+          ...item,
+          panel_id: "script-type-panel-" + item.id,
+          get content() {
+            return [
+              Show({
+                when: computed(
+                  vm$.state.script_type,
+                  (type) => type === item.id,
+                ),
+                ok: () =>
+                  View(
+                    {
+                      class: "box-border",
+                      attributes: {
+                        n: "script-type-panel-" + item.id,
+                        id: "script-type-panel-" + item.id,
+                        "aria-labelledby": "script-type-tabs-" + item.id,
+                      },
+                    },
+                    [ScriptListView({ store: vm$ })],
+                  ),
+              }),
+            ];
+          },
+        })),
+      }),
+      View(
+        {
+          class: "box-border flex items-center gap-space-3",
+          style: {
+            "grid-column": "2",
+            "grid-row": "1",
+          },
+          attributes: { n: "script-page-actions" },
+        },
+        [
+          View(
+            {
+              class:
+                "box-border flex-none rounded-pill bg-surface-raised text-muted tabular-nums",
+              style: {
+                padding: "3px 10px",
+                "font-size": "12px",
+                "font-weight": "500",
+              },
+              attributes: { n: "script-type-count" },
+            },
+            [
+              combine(
+                {
+                  scripts: vm$.state.scripts,
+                  type: vm$.state.script_type,
+                  visible: vm$.visible_scripts,
+                },
+                ({ scripts, type, visible }) => {
+                  const total = scripts.filter(
+                    (script) => script.kind === type,
+                  ).length;
+                  return visible.length === total
+                    ? String(total)
+                    : visible.length + " / " + total;
+                },
+              ),
+            ],
+          ),
+          ...page_options.actions,
+        ],
+      ),
+    ],
+  );
+  return embedded
+    ? window.FindRSSAdminShell.Page(page_options, [content])
+    : window.FindRSSAdminShell.View(page_options, [content]);
+}
+
+function ScriptPage() {
+  return ScriptApplicationView(true);
+}
+
+export { ScriptPage, ScriptEditorView };

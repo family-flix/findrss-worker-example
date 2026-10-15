@@ -1,0 +1,94 @@
+/* frui 设计规范见 README.md；品牌色取自 public/logo.svg。 */
+:root {
+  color-scheme: dark;
+  --frui-brand-blue: #2563eb;
+  --frui-brand-white: #ffffff;
+  --frui-brand-ink: #edf2ff;
+  --frui-brand-orange: #ff641a;
+  --frui-color-canvas: #070a12;
+  --frui-color-surface: #101729;
+  --frui-color-surface-raised: #16203b;
+  --frui-color-surface-hover: #202e51;
+  --frui-color-card-hover: var(--frui-color-surface-raised);
+  --frui-color-text: var(--frui-brand-ink);
+  --frui-color-muted: #9ca9c6;
+  --frui-color-placeholder: #8693ad;
+  --frui-color-border: #35446f;
+  --frui-color-border-strong: #6687e8;
+  --frui-color-primary: var(--frui-brand-blue);
+  --frui-color-primary-hover: #1d4ed8;
+  --frui-color-on-primary: var(--frui-brand-white);
+  --frui-color-link: #a8cbff;
+  --frui-color-selected: #1b3151;
+  --frui-color-focus: #93c5fd;
+  --frui-color-success: #b8f0d7;
+  --frui-color-success-bg: rgba(22, 75, 61, .32);
+  --frui-color-warning: #ffd9a3;
+  --frui-color-warning-bg: rgba(92, 63, 16, .5);
+  --frui-color-danger: #ffbdc6;
+  --frui-color-danger-bg: rgba(90, 24, 38, .62);
+  --frui-color-notification: #dc2626;
+  --frui-color-skeleton: #0d1426;
+  --frui-color-border-soft: rgba(132, 154, 216, .12);
+  --frui-color-overlay: rgba(4, 8, 17, .66);
+  --frui-color-shadow: rgba(0, 0, 0, .25);
+  --frui-space-1: 4px;
+  --frui-space-2: 8px;
+  --frui-space-3: 12px;
+  --frui-space-4: 16px;
+  --frui-space-5: 20px;
+  --frui-space-6: 24px;
+  --frui-radius-sm: 4px;
+  --frui-radius-control: 6px;
+  --frui-radius-card: 10px;
+  --frui-radius-pill: 999px;
+  --frui-control-height: var(--frui-control-height-md);
+  --frui-control-height-md: 32px;
+  --frui-control-height-sm: 28px;
+  --frui-control-height-lg: 36px;
+  --frui-tabs-indicator-size: 32px;
+  --frui-font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --frui-font-size: 14px;
+  --frui-button-font-size: 14px;
+  --frui-font-size-sm: 12px;
+  --frui-font-size-lg: 15px;
+  --frui-shadow-card: 0 6px 20px rgba(0, 0, 0, .2);
+  --frui-motion-fast: 160ms ease;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --frui-brand-ink: #1e293b;
+  --frui-color-canvas: #f8fafc;
+  --frui-color-surface: #ffffff;
+  --frui-color-surface-raised: #f1f5f9;
+  --frui-color-surface-hover: #e2e8f0;
+  --frui-color-text: var(--frui-brand-ink);
+  --frui-color-muted: #475569;
+  --frui-color-placeholder: #64748b;
+  --frui-color-border: #cbd5e1;
+  --frui-color-border-soft: #e2e8f0;
+  --frui-color-border-strong: #64748b;
+  --frui-color-link: #1d4ed8;
+  --frui-color-selected: #dbeafe;
+  --frui-color-focus: var(--frui-brand-blue);
+  --frui-color-success: #166534;
+  --frui-color-success-bg: #dcfce7;
+  --frui-color-warning: #854d0e;
+  --frui-color-warning-bg: #fef3c7;
+  --frui-color-danger: #9f1239;
+  --frui-color-danger-bg: #ffe4e6;
+  --frui-color-skeleton: #e2e8f0;
+  --frui-color-overlay: rgba(15, 23, 42, .45);
+  --frui-color-shadow: rgba(15, 23, 42, .12);
+  --frui-shadow-card: 0 6px 20px rgba(15, 23, 42, .1);
+}
+
+/* 触屏保留操作空间；桌面默认紧凑。 */
+@media (pointer: coarse) {
+  :root[data-theme], :root:not([data-theme]) {
+    --frui-control-height-md: 40px;
+    --frui-control-height-sm: 36px;
+    --frui-control-height-lg: 44px;
+  }
+}

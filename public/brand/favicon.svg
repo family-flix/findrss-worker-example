@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+      <title id="title">FindRSS 05  Ocean gradient mark</title>
+      <desc id="desc">Gradient applied only to the F, RSS arc and dot. Transparent background.</desc>
+      <defs>
+      <linearGradient id="color-05" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#38BDF8"/>
+        <stop offset=".5" stop-color="#2563EB"/>
+        <stop offset="1" stop-color="#4F46E5"/>
+      </linearGradient>
+      <mask id="mark-05" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+        <g transform="scale(0.968065193) translate(-264.06 -248.56)">  <g transform="translate(138.88 151.91) scale(1.5) rotate(4 256 256)">
+    <path fill="#FFFFFF" d="
+      M116 365
+      L116 148
+      C116 108 138 88 177 88
+      L318 88
+      C340 88 354 101 354 122
+      C354 143 340 156 318 156
+      L224 156
+      C202 156 184 174 184 196
+      L184 365
+      C184 389 171 403 150 403
+      C129 403 116 389 116 365
+      Z"/>
+    <path fill="#FFFFFF" transform="translate(22 0)" d="
+      M229 191
+      C321 191 396 266 396 358
+      C396 378 384 390 365 390
+      C346 390 334 378 334 358
+      C334 300 287 253 229 253
+      C209 253 197 241 197 222
+      C197 203 209 191 229 191
+      Z"/>
+    <circle fill="#FFFFFF" cx="270" cy="350" r="46"/>
+  </g></g>
+      </mask>
+    </defs>
+    <rect width="512" height="512" fill="url(#color-05)" mask="url(#mark-05)"/>
+    </svg>

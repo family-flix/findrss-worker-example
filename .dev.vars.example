@@ -1,0 +1,2 @@
+# 仅用于本地开发；生产部署时请设置独立的随机长密钥。
+ADMIN_PASSWORD=local-admin-token

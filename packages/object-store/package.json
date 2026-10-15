@@ -1,0 +1,17 @@
+{
+  "name": "@findrss/object-store",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "零依赖的类 S3 对象存储 SDK：桶由调用方注入，可在 Workers、Node 测试与其他项目里复用",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "license": "ISC"
+}

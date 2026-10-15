@@ -1,0 +1,502 @@
+@import url("/base.css");
+
+/* RSS 订阅广场首页样式。 */
+
+/* ---------------------------------------------------------------- tokens -- */
+:root {
+  /* 墨：底。冷调近黑，不是纯黑 */
+  --ink-950: #0a0c10;
+  --ink-900: #0f1218;
+  --ink-850: #141822;
+  --ink-800: #1a1f2a;
+
+  /* 纸：字。暖调米白 */
+  --paper: #f4f1ea;
+  --paper-2: #cdc9c0;
+  --muted: #98a0ae;
+  --faint: #69717f;
+  --ghost: #4a5261;
+
+  /* 发丝线 */
+  --rule: rgba(244, 241, 234, 0.1);
+  --rule-2: rgba(244, 241, 234, 0.2);
+  --rule-3: rgba(244, 241, 234, 0.32);
+
+  /* 品牌蓝 = 产品 / 可交互：主按钮、链接、焦点环、选中态 */
+  --brand: #2563eb;
+  --brand-ink: #85acff;
+  --brand-wash: rgba(37, 99, 235, 0.16);
+
+  /* 信号橙 = FindRSS 抓取层 / RSS 信号 */
+  --signal-ink: #ff9166;
+
+  --warn: #ff9c9c;
+  --glyph-rss: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M4%2011a9%209%200%200%201%209%209M4%204a16%2016%200%200%201%2016%2016%22%2F%3E%3Ccircle%20cx%3D%225%22%20cy%3D%2219%22%20r%3D%221%22%20fill%3D%22black%22%2F%3E%3C%2Fsvg%3E");
+  --glyph-check: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m5%2012%204%204L19%206%22%2F%3E%3C%2Fsvg%3E");
+
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s8: 64px;
+
+  --shell: 1080px;
+  --gutter: 52px;
+}
+
+/* ---------------------------------------------------------------- surface -- */
+html { background: var(--ink-950); }
+
+body {
+  background: var(--ink-950);
+  color: var(--paper);
+  font-size: 14px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 顶部一层极淡的冷光，模拟印张受光——**不是**装饰渐变 */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto;
+  height: 46vh;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    120% 100% at 50% 0%,
+    rgba(37, 99, 235, 0.07),
+    transparent 68%
+  );
+}
+
+/* 纸纹：feTurbulence 噪点 + overlay 混合。不吃指针事件，也不跟着滚动 */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.055;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* 上面两个 ::before/::after 是定位元素，会盖在同为静态流的正文之上——
+   所以内容必须自己抬一层。 */
+#discovery-root {
+  position: relative;
+  z-index: 1;
+}
+
+button,
+input { font: inherit; }
+
+button,
+a {
+  transition: background-color 0.15s ease, border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--brand-ink);
+  outline-offset: 2px;
+}
+
+/* 首页版心 */
+.shell {
+  width: min(var(--shell), calc(100% - var(--gutter) * 2));
+  margin-inline: auto;
+}
+
+.page-main { padding: var(--s4) 0 var(--s8); }
+
+.meta-dot {
+  flex: 0 0 auto;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--ghost);
+}
+
+/* ------------------------------------------------------------- masthead -- */
+.masthead {
+  padding-top: var(--s5);
+  background: linear-gradient(180deg, var(--ink-900), transparent);
+}
+
+.masthead-inner {
+  display: flex;
+  align-items: center;
+}
+
+.search-row { padding-top: var(--s4); }
+
+/* 锁定（mark + 字标）：真资产，`favicon.svg` 就是这一枚 F + 双橙弧 */
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex: 0 0 auto;
+  color: inherit;
+  text-decoration: none;
+}
+
+.brand-mark {
+  display: block;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+}
+
+.brand-column {
+  display: flex;
+  flex-direction: column;
+  line-height: 1;
+}
+
+.brand-wordmark {
+  display: flex;
+  color: var(--paper);
+  font-size: 25px;
+  letter-spacing: 0.005em;
+}
+
+/* 「RSS」沿用蓝色主题色。 */
+.brand-wordmark-rss { color: var(--brand); }
+
+/* 独立搜索行，整块容器显示聚焦状态。 */
+.masthead-search {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-width: 0;
+  min-height: 52px;
+  padding: var(--s2) var(--s4);
+  border: 1px solid var(--rule-2);
+  border-radius: 9px;
+  background: var(--ink-900);
+  transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
+}
+
+.masthead-search:hover { border-color: var(--rule-3); }
+.masthead-search:focus-within {
+  border-color: var(--brand-ink);
+  background: var(--ink-850);
+  box-shadow: 0 0 0 3px var(--brand-wash);
+}
+
+/* 单线图形一律用「遮罩画法」：24 单位方框、1.5 笔宽、圆头、只有笔画没有填充
+   （与 logo 同一种笔）。mask + background-color: currentColor 让图形跟着父元素的
+   color 走，于是既不需要内联 SVG（CSP 禁 style 属性），在 SSR 里也零成本。 */
+.search-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+  background: currentColor;
+  -webkit-mask: no-repeat center / contain;
+  mask: no-repeat center / contain;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='6.5'/%3E%3Cpath d='M15.8 15.8 20 20'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='6.5'/%3E%3Cpath d='M15.8 15.8 20 20'/%3E%3C/svg%3E");
+}
+
+.search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  color: var(--paper);
+  font-size: 16px;
+  line-height: 1.5;
+  outline: none;
+}
+
+.search-input:focus-visible { outline: none; }
+.search-input::placeholder { color: var(--muted); }
+
+/* 平台单选、标签多选共用筛选按钮，长列表自然换行。 */
+.filter-row { display: flex; align-items: baseline; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--rule); }
+.filter-label { flex: 0 0 auto; color: var(--paper-2); font-size: 13px; }
+.filter-options { display: flex; flex: 1; flex-wrap: wrap; gap: 8px; }
+.filter-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 1px solid var(--rule); border-radius: 999px; background: transparent; color: var(--muted); font-size: 13px; cursor: pointer; }
+.filter-chip:hover { color: var(--paper); border-color: var(--brand); }
+.filter-chip.is-selected { color: var(--brand-ink); border-color: var(--brand); background: var(--brand-wash); }
+.filter-chip:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+
+/* ------------------------------------------------------------- buttons -- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border: 1px solid var(--rule-2);
+  border-radius: 7px;
+  background: none;
+  color: var(--paper-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  border-color: var(--rule-3);
+  color: var(--paper);
+}
+
+.feed-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s4); margin-top: var(--s5); padding-block: var(--s4); border-top: 2px solid var(--rule); }
+.pagination-summary { color: var(--muted); font-size: 12px; }
+.pagination-controls { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.pagination-button { min-height: 40px; }
+.pagination-button:disabled, .pagination-button:disabled:hover { border-color: var(--rule); color: var(--faint); cursor: default; }
+.pagination-button:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+
+/* 平台标注与品牌图标 */
+.type-badge {
+  display: inline-flex;
+  align-items: center;
+  /* 它落在 `column` 方向的 flex 里（标题上方），不写 align-self 会被拉满整行宽 */
+  align-self: flex-start;
+  gap: 5px;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+}
+
+.platform-icon { display: block; flex: 0 0 auto; width: 18px; height: 18px; object-fit: contain; }
+
+/* ------------------------------------------------------------- avatars -- */
+.feed-avatar {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 9px;
+  background: var(--ink-800);
+  color: var(--paper);
+  font-size: 18px;
+  object-fit: cover;
+  overflow: hidden;
+}
+
+/* 首字占位：蓝墨底 */
+.feed-avatar-initial {
+  background: linear-gradient(160deg, #1b2740, #131a29);
+  border: 1px solid var(--rule);
+}
+.lazy-avatar { position: relative; }
+.lazy-avatar-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .2s ease; }
+.lazy-avatar[data-lazy-img-state="loaded"] .lazy-avatar-image { opacity: 1; }
+.lazy-avatar[data-lazy-img-state="loaded"] .lazy-avatar-initial { visibility: hidden; }
+
+/* 订阅数与更新频率。 */
+.metrics {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--faint);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.metrics-value {
+  color: var(--paper-2);
+  font-weight: 500;
+}
+
+/* ==========================================================================
+   A · 索引长列表（广场首页的浏览层）
+   一行一个源、发丝线分隔、序号在左——最像报刊的形态。
+   ====================================================================== */
+.feed-index {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--s2);
+}
+
+.feed-row {
+  display: flex;
+  gap: 13px;
+  padding: 20px 0;
+  border-top: 2px solid var(--rule);
+}
+
+.feed-row:first-child { border-top: 0; }
+
+.feed-row:hover {
+  background: linear-gradient(90deg, rgba(244, 241, 234, 0.028), transparent 70%);
+}
+
+/* 序号从 01 起。数字由 JS 给（不再用 CSS counter）：`For` 的占位节点会
+   打断 DOM 里的顺序，而序号理应永远等于它在这批结果里的下标。
+   前 3 名走橙（设计稿的 `fr-rank--top`）——橙在这里的含义是「编辑部把它们排在最前」，
+   因为目录本来就按 `sort_order` 出，不是按热度；它不是一张热门榜。 */
+.feed-rank {
+  flex: 0 0 auto;
+  width: 26px;
+  color: var(--ghost);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.feed-rank--top { color: var(--signal-ink); }
+
+.feed-row-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* `center` 而不是 `baseline`：identity 是**列**（标注 / 标题 / 主机名），列容器的基线
+   取第一项的基线，用 baseline 会让右侧数字去对齐那行小字标注，而不是标题。 */
+.feed-head {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.feed-identity {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.feed-title {
+  margin: 0;
+  overflow: hidden;
+  color: var(--paper);
+  font-size: 23px;
+  font-weight: 400;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 描述、meta 行与动作行都落在 .feed-row-body 里，于是天然与标题左沿对齐 */
+.feed-desc {
+  margin: 11px 0 0;
+  color: var(--paper-2);
+  font-size: 13px;
+  line-height: 1.75;
+  text-wrap: pretty;
+}
+
+/* meta 行：语言 · 分类 · 标签。**不带底色**——原来的胶囊 chip 行是自造的，
+   一排行全被它撑高、还让「科技」这种分类+标签同值重复两遍。现在只剩普通文字 + 顿点，
+   标签按钮保留（它是唯一的标签入口），靠 hover/选中态而不是底色来表明可点。 */
+.feed-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.feed-language { font-size: 11px; }
+
+.feed-tag {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.feed-tag:hover { color: var(--paper); text-decoration: underline; text-underline-offset: 3px; }
+
+.feed-tag[aria-pressed="true"] { color: var(--brand-ink); }
+
+/* 动作行左对齐、与标题同一条左沿（设计稿 A 的 `.fr-row-actions`），
+   而不是贴到行的最右边——贴在右边时它与标题隔了半个版面，读作「另一行」 */
+.feed-actions {
+  display: flex;
+  align-items: center;
+  margin-top: 14px;
+}
+
+/* 复制成功时图标与按钮转绿，状态由 Model 在两秒后复原。 */
+.feed-copy { display: inline-flex; align-items: center; }
+.feed-copy-icon { width: 16px; height: 16px; flex: 0 0 auto; background: currentColor; -webkit-mask: var(--glyph-rss) center / contain no-repeat; mask: var(--glyph-rss) center / contain no-repeat; }
+.feed-copy-button.is-copied { color: #22c55e; border-color: #22c55e; }
+.feed-copy-button.is-copied .feed-copy-icon { -webkit-mask-image: var(--glyph-check); mask-image: var(--glyph-check); }
+.feed-copy-status { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* 卡片内最新文章：桌面横排三篇，窄屏逐篇排列。 */
+.feed-articles { margin-top: 16px; }
+.feed-articles-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.feed-article { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.feed-article-cover { flex: 0 0 auto; width: 80px; max-height: 144px; border-radius: 6px; overflow: hidden; background: var(--ink-800); }
+.lazy-img { position: relative; }
+.lazy-img-placeholder { display: block; width: 100%; height: auto; max-height: 144px; }
+.lazy-img-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .2s ease; }
+.lazy-img[data-lazy-img-state="loaded"] .lazy-img-image { opacity: 1; }
+.feed-article-body { min-width: 0; flex: 1; }
+.feed-article-title { display: -webkit-box; overflow: hidden; color: var(--paper-2); font-size: 13px; line-height: 1.6; text-decoration: none; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.feed-article-title:hover { color: var(--brand-ink); }
+.feed-article-time { margin-top: 5px; color: var(--muted); font-size: 11px; }
+.feed-articles-state { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+
+/* --------------------------------------------------- 空态 / 加载 / 错误 -- */
+/* 空态用大字与发丝线。 */
+.feed-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: var(--s8) var(--s4);
+  text-align: center;
+}
+
+.feed-state-rule {
+  width: 120px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--rule);
+}
+
+.feed-state-title {
+  color: var(--paper);
+  font-size: 22px;
+}
+
+.feed-state-note {
+  color: var(--faint);
+  font-size: 12.5px;
+}
+
+.feed-list-error {
+  margin: 16px 0 0;
+  color: var(--warn);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------ 响应式 -- */
+@media (max-width: 860px) {
+  :root { --gutter: 20px; }
+
+  .feed-head { flex-wrap: wrap; gap: 8px; }
+}
+
+@media (max-width: 800px) {
+  .feed-articles-list { grid-template-columns: 1fr; gap: 12px; }
+}
+
+@media (max-width: 640px) {
+  .filter-row { flex-wrap: wrap; gap: 10px; }
+  .feed-rank { width: 20px; font-size: 11px; }
+  .feed-title { font-size: 20px; }
+}
