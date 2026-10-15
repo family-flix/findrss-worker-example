@@ -71,6 +71,8 @@ RSS 是供阅读器获取更新的订阅格式。阅读器是用来集中查看�
 
 也可以编写其他网站的采集规则。部分脚本需要登录账号或连接设备，具体要求见[示例说明](examples/scripts/README.md)。
 
+> 可以配合 [dm-extension 浏览器插件](https://github.com/ltaoo/dm-extension)，将 Cookie 提交到自己部署的 FindRSS，供采集脚本使用。
+
 ## 一键部署到 Cloudflare Workers
 
 点击下方按钮，将采集工具部署到自己的账号：
