@@ -46,7 +46,7 @@
   "cloudflare": {
     "bindings": {
       "ADMIN_PASSWORD": {
-        "description": "管理后台登录密码，请设置随机长密码。"
+        "description": "必填，无默认值。请设置随机长密码，作为管理后台登录密码。"
       }
     }
   }

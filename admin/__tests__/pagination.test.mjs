@@ -38,7 +38,8 @@ test("共享分页处理空列表、末页、条数切换和加载中的按钮�
   const total = ui.ref(0), loading = ui.ref(false);
   const model = PaginationModel(ui, { total, loading });
   const view = PaginationView(ui, { model, name: "test-pagination", label: "列表分页" });
-  const controls = view.children.find(child => child.props.attributes.n === "test-pagination-pages").children;
+  const controls = view.children.find(child => child.props.attributes.n === "test-pagination-controls")
+    .children.find(child => child.props.attributes.n === "test-pagination-pages").children;
   assert.equal(model.state.value.first, 0);
   assert.equal(model.state.value.last, 0);
   assert.equal(model.state.value.pages, 1);

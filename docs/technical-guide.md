@@ -9,7 +9,7 @@
 
 两套前端分别构建，分别使用自己的页面外壳和业务状态，均调用同一套 API 与 `APIDurableObject`。
 
-订阅广场构建时请求公开目录接口并复用 Timeless SSR 生成含首屏内容、内嵌 CSS 和完整目录的 HTML。`DISCOVERY_API_ORIGIN` 指定接口来源，默认复用或临时启动本地 Worker 读取本地数据；生产构建应指定线上接口，取数失败不覆盖已有产物。运行时继续将目录和文章快照写入 R2，目录、头像和快照变化自动重发，首页边缘缓存 60 秒；缺少产物时兼容读取 DO，发布失败持久化标记并由 alarm 重试。搜索/筛选/分页在浏览器完成，客户端通过 hydrate 接管首屏。详见 [广场构建说明](../discover/README.md#部署)与[静态发布说明](../discover/README.md#静态发布与更新)。
+订阅广场构建时请求公开目录接口并复用 Timeless SSR 生成含首屏内容、内嵌 CSS 和完整目录的 HTML。默认先启动本地 API Worker，等待就绪后再构建，结束后关闭该实例；`DISCOVERY_API_ORIGIN` 指定接口来源时直接使用指定接口，生产构建应指定线上接口，取数失败不覆盖已有产物。运行时继续将目录和文章快照写入 R2，目录、头像和快照变化自动重发，首页边缘缓存 60 秒；缺少产物时兼容读取 DO，发布失败持久化标记并由 alarm 重试。搜索/筛选/分页在浏览器完成，客户端通过 hydrate 接管首屏。详见 [广场构建说明](../discover/README.md#部署)与[静态发布说明](../discover/README.md#静态发布与更新)。
 
 订阅广场卡片直接读取 `discovery_source_snapshots` 中的文章快照，与目录一起返回，不逐源请求 `/api/preview`。DO alarm 每小时更新启用且无需 token 的源，每批最多 4 个；已有源首次访问后自动补建。后台「刷新快照」可手动更新单个源。每份快照保存最近 3 篇文章、封面地址及实际宽高，前端按比例占位；图片尺寸读取失败仍保留文章和封面。抓取失败保留上次成功快照，编辑源地址、开启 token 访问或删除源时清理旧快照。封面只读取前 64 KiB，支持 PNG、JPEG、WebP、GIF，其他格式使用默认比例。
 
@@ -27,6 +27,7 @@
 # 本项目根目录，Node.js 22.19+
 npm ci
 cp .dev.vars.example .dev.vars
+# 编辑 .dev.vars，填写必需的 ADMIN_PASSWORD（无默认值）
 npm run dev
 npm run build
 npm test
@@ -50,7 +51,7 @@ npm run deploy
 - `scripts/` 集中保存统一构建、前后台 bundle 构建、Timeless 插件及 RSS 示例同步工具；npm 命令从这里启动。
 - `public/assets/` 保存共享依赖和 Timeless 浏览器适配模块；`public/brand/` 保存唯一品牌源文件。
 
-`scripts/build.js` 复制 `public/` 的公共资源，前后台脚本分别从 `discover/`、`admin/` 构建业务文件并写入同一临时输出，全部成功后原子切换为 `dist/assets/`；主 Worker 由 Wrangler 直接打包，不预生成 Go 嵌入用的服务端 bundle。前台静态文件在资源根路径，后台静态文件在 `/admin/`，依赖在 `/assets/`，品牌在 `/brand/`；旧图片地址保留构建别名，兼容已发布 R2 首页和 manifest。前台引用 `/base.css`；后台 `admin/style.css` 只维护单属性原子类，具体尺寸在页面 `style` 中声明，组件内部样式通过参数传入；后台 manifest 从同一份 `discover/site.webmanifest` 生成，只覆盖展示名称。
+`scripts/build.js` 负责启动构建所需的 API 并等待就绪，再异步执行 `scripts/build_frontend.js`；开发与构建通过 `scripts/local_worker.js` 共用 Worker 启动和清理逻辑。前端构建复制 `public/` 的公共资源，前后台脚本分别从 `discover/`、`admin/` 构建业务文件并写入同一临时输出，全部成功后原子切换为 `dist/assets/`；主 Worker 由 Wrangler 直接打包，不预生成 Go 嵌入用的服务端 bundle。前台静态文件在资源根路径，后台静态文件在 `/admin/`，依赖在 `/assets/`，品牌在 `/brand/`；旧图片地址保留构建别名，兼容已发布 R2 首页和 manifest。前台引用 `/base.css`；后台 `admin/style.css` 只维护单属性原子类，具体尺寸在页面 `style` 中声明，组件内部样式通过参数传入；后台 manifest 从同一份 `discover/site.webmanifest` 生成，只覆盖展示名称。
 
 `wrangler.jsonc` 是唯一部署配置。静态资源由 Workers Static Assets 分发，动态页面和 API 使用 `run_worker_first`；不启用全站 SPA 回退，后台已登记页面才映射到 `/admin/index.html`。`server/lib/site_security.js` 同时定义动态响应和构建生成的静态 `_headers` 策略，保留 `manifest-src 'self'`。
 

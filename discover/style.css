@@ -146,7 +146,7 @@ input:focus-visible {
   text-decoration: none;
 }
 
-.github-link:hover { color: var(--brand-ink); }
+.github-link:hover { color: var(--paper); }
 
 .github-icon {
   width: calc(var(--s4) * 2);

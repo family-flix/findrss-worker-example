@@ -186,6 +186,86 @@ test("域名内添加 key/value，失败保留输入，成功添加并清空添�
   assert.equal(group.new_value.value, "");
 });
 
+test("左侧删除整个域名，切换选择并保留其他域名草稿，最后一个域名删除后显示空状态", async () => {
+  const calls = [];
+  const confirmations = [];
+  const context = setup(async (url, options) => {
+    if (!options.body) return Response.json({ cookies: [fixture, { ...fixture, path: "/account" }, { ...fixture, domain: ".other.com" }] });
+    calls.push({ url, options });
+    return Response.json({ count: calls.length === 1 ? 1 : 0 });
+  }, text => { confirmations.push(text); return true; });
+  const { model } = context;
+  await model.methods.refresh();
+  const other = model.state.groups.value[1];
+  model.methods.set_value(other.rows.value[0].value, "unsaved");
+  model.methods.set_value(other.new_name, "draft");
+  const root = vm.runInContext("CookieWorkspaceView({ model })", context);
+  const sidebar = walk(root).find(node => node.props.attributes?.n === "cookies-domains");
+  const remove = walk(sidebar).find(node => node.props.attributes?.n === "cookie-domain-delete-.example.com");
+  assert.match(remove.props.attributes["aria-label"], /example\.com.*所有 Cookie/);
+  await remove.props.onClick();
+  assert.equal(calls[0].url, "/admin/api/cookies/domain");
+  assert.equal(calls[0].options.method, "DELETE");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { domain: ".example.com" });
+  assert.match(confirmations[0], /example\.com.*所有路径.*无法撤销/);
+  assert.equal(model.state.groups.value.length, 1);
+  assert.equal(model.state.selected_domain.value, ".other.com");
+  assert.equal(model.state.selected_groups.value[0], other);
+  assert.equal(other.rows.value[0].value.value, "unsaved");
+  assert.equal(other.new_name.value, "draft");
+  assert.equal(model.state.count.value, 1);
+  await model.methods.remove_domain(other);
+  assert.equal(model.state.groups.value.length, 0);
+  assert.equal(model.state.selected_domain.value, "");
+  assert.equal(model.state.selected_groups.value.length, 0);
+  assert.equal(model.state.count.value, 0);
+  assert.match(model.state.message.value, /other\.com.*已删除/);
+});
+
+test("取消或删除域名失败时保留 Cookie、选择和草稿，忙碌时禁止重复删除", async () => {
+  let confirmed = false;
+  let writes = 0;
+  let finish;
+  const { model } = setup(async (_, options) => {
+    if (!options.body) return Response.json({ cookies: [fixture] });
+    writes++;
+    await new Promise(resolve => { finish = resolve; });
+    return Response.json({ error: "删除失败" }, { status: 500 });
+  }, () => confirmed);
+  await model.methods.refresh();
+  const group = model.state.groups.value[0];
+  model.methods.set_value(group.rows.value[0].value, "draft");
+  await model.methods.remove_domain(group);
+  assert.equal(writes, 0);
+  confirmed = true;
+  const pending = model.methods.remove_domain(group);
+  assert.equal(model.state.busy.value, true);
+  await model.methods.remove_domain(group);
+  assert.equal(writes, 1);
+  finish();
+  await pending;
+  assert.equal(model.state.busy.value, false);
+  assert.equal(model.state.groups.value[0], group);
+  assert.equal(model.state.selected_domain.value, fixture.domain);
+  assert.equal(model.state.count.value, 1);
+  assert.equal(group.rows.value[0].value.value, "draft");
+  assert.match(model.state.error.value, /删除失败/);
+});
+
+test("删除未选中的空域名保留当前选择", async () => {
+  const { model } = setup(async (_, options) => {
+    if (!options.body) return Response.json({ cookies: [fixture, { ...fixture, domain: ".other.com" }] });
+    return Response.json({ count: 1 });
+  });
+  await model.methods.refresh();
+  const group = model.state.groups.value[1];
+  await model.methods.remove_cookie(group, group.rows.value[0]);
+  assert.equal(group.rows.value.length, 0);
+  await model.methods.remove_domain(group);
+  assert.equal(model.state.groups.value.length, 1);
+  assert.equal(model.state.selected_domain.value, fixture.domain);
+});
+
 test("切换域名只展示选中域名的键值对，保留各域名未保存的修改", async () => {
   const context = setup(async () => Response.json({ cookies: [fixture, { ...fixture, domain: ".other.com", name: "other_key" }] }));
   const { model } = context;

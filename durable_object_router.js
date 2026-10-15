@@ -313,13 +313,15 @@ async function dispatch(request, app) {
   if (url.pathname === "/_admin/cookies" && request.method === "GET") {
     return { cookies: app.scripts.rss_cookies() };
   }
-  if (url.pathname === "/_admin/cookies" && ["POST", "PATCH", "DELETE"].includes(request.method)) {
+  if ((url.pathname === "/_admin/cookies" && ["POST", "PATCH", "DELETE"].includes(request.method)) ||
+      (url.pathname === "/_admin/cookies/domain" && request.method === "DELETE")) {
     if (Number(request.headers.get("Content-Length") || 0) > 1024 * 1024) return error_response("request body is too large", 413);
     const text = await request.text();
     if (new TextEncoder().encode(text).length > 1024 * 1024) return error_response("request body is too large", 413);
     let body;
     try { body = JSON.parse(text); } catch { return error_response("invalid JSON", 400); }
     if (!body || typeof body !== "object" || Array.isArray(body)) return error_response("invalid JSON body", 400);
+    if (url.pathname === "/_admin/cookies/domain") return app.scripts.delete_rss_cookie_domain(body);
     return app.scripts.edit_rss_cookie(body, request.method);
   }
   if (url.pathname === "/_admin/cookies/update" && request.method === "POST") {

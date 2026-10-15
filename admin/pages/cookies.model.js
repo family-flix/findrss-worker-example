@@ -178,6 +178,26 @@ function CookiesViewModel() {
         group.rows.as(group.rows.value.filter((item) => item.id !== row.id));
       });
     },
+    async remove_domain(group) {
+      if (busy.value || !loaded.value || !groups.value.includes(group)) return;
+      if (!window.confirm("删除域名 " + group.domain + " 及其所有路径下的 Cookie？该域名未保存的修改也会丢失，此操作无法撤销。")) return;
+      error.set("");
+      message.set("");
+      busy.set(true);
+      try {
+        const result = await request_json("/admin/api/cookies/domain", {
+          method: "DELETE", body: JSON.stringify({ domain: group.domain }),
+        });
+        groups.as(groups.value.filter(item => item.domain !== group.domain));
+        if (selected_domain.value === group.domain) selected_domain.set(groups.value[0]?.domain || "");
+        count.set(result.count);
+        message.set(group.domain + " 及其所有 Cookie 已删除。");
+      } catch (failure) {
+        error.set(failure.message || String(failure));
+      } finally {
+        busy.set(false);
+      }
+    },
     add_cookie(group) {
       const name = group.new_name.value.trim();
       if (!name) { error.set("Cookie key 不能为空"); return; }

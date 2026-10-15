@@ -49,9 +49,9 @@ Logo 与平台 SVG 通过 `icons.js` 转为 data URL。订阅源头像只在目�
 
 开发启动顺序为：先启动本地 API Worker，等待就绪，再构建前端和 Discover SSR。SSR 的 `DISCOVERY_API_ORIGIN` 自动指向刚启动的本地实例；构建后保持该实例运行，Ctrl+C 时一起关闭。首次运行不需要预先构建静态资源。
 
-`npm run build` 会请求公开目录接口 `/discovery/catalog`，再用 Timeless SSR 生成 `dist/assets/index.html`，产物包含真实目录、首屏文章和内嵌 CSS。默认从本地 `http://127.0.0.1:8787` 读取数据（支持 `FINDRSS_WORKER_PORT`）；API 未运行时临时启动使用同一 `.wrangler/state` 的本地 Worker，目录读取完成后关闭，不需要提前启动服务。
+`npm run build` 默认先启动使用同一 `.wrangler/state` 的本地 API Worker，等待就绪后再构建前端、请求公开目录接口 `/discovery/catalog`，用 Timeless SSR 生成 `dist/assets/index.html`。产物包含真实目录、首屏文章和内嵌 CSS；构建结束后关闭该实例，失败时也会清理。构建 API 使用随机端口，SSR 自动读取实际地址；未设置订阅域名时，静态订阅链接仍使用 `http://127.0.0.1:8787`（支持 `FINDRSS_WORKER_PORT` / `API_WORKER_PORT`），不会包含临时端口。首次运行不需要提前启动服务。
 
-构建线上目录时显式设置数据来源，订阅链接域名可另用 `FINDRSS_HOSTNAME` 指定：
+构建线上目录时显式设置数据来源，此时直接使用指定接口并跳过本地 Worker 启动，订阅链接域名可另用 `FINDRSS_HOSTNAME` 指定：
 
 ```bash
 DISCOVERY_API_ORIGIN=https://your-worker.example FINDRSS_HOSTNAME=https://feeds.example npm run build

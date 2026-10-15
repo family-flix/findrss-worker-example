@@ -26,7 +26,7 @@ const server = await esbuild.build({
   plugins: [timeless_plugin({ platform: LITE_ESM, ssr: true })],
 });
 const { render_embedded_home } = await import("data:text/javascript;base64," + Buffer.from(server.outputFiles[0].text).toString("base64"));
-const { catalog, origin } = await load_build_catalog(tmp_dir);
+const { catalog, origin } = await load_build_catalog();
 const feed_origin = process.env.FINDRSS_HOSTNAME || origin;
 const html = render_embedded_home(catalog,
   /^https?:\/\//.test(feed_origin) ? feed_origin : "https://" + feed_origin);

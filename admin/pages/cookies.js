@@ -119,8 +119,10 @@ function CookieWorkspaceView({ model }) {
         For({ each: state.groups, key: "domain", render(value) {
           const group = value?.__is_ref ? value.value : value;
           const selected = computed(state.selected_domain, domain => domain === group.domain);
-          return Button({ variant: "quiet", disabled: state.busy,
-            class: computed(selected, active => "box-border " + ("flex-none w-full min-w-0 text-left " + (active ? "bg-selected text-link" : ""))), style: {
+          return View({ class: "box-border flex items-center min-w-0", style: { gap: "var(--frui-space-1)" },
+            attributes: { n: "cookie-domain-item" } }, [
+          Button({ variant: "quiet", disabled: state.busy,
+            class: computed(selected, active => "box-border " + ("flex-1 min-w-0 text-left " + (active ? "bg-selected text-link" : ""))), style: {
               "padding": "10px"
             },
             attributes: { n: "cookie-domain-select-" + group.domain, title: group.domain, "aria-pressed": computed(selected, String) },
@@ -135,6 +137,10 @@ function CookieWorkspaceView({ model }) {
               "font-size": "11px"
             }, attributes: { n: "cookie-domain-count" } }, [computed(group.rows, rows => String(rows.length))]),
             ]),
+          ]),
+          Button({ variant: "danger", size: "small", class: "box-border flex-none", disabled: state.busy,
+            attributes: { n: "cookie-domain-delete-" + group.domain, title: "删除域名及其所有 Cookie", "aria-label": "删除域名 " + group.domain + " 及其所有 Cookie" },
+            onClick: () => model.methods.remove_domain(group) }, []),
           ]);
         } }),
       ]),

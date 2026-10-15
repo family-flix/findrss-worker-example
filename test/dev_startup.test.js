@@ -4,7 +4,8 @@ import { mkdtempSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
-import { run_dev as run_dev_impl, start_local_worker } from "../scripts/dev.js";
+import { run_dev as run_dev_impl } from "../scripts/dev.js";
+import { start_local_worker } from "../scripts/local_worker.js";
 
 const run_dev = options => run_dev_impl({ watch_admin: () => () => {}, ...options });
 
@@ -79,6 +80,7 @@ test("Wrangler 使用项目临时目录，内部启动错误、构建错误和�
       async startWorker(options) {
         assert.equal(options.dev.server.port, 8787);
         assert.equal(options.assets, "/project/dist/assets.dev");
+        assert.equal(options.dev.watch, true);
         if (["error", "buildFailed"].includes(phase)) queueMicrotask(() => this.emit(phase, {
           cause: new Error("EACCES: permission denied, mkdir /root-temp/email-store"),
         }));

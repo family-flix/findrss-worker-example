@@ -108,3 +108,40 @@ test('全为无名 Cookie 不清空存储，危险 Cookie 仍拒绝；显式空�
   assert.equal(result.count, 0);
   assert.deepEqual(ctx.saved(), []);
 });
+
+test('管理员整域删除覆盖所有名称和路径，精确匹配域名并使缓存失效', async () => {
+  const { route } = await import('../durable_object_router.js');
+  const { default: worker } = await import('../api.js');
+  const ctx = setup();
+  const cookie = { domain: '.example.com', name: 'sid', value: 'original', path: '/' };
+  await ctx.service.update_rss_cookies(request([
+    cookie, { ...cookie, path: '/account' }, { ...cookie, name: 'other' },
+    { ...cookie, domain: 'example.com' }, { ...cookie, domain: 'sub.example.com' }, { ...cookie, domain: '.other.com' },
+  ]));
+  let invalidations = 0;
+  let writes = 0;
+  const put = ctx.service.repo.rss_cookies.put;
+  ctx.service.repo.rss_cookies.put = cookies => { writes++; put(cookies); };
+  ctx.service.invalidate_routes = () => invalidations++;
+  const env = { ADMIN_PASSWORD: 'admin-fixture', API: { getByName: () => ({ fetch: request => route(request, { scripts: ctx.service }) }) } };
+  const send = (body, authorized = true) => worker.fetch(new Request('https://local/admin/api/cookies/domain', {
+    method: 'DELETE', body: typeof body === 'string' ? body : JSON.stringify(body),
+    headers: authorized ? { Authorization: 'Bearer admin-fixture' } : {},
+  }), env);
+  assert.equal((await send({ domain: cookie.domain }, false)).status, 401);
+  for (const body of ['{', 'null', '[]', {}, { domain: '' }, { domain: 1 }, { domain: 'example.com/path' }, { domain: 'example com' }]) {
+    assert.equal((await send(body)).status, 400);
+  }
+  assert.equal(writes, 0);
+  assert.equal(ctx.saved().length, 6);
+  const result = await send({ domain: ' .EXAMPLE.COM ' });
+  assert.equal(result.status, 200);
+  assert.match(result.headers.get('Cache-Control'), /no-store/);
+  assert.deepEqual(await result.json(), { domain: '.example.com', deleted: 3, count: 3 });
+  assert.deepEqual(ctx.saved().map(cookie => cookie.domain), ['example.com', 'sub.example.com', '.other.com']);
+  assert.equal(writes, 1);
+  assert.equal(invalidations, 1);
+  assert.deepEqual(await (await send({ domain: '.example.com' })).json(), { domain: '.example.com', deleted: 0, count: 3 });
+  for (const domain of ['example.com', 'sub.example.com', '.other.com']) assert.equal((await send({ domain })).status, 200);
+  assert.deepEqual(ctx.saved(), []);
+});

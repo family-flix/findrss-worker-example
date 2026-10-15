@@ -61,7 +61,7 @@ FindRSS Worker 是一个部署到 Cloudflare Workers 的 自定义脚本运行�
 
 点击上方 **Deploy to Cloudflare**，按引导连接 GitHub / GitLab，选择 Cloudflare 账号，设置 Worker 名称和密钥后部署。Cloudflare 会复制项目、配置 Workers Builds，并按 Wrangler 配置创建所需的 Durable Object 和 R2 资源。[官方部署说明](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
 
-部署时只需将 `ADMIN_PASSWORD` 设置为后台登录密码，无需传入 `DEVICE_TOKEN`、`FINDRSS_HOSTNAME` 或 `FEED_HOSTNAME`，域名默认使用当前访问地址。使用项目定义的构建命令 `npm run build` 和部署命令 `npm run deploy`。完成后打开 Worker 域名的 `/admin/`，输入密码登录并创建第一个脚本；需要连接设备时，在「设备管理 → Device Token」创建凭证。
+部署时必须填写 `ADMIN_PASSWORD`，作为后台登录密码；该密钥没有默认值，请自行设置随机长密码。无需传入 `DEVICE_TOKEN`、`FINDRSS_HOSTNAME` 或 `FEED_HOSTNAME`，域名默认使用当前访问地址。使用项目定义的构建命令 `npm run build` 和部署命令 `npm run deploy`。完成后打开 Worker 域名的 `/admin/`，输入密码登录并创建第一个脚本；需要连接设备时，在「设备管理 → Device Token」创建凭证。
 
 按钮指向独立公开仓库 `ltaoo/findrss-worker` 的根目录。请先创建该公开仓库并推送项目代码；仓库根目录应包含安装和构建所需的本地模块与资源。
 
@@ -77,6 +77,7 @@ FindRSS Worker 是一个部署到 Cloudflare Workers 的 自定义脚本运行�
 cd /Users/mayfair/Documents/other/findrss-worker
 npm ci
 cp .dev.vars.example .dev.vars
+# 编辑 .dev.vars，填写 ADMIN_PASSWORD 后再启动
 npm run dev
 ```
 
@@ -90,7 +91,7 @@ npm run dev
 | <http://127.0.0.1:8787/admin/> | 管理后台 |
 | <http://127.0.0.1:8787/health> | 健康检查 |
 
-示例配置中的本地后台用户名为 `admin`，密码为 `local-admin-token`。本地配置只用于开发，生产部署时请设置独立的随机长密钥。
+本地后台用户名为 `admin`，密码使用你在 `.dev.vars` 中填写的 `ADMIN_PASSWORD`，没有默认值。本地配置只用于开发，生产部署时请设置独立的随机长密码。
 
 首次启动的订阅广场为空，不再预置外部订阅源。登录后台后，在「订阅源」中添加外部 RSS / Atom 地址；需要生成自己的订阅源时，先在「脚本」中发布脚本，再添加对应的订阅地址。旧版本已写入的示例源可在后台手动删除。
 
@@ -105,7 +106,7 @@ npm run dry-run   # 检查部署产物
 npm run deploy    # 部署到 Cloudflare
 ```
 
-构建会读取目录接口并用 Timeless SSR 生成带内嵌 CSS 和首屏内容的首页。默认读取本地 Worker 数据；本地未启动时会临时启动并在取数后关闭。生产构建请通过 `DISCOVERY_API_ORIGIN=https://你的Worker域名` 指定线上目录，`FINDRSS_HOSTNAME` 可另指定订阅域名。接口失败会中止构建并保留上次产物，详见 [构建取数说明](discover/README.md#部署)。
+构建默认先启动本地 API Worker，等待就绪，再读取目录接口并用 Timeless SSR 生成带内嵌 CSS 和首屏内容的首页；构建结束后关闭该实例。生产构建请通过 `DISCOVERY_API_ORIGIN=https://你的Worker域名` 指定线上目录，此时直接使用指定接口；`FINDRSS_HOSTNAME` 可另指定订阅域名。接口失败会中止构建并保留上次产物，详见 [构建取数说明](discover/README.md#部署)。
 
 停止本地服务时，在启动终端按 Ctrl+C。
 

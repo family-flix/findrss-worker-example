@@ -508,6 +508,16 @@ export class ServiceScript {
     return this.repo.rss_cookies.get();
   }
 
+  delete_rss_cookie_domain(body) {
+    const domain = typeof body.domain === "string" ? body.domain.trim().toLowerCase() : "";
+    if (!domain || /[\s/]/.test(domain)) throw do_error("cookie domain is invalid", 400);
+    const cookies = this.rss_cookies();
+    const remaining = cookies.filter(cookie => cookie.domain !== domain);
+    this.repo.rss_cookies.put(remaining, Date.now());
+    this.invalidate_routes();
+    return { domain, deleted: cookies.length - remaining.length, count: remaining.length };
+  }
+
   edit_rss_cookie(body, method) {
     if (typeof body.name !== "string" || !body.name.trim() ||
         (method !== "DELETE" && typeof body.value !== "string")) {

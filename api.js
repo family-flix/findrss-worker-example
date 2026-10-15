@@ -286,6 +286,12 @@ export default {
         return admin_cookie_request(env, request, "");
       }
       if (
+        url.pathname === "/admin/api/cookies/domain" &&
+        request.method === "DELETE"
+      ) {
+        return admin_cookie_request(env, request, "/domain");
+      }
+      if (
         url.pathname === "/admin/api/cookies/update" &&
         request.method === "POST"
       ) {
