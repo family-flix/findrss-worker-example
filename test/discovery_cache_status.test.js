@@ -5,7 +5,7 @@ import { ServiceDiscovery } from "../server/service/durable_object/discovery.js"
 test("只有管理列表带快照状态，RSS/Atom 与乱序 query 使用同一缓存键", () => {
   const keys = [];
   const repo = { discovery: { list_tags: () => [], list: () => [
-    { id: "a", title: "源", feed_url: "{{hostname}}/rss/wxmp/gh_a?b=2&a=1", enabled: 1 },
+    { id: "a", title: "源", feed_url: "{{hostname}}/rss/wxmp/gh_a?b=2&a=1", enabled: 1, snapshot_attempted_at: Date.now() },
     { id: "b", title: "源 Atom", feed_url: "{{hostname}}/atom/wxmp/gh_a?a=1&b=2", enabled: 1 },
   ] } };
   const service = new ServiceDiscovery({ repo, route_cache: { inspect(key) {

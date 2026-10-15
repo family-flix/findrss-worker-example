@@ -15,11 +15,11 @@ export const FEED_ERRORS = Object.freeze({
   SCRIPT_FAILED: [502, "订阅脚本执行失败"],
 });
 
-export function feed_problem(code, detail) {
-  if (!Object.hasOwn(FEED_ERRORS, code) || typeof detail !== "string" || !detail.trim()) return null;
+export function feed_problem(code, message) {
+  if (!Object.hasOwn(FEED_ERRORS, code) || typeof message !== "string" || !message.trim()) return null;
   const [status, title] = FEED_ERRORS[code];
-  detail = detail.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 1000);
-  return { type: "urn:findrss:error:" + code.toLowerCase().replaceAll("_", "-"), title, status, detail, code, error: detail };
+  message = message.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 1000);
+  return { type: "urn:findrss:error:" + code.toLowerCase().replaceAll("_", "-"), title, status, code, error: message };
 }
 
 export function public_feed_failure(failure) {

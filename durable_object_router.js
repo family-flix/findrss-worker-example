@@ -80,6 +80,17 @@ function translate(result) {
  */
 async function dispatch(request, app) {
   const url = new URL(request.url);
+  if (url.pathname === "/_admin/settings/snapshots") {
+    if (request.method === "GET") return app.snapshot_settings.settings();
+    if (request.method === "PUT") {
+      const text = await request.text();
+      if (text.length > 16384) throw new DurableObjectError("request body is too large", 413);
+      let body;
+      try { body = JSON.parse(text); } catch { throw new DurableObjectError("invalid JSON", 400); }
+      return app.snapshot_settings.save_settings(body);
+    }
+    throw new DurableObjectError("method not allowed", 405);
+  }
   const device_token_match = url.pathname.match(/^\/_admin\/device-tokens(?:\/([A-Za-z0-9-]+)(?:\/(reveal|revoke))?)?$/);
   if (device_token_match || url.pathname === "/_internal/device-tokens/verify") {
     const [, id, action] = device_token_match || [];

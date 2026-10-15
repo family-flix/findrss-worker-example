@@ -15,7 +15,7 @@ export function create_sandbox_promises(vm) {
           const error = vm.newError(failure instanceof Error ? failure.message : String(failure));
           const problem = public_feed_failure(failure);
           if (problem) {
-            for (const [key, value] of Object.entries({ name: "FeedError", code: problem.code, message: problem.detail })) {
+            for (const [key, value] of Object.entries({ name: "FeedError", code: problem.code, message: problem.error })) {
               const handle = vm.newString(value);
               vm.setProp(error, key, handle);
               handle.dispose();

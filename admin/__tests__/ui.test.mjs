@@ -1,3 +1,5 @@
+import { PollPolicyView, poll_policy_label } from "../components/poll_policy.js";
+import { PollPolicyModel } from "../components/poll_policy.model.js";
 import { page_source } from "./page_source.mjs";
 import { navigation, initialize_admin_auth } from "../store.js";
 import assert from "node:assert/strict";
@@ -9,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { AdminAgentModel, AdminAgentView } from "../components/admin_agent.js";
 import { ScriptAgentModel, ScriptAgentPanelView } from "../components/script_agent.js";
 import { AISettingsStore } from "../components/ai_settings.js";
+import { SnapshotSettingsModel } from "../components/snapshot_settings.model.js";
 import { AI_PROVIDER_PRESETS } from "../domain/preferences/ai_presets.js";
 import { PaginationModel, PaginationView } from "../components/pagination.js";
 import * as platform_helpers from "../components/discovery_platform.js";
@@ -24,7 +27,7 @@ const bundle = await build({
     build.onLoad({ filter: /node_modules\/codemirror\/.*\.js$/ }, () => ({ contents: "export default {};", loader: "js" }));
   } }],
 });
-const context = vm.createContext({ pages: navigation, ...platform_helpers, RssRoutePatternModel, PaginationModel, PaginationView, URL, console, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {} });
+const context = vm.createContext({ pages: navigation, ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, PaginationModel, PaginationView, URL, console, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {} });
 context.window = context;
 vm.runInContext(readFileSync(new URL("../../public/assets/timeless/0.34.2/timeless.umd.min.js", import.meta.url), "utf8"), context);
 vm.runInContext(bundle.outputFiles[0].text, context);
@@ -552,6 +555,12 @@ test("脚本模型设置使用原厂商/模型页；临时密钥用于连接测�
 });
 
 test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相同的厂商模型编辑器", async () => {
+  context.SnapshotSettingsModel = options => SnapshotSettingsModel({ ...options, request_json: async (url, request_options) => {
+    const response = await context.window.FindRSSAdminAuth.fetch(url, request_options);
+    const value = await response.json();
+    if (!response.ok) throw new Error(value.error);
+    return value;
+  } });
   context.AISettingsStore = AISettingsStore;
   context.FindRSSAdminShell = { Page: (props, children) => ui.View({ attributes: { n: "settings-test-page" } }, children) };
   const requests = [];

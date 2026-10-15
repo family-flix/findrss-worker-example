@@ -1,3 +1,5 @@
+import { PollPolicyView, poll_policy_label } from "../components/poll_policy.js";
+import { PollPolicyModel } from "../components/poll_policy.model.js";
 import { page_source } from "./page_source.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -10,7 +12,7 @@ import { RssRoutePatternModel } from "../../server/domain/rss_route.js";
 
 // Use the shipped reactive runtime without starting a browser.
 function fixture(file, factory, fetch = async () => Response.json({})) {
-  const context = vm.createContext({ ...platform_helpers, RssRoutePatternModel, PaginationModel, PaginationView, ScriptAgentModel, URL, URLSearchParams, File,
+  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, PaginationModel, PaginationView, ScriptAgentModel, URL, URLSearchParams, File,
     setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {} });
   context.window = context;
   context.document = { querySelector: () => null, readyState: "loading", addEventListener() {} };

@@ -61,6 +61,8 @@ import { ServiceRedemption } from "./service/durable_object/redemption.js";
 import { ServiceScript } from "./service/durable_object/scripts.js";
 import { ServiceTask } from "./service/durable_object/tasks.js";
 import { ServiceUser } from "./service/durable_object/users.js";
+import { RepositorySnapshotSettings } from "./repository/snapshot_settings.js";
+import { ServiceSnapshotSettings } from "./service/durable_object/snapshot_settings.js";
 
 /**
  * @typedef {Object} Env
@@ -231,6 +233,12 @@ export class APIDurableObject extends DurableObject {
         "ALTER TABLE discovery_sources ADD COLUMN avatar_updated_at INTEGER NOT NULL DEFAULT 0");
     }
     const avatar_columns = this.ctx.storage.sql.exec("PRAGMA table_info(discovery_source_avatars)").toArray();
+    for (const [name, definition] of [["poll_policy_json", "TEXT NOT NULL DEFAULT '{\"mode\":\"inherit\"}'"], ["poll_updated_at", "INTEGER NOT NULL DEFAULT 0"]]) {
+      if (!discovery_source_columns.some(column => column.name === name)) this.ctx.storage.sql.exec(`ALTER TABLE discovery_sources ADD COLUMN ${name} ${definition}`);
+    }
+    const snapshot_columns = this.ctx.storage.sql.exec("PRAGMA table_info(discovery_source_snapshots)").toArray();
+    if (!snapshot_columns.some(column => column.name === "adaptive_interval")) this.ctx.storage.sql.exec("ALTER TABLE discovery_source_snapshots ADD COLUMN adaptive_interval INTEGER NOT NULL DEFAULT 0");
+    if (!snapshot_columns.some(column => column.name === "poll_fingerprint")) this.ctx.storage.sql.exec("ALTER TABLE discovery_source_snapshots ADD COLUMN poll_fingerprint TEXT NOT NULL DEFAULT ''");
     if (!avatar_columns.some((column) => column.name === "object_key")) {
       this.ctx.storage.sql.exec("ALTER TABLE discovery_source_avatars ADD COLUMN object_key TEXT NOT NULL DEFAULT ''");
     }
@@ -329,6 +337,7 @@ export const route = {
     }
     /** 纯 SQL 存储层：每个聚合一个 RepositoryX，只回原始行/Set/数字。 */
     this.repo = {
+      snapshot_settings: new RepositorySnapshotSettings({ sql: this.ctx.storage.sql }),
       access_tokens: new RepositoryAccessToken({ sql: this.ctx.storage.sql }),
       activity: new RepositoryActivity({ sql: this.ctx.storage.sql }),
       calls: new RepositoryCall({ sql: this.ctx.storage.sql }),
@@ -344,7 +353,8 @@ export const route = {
       platforms: new RepositoryPlatform({ sql: this.ctx.storage.sql }),
       tags: new RepositoryTag({ sql: this.ctx.storage.sql }),
       script_logs: new RepositoryScriptLog({ sql: this.ctx.storage.sql }),
-      rss_route_cache: new RepositoryRssRouteCache({ sql: this.ctx.storage.sql, storage: this.ctx.storage }),
+      rss_route_cache: new RepositoryRssRouteCache({ sql: this.ctx.storage.sql, storage: this.ctx.storage,
+        retain_keys: () => this.app?.discovery?.managed_private_snapshot_keys() || new Set() }),
       users: new RepositoryUser({ sql: this.ctx.storage.sql }),
       script_agent: new RepositoryScriptAgent({ sql: this.ctx.storage.sql }),
     };
@@ -371,6 +381,7 @@ export const route = {
     };
     /** 应用服务注册表：兄弟服务经 `this.app.<svc>.<method>` 互相调用。 */
     this.app = {};
+    this.app.snapshot_settings = new ServiceSnapshotSettings({ repo: this.repo.snapshot_settings, schedule_alarm: ports.schedule_alarm });
     this.app.statistics = new ServiceStatistics({ repo: this.repo });
     this.app.maintenance = new ServiceMaintenance({ repo: this.repo });
     this.app.activity = new ServiceActivity({ repo: this.repo, app: this.app });
@@ -403,6 +414,7 @@ export const route = {
     });
     this.app.users = new ServiceUser({ repo: this.repo, storage: this.ctx.storage });
     this.app.discovery = new ServiceDiscovery({
+      snapshot_settings: () => this.app.snapshot_settings.settings(),
       public_origin: feed_hostname_origin(env),
       statistics: this.app.statistics,
       repo: this.repo, route_cache: ports.route_cache, storage: this.ctx.storage,

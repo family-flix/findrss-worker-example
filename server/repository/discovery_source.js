@@ -53,7 +53,7 @@ export class RepositoryDiscoverySource {
     return this.sql
       .exec(
         `SELECT discovery_sources.*, snapshots.articles_json, snapshots.saved_at AS snapshot_saved_at,
-                snapshots.attempted_at AS snapshot_attempted_at, snapshots.error AS snapshot_error
+                snapshots.attempted_at AS snapshot_attempted_at, snapshots.error AS snapshot_error, snapshots.adaptive_interval
          FROM discovery_sources LEFT JOIN discovery_source_snapshots AS snapshots
          ON snapshots.source_id = discovery_sources.id AND snapshots.feed_url = discovery_sources.feed_url ${where}
          ORDER BY ${order} ${pagination}`,
@@ -80,6 +80,16 @@ export class RepositoryDiscoverySource {
       WHERE d.enabled = 1 AND d.require_token = 0`, interval).toArray()[0]?.next_at ?? null;
   }
 
+  snapshot_schedule() {
+    return this.sql.exec(`SELECT d.*, s.attempted_at AS snapshot_attempted_at, s.adaptive_interval
+      FROM discovery_sources d LEFT JOIN discovery_source_snapshots s ON s.source_id = d.id AND s.feed_url = d.feed_url
+      WHERE d.enabled = 1`).toArray();
+  }
+
+  snapshot_adaptive(id, interval) {
+    this.sql.exec("UPDATE discovery_source_snapshots SET adaptive_interval = ? WHERE source_id = ?", interval, id);
+  }
+
   snapshot_due(before, limit) {
     return this.sql.exec(`SELECT d.* FROM discovery_sources d LEFT JOIN discovery_source_snapshots s
       ON s.source_id = d.id AND s.feed_url = d.feed_url
@@ -98,10 +108,10 @@ export class RepositoryDiscoverySource {
       saved_at = CASE WHEN feed_url = excluded.feed_url THEN saved_at ELSE 0 END, feed_url = excluded.feed_url`, id, feed_url, now);
   }
 
-  snapshot_save(id, feed_url, articles, now, error = "") {
+  snapshot_save(id, feed_url, articles, now, error = "", fingerprint = "") {
     if (error) this.sql.exec("UPDATE discovery_source_snapshots SET error = ? WHERE source_id = ? AND feed_url = ?", error, id, feed_url);
-    else this.sql.exec("UPDATE discovery_source_snapshots SET articles_json = ?, saved_at = ?, error = '' WHERE source_id = ? AND feed_url = ?",
-      JSON.stringify(articles), now, id, feed_url);
+    else this.sql.exec("UPDATE discovery_source_snapshots SET articles_json = ?, saved_at = ?, error = '', poll_fingerprint = ? WHERE source_id = ? AND feed_url = ?",
+      JSON.stringify(articles), now, fingerprint, id, feed_url);
   }
 
   snapshot_delete(id) {
@@ -195,8 +205,8 @@ export class RepositoryDiscoverySource {
     this.sql.exec(
       `INSERT INTO discovery_sources (
         id, title, description, website, feed_url, category, tags_json,
-        enabled, require_token, sort_order, source_type, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        enabled, require_token, sort_order, source_type, created_at, updated_at, poll_policy_json, poll_updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       fields.id,
       fields.title,
       fields.description,
@@ -209,7 +219,9 @@ export class RepositoryDiscoverySource {
       fields.sort_order,
       fields.source_type,
       fields.created_at,
-      fields.updated_at);
+      fields.updated_at,
+      fields.poll_policy_json || '{"mode":"inherit"}',
+      fields.poll_updated_at || 0);
   }
 
   /**
@@ -225,7 +237,7 @@ export class RepositoryDiscoverySource {
       `UPDATE discovery_sources
        SET title = ?, description = ?, website = ?, feed_url = ?, category = ?,
            tags_json = ?, enabled = ?, require_token = ?, sort_order = ?, source_type = ?,
-           updated_at = ?
+           updated_at = ?, poll_policy_json = ?, poll_updated_at = ?
        WHERE id = ?`,
       fields.title,
       fields.description,
@@ -238,6 +250,8 @@ export class RepositoryDiscoverySource {
       fields.sort_order,
       fields.source_type,
       fields.updated_at,
+      fields.poll_policy_json || '{"mode":"inherit"}',
+      fields.poll_updated_at || 0,
       fields.id);
   }
 

@@ -13,8 +13,9 @@ const chunk_size = 64 * 1024;
 
 export class RepositoryRssRouteCache {
   /** @param {{ sql: SqlStorage, storage?: DurableObjectStorage }} deps */
-  constructor({ sql, storage }) {
+  constructor({ sql, storage, retain_keys = () => new Set() }) {
     this.sql = sql;
+    this.retain_keys = retain_keys;
     this.transaction = storage ? task => storage.transactionSync(task) : task => task();
   }
 
@@ -91,8 +92,10 @@ export class RepositoryRssRouteCache {
 
   /** @param {number} now @returns {void} */
   delete_expired(now) {
-    // 公开源刷新失败仍返回上次快照；私密源过期后由下一次有效请求生成。
-    this.sql.exec("DELETE FROM rss_route_cache WHERE expires_at <= ? AND key NOT LIKE 'public-snapshot:%'", now);
+    // 定时私密源也保留上次快照；读取前仍由服务层校验订阅身份。
+    const retained = [...this.retain_keys()];
+    const exclusion = retained.length ? ` AND key NOT IN (${retained.map(() => "?").join(",")})` : "";
+    this.sql.exec("DELETE FROM rss_route_cache WHERE expires_at <= ? AND key NOT LIKE 'public-snapshot:%'" + exclusion, now, ...retained);
     this.delete_orphan_chunks();
   }
 
@@ -145,6 +148,10 @@ export class RepositoryRssRouteCache {
 
   public_next_at(interval) {
     return this.sql.exec("SELECT MIN(attempted_at + ?) AS next_at FROM rss_public_feeds", interval).toArray()[0]?.next_at ?? null;
+  }
+
+  public_schedule() {
+    return this.sql.exec("SELECT * FROM rss_public_feeds ORDER BY attempted_at, key").toArray();
   }
 
   public_due(before, limit) {

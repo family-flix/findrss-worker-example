@@ -129,6 +129,9 @@ export default {
       if (url.pathname === "/admin/api/overview" && request.method === "GET") {
         return admin_overview(env);
       }
+      if (url.pathname === "/admin/api/settings/snapshots" && ["GET", "PUT"].includes(request.method)) {
+        return env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal/_admin/settings/snapshots", request));
+      }
       if (
         /^\/admin\/api\/device-tokens(?:\/[A-Za-z0-9-]+(?:\/(?:reveal|revoke))?)?$/.test(
           url.pathname,

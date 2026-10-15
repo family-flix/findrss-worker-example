@@ -120,6 +120,7 @@ test("DiscoverySourceModel.fromRow().toValue() 把 0/1 列翻成布尔，tags �
     sort_order: 3,
     source_type: "wxmp",
     avatar_url: "",
+    poll_policy: { mode: "inherit" },
     created_at: 1000,
     updated_at: 2000,
   });
@@ -283,6 +284,7 @@ test("DiscoverySourceModel.merge_for_patch 只覆盖出现过的字段", () => {
     require_token: 0,
     sort_order: 5,
     source_type: "website",
+    poll_policy: { mode: "inherit" },
   });
   // 空体 = 全沿用旧值
   assert.deepEqual(DiscoverySourceModel.merge_for_patch(current, {}), {
@@ -296,6 +298,7 @@ test("DiscoverySourceModel.merge_for_patch 只覆盖出现过的字段", () => {
     require_token: false,
     sort_order: 5,
     source_type: "website",
+    poll_policy: { mode: "inherit" },
   });
   // 出现的字段才覆盖（false / 0 / "" 也算出现）
   const patched = DiscoverySourceModel.merge_for_patch(current, {

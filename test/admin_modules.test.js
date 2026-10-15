@@ -18,7 +18,7 @@ test("开发后台保留源码，import map 完整解析模块图，共享依赖
   await prepare_admin_dev({ root, assets });
   for (const path of ["admin/app.js", "admin/pages/login.js", "admin/components/ui.js", "admin/store.js",
     "server/domain/rss_route.js", "server/lib/admin_agent_context.js", "server/domain/feed_format.js",
-    "server/lib/discovery_platform.js", "server/lib/constants.js", "packages/feed-fetch/src/feed_parser.js"]) {
+    "server/lib/poll_schedule.js", "server/lib/discovery_platform.js", "server/lib/constants.js", "packages/feed-fetch/src/feed_parser.js"]) {
     assert.equal(readFileSync(join(assets, path), "utf8"), readFileSync(join(root, path), "utf8"));
   }
   for (const name of ["index", "login", "devices", "discovery-admin", "rss-scripts"]) {
@@ -57,7 +57,7 @@ test("开发文件监听同步保存、新建、重命名与删除，停止后�
   const assets = join(fixture, "assets");
   for (const path of ["admin/index.html", "admin/login.html", "admin/components/frui/tokens.css",
     "admin/pages/login.js", "server/domain/rss_route.js", "server/lib/admin_agent_context.js", "server/domain/feed_format.js",
-    "server/lib/discovery_platform.js", "server/lib/constants.js", "packages/feed-fetch/src/feed_parser.js"]) {
+    "server/lib/poll_schedule.js", "server/lib/discovery_platform.js", "server/lib/constants.js", "packages/feed-fetch/src/feed_parser.js"]) {
     mkdirSync(dirname(join(fixture, path)), { recursive: true });
     cpSync(join(root, path), join(fixture, path));
   }

@@ -33,8 +33,8 @@ test("RSS/Atom 受控错误穿过 QuickJS，Debug 开启也给阅读器返回 Pr
     assert.equal(response.headers.get("Cache-Control"), "no-store");
     const body = await response.json();
     assert.equal(body.code, "UPSTREAM_AUTH_REQUIRED");
-    assert.equal(body.detail, "请联系源管理员更新微博 Cookie");
-    assert.equal(body.error, body.detail);
+    assert.equal(body.error, "请联系源管理员更新微博 Cookie");
+    assert.equal(Object.hasOwn(body, "detail"), false);
     assert.equal(body.status, response.status);
     assert.equal(body.rss_debug.phase, "runtime");
     assert.match(body.rss_debug.error_text, /script-source/);
@@ -64,12 +64,15 @@ test("普通异常和未知错误码不公开内部信息，缺 token 返回认�
   const response = await route(request("rss", false), { scripts: service });
   assert.equal(response.status, 401);
   assert.equal(response.headers.get("WWW-Authenticate"), 'Bearer realm="FindRSS"');
-  assert.equal((await response.json()).code, "FEED_AUTH_REQUIRED");
+  const body = await response.json();
+  assert.equal(body.code, "FEED_AUTH_REQUIRED");
+  assert.match(body.error, /订阅源需要有效访问凭证/);
+  assert.equal(Object.hasOwn(body, "detail"), false);
   assert.equal(logs.length, 0);
 });
 
 test("公开错误文案有界且不能用原型键伪造错误代码", () => {
   assert.equal(feed_problem("toString", "x"), null);
   assert.equal(feed_problem("INVALID_PARAMETER", 42), null);
-  assert.equal(feed_problem("INVALID_PARAMETER", "x".repeat(2000)).detail.length, 1000);
+  assert.equal(feed_problem("INVALID_PARAMETER", "x".repeat(2000)).error.length, 1000);
 });

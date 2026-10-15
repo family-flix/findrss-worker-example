@@ -12,6 +12,8 @@
 import { DISCOVERY_CATEGORIES, DISCOVERY_CATEGORY_TAGS, DISCOVERY_PLATFORM_LABELS, DISCOVERY_RELATED_LIMIT, MAX_DISCOVERY_SOURCES } from "../lib/constants.js";
 import { public_http_url } from "../lib/proxy_url.js";
 import { SourceAddressModel } from "./source_address.js";
+import { stored_poll_policy } from "../lib/snapshot_schedule.js";
+import { parse_poll_policy } from "../lib/poll_schedule.js";
 
 const DISCOVERY_SOURCE_TYPES = new Set(Object.keys(DISCOVERY_PLATFORM_LABELS));
 const MAX_DISCOVERY_AVATAR_BYTES = 5 * 1024 * 1024;
@@ -129,6 +131,7 @@ export function DiscoverySourceModel(state) {
       : Number(source.require_token) === 1,
     sort_order: Number(source.sort_order ?? 0),
     source_type: String(source.source_type || "website"),
+    poll_policy: source.poll_policy || stored_poll_policy(source.poll_policy_json),
     avatar_updated_at: Number(source.avatar_updated_at ?? 0),
     created_at: Number(source.created_at ?? 0),
     updated_at: Number(source.updated_at ?? 0),
@@ -162,6 +165,7 @@ export function DiscoverySourceModel(state) {
       require_token: state_.require_token,
       sort_order: state_.sort_order,
       source_type: state_.source_type,
+      poll_policy: state_.poll_policy,
       avatar_url,
       created_at: state_.created_at,
       updated_at: state_.updated_at,
@@ -205,6 +209,7 @@ DiscoverySourceModel.merge_for_patch = (current, body) => {
     require_token: source.require_token ?? Boolean(current.require_token),
     sort_order: source.sort_order ?? Number(current.sort_order),
     source_type: source.source_type ?? String(current.source_type),
+    poll_policy: source.poll_policy === undefined ? current.poll_policy : source.poll_policy,
   };
 };
 /** 无头像时为空串。 */
@@ -249,6 +254,9 @@ const invalid = (message) => ({ ok: false, error: { status: 400, message } });
  *   | { ok: false, error: { status: number, message: string } }}
  */
 DiscoverySourceModel.validate = (body, source_types = DISCOVERY_SOURCE_TYPES, inferred_type) => {
+  let poll_policy;
+  try { poll_policy = parse_poll_policy(body.poll_policy === undefined ? { mode: "inherit" } : body.poll_policy); }
+  catch (error) { return invalid(error.message); }
   if (body.title !== undefined && typeof body.title !== "string") {
     return invalid("title must be a string");
   }
@@ -364,6 +372,7 @@ DiscoverySourceModel.validate = (body, source_types = DISCOVERY_SOURCE_TYPES, in
       require_token,
       sort_order,
       source_type,
+      poll_policy,
     }),
   };
 };

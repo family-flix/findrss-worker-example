@@ -25,6 +25,7 @@ export function migrate_script_tables(sql) {
 
 /** 本模块 DDL 里恰好这些表。 @type {readonly string[]} */
 export const API_TABLE_NAMES = Object.freeze([
+  "snapshot_settings",
   "platforms",
   "tags",
   "rss_cookie_grants",
@@ -57,6 +58,11 @@ export const API_TABLE_NAMES = Object.freeze([
 ]);
 
 export const API_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS snapshot_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    policy_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS platforms (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
@@ -269,6 +275,8 @@ export const API_SCHEMA_SQL = `
     require_token INTEGER NOT NULL DEFAULT 0,
     sort_order INTEGER NOT NULL DEFAULT 0,
     source_type TEXT NOT NULL DEFAULT 'website',
+    poll_policy_json TEXT NOT NULL DEFAULT '{"mode":"inherit"}',
+    poll_updated_at INTEGER NOT NULL DEFAULT 0,
     avatar_updated_at INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -292,6 +300,8 @@ export const API_SCHEMA_SQL = `
     articles_json TEXT NOT NULL DEFAULT '[]',
     saved_at INTEGER NOT NULL DEFAULT 0,
     attempted_at INTEGER NOT NULL DEFAULT 0,
+    adaptive_interval INTEGER NOT NULL DEFAULT 0,
+    poll_fingerprint TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT ''
   );
 

@@ -36,6 +36,8 @@ Worker 名称必须与仓库 `wrangler.jsonc` 中的 `name` 一致，R2 桶名�
 
 Cloudflare 会根据锁文件安装依赖，`npm run deploy` 会先构建后台和订阅广场，再部署 Worker。保持自动构建开启；如果连接后尚未启动构建，可在 Builds 中运行一次构建，或在仓库提交一次修改来触发。
 
+**如果部署报错 `assets.directory` 指向的 `dist/assets` 不存在**：这个目录由构建生成，不随 Git 仓库提交。进入 **Settings → Builds** 检查并保存上表中的命令，尤其是将 `npx wrangler deploy` 改为 `npm run deploy`，再重新运行构建。更新 Fork 代码不会修改 Cloudflare 中已保存的构建设置。正常日志会先出现 `node scripts/build.js` 和 `FindRSS frontend assets built`，然后才运行 Wrangler 部署；如果已有这两条日志仍然报错，请检查完整日志中的部署命令和工作目录是否与上表一致。
+
 部署成功后打开 Worker 的站点地址，在地址后加 `/admin/`，使用 `ADMIN_PASSWORD` 登录。首次没有预置采集规则，需要自行配置并发布，详见[创建自己的订阅源](#创建自己的订阅源)。自定义域名可在 Worker 的 **Settings → Domains & Routes** 中添加。
 
 后续按下方 [Fork 仓库更新步骤](#fork-仓库更新)更新即可。

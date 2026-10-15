@@ -149,13 +149,17 @@ export class ServiceScript {
 
   next_snapshot_at() {
     if (this.public_refreshing) return Date.now() + 60000;
-    const next = this.repo.rss_route_cache.public_next_at(RSS_ROUTE_CACHE_TTL_MS);
+    const candidates = this.unmanaged_snapshots();
+    const next = candidates ? candidates.length ? Number(candidates[0].attempted_at) + RSS_ROUTE_CACHE_TTL_MS : null
+      : this.repo.rss_route_cache.public_next_at(RSS_ROUTE_CACHE_TTL_MS);
     return next === null ? null : Math.max(Number(next), Date.now() + 5000);
   }
 
   refresh_due_snapshots() {
     if (this.public_refreshing) return this.public_refreshing;
-    const sources = this.repo.rss_route_cache.public_due(Date.now() - RSS_ROUTE_CACHE_TTL_MS, 4);
+    const candidates = this.unmanaged_snapshots();
+    const sources = candidates ? candidates.filter(source => Number(source.attempted_at) <= Date.now() - RSS_ROUTE_CACHE_TTL_MS).slice(0, 4)
+      : this.repo.rss_route_cache.public_due(Date.now() - RSS_ROUTE_CACHE_TTL_MS, 4);
     this.public_refreshing = Promise.all(sources.map(async source => {
       this.repo.rss_route_cache.public_attempt(source.key, Date.now());
       const target = new URL("https://internal/_public/feed/rss" + source.pathname);
@@ -174,6 +178,12 @@ export class ServiceScript {
       }
     })).finally(async () => { this.public_refreshing = null; await this.ports.schedule_alarm?.(); });
     return this.public_refreshing;
+  }
+
+  unmanaged_snapshots() {
+    if (!this.repo.rss_route_cache.public_schedule) return null;
+    const managed = this.app.discovery?.managed_snapshot_keys() || new Set();
+    return this.repo.rss_route_cache.public_schedule().filter(source => !managed.has(source.key));
   }
 
   cookie_visibility(metadata) {
@@ -922,8 +932,9 @@ export class ServiceScript {
    * 公开 RSS/Atom 输出路由：GET /_public/feed/<format>/<path>
    * 匿名身份仅可命中 discovery_sources 中地址完全匹配的公开源；
    * 公开性只比较 route pathname，与 format 无关。
-   * XML 快照持久化 feed JSON 和 RSS/Atom 正文。公开请求只读；私密请求按 10 分钟 TTL
-   * 生成并合并并发。refresh 仅由后台服务传入，不能由外部请求头触发。
+   * XML 快照持久化 feed JSON 和 RSS/Atom 正文。已登记源按规则生成，订阅请求只读；
+   * 未登记私密参数组合按 10 分钟 TTL 生成并合并并发。
+   * refresh 仅由后台服务传入，不能由外部请求头触发。
    * @param {string} format
    * @param {string} route_pathname
    * @param {Request} request
@@ -1026,11 +1037,12 @@ export class ServiceScript {
       await this.ports.schedule_alarm?.();
     }
     if (snapshot && feed_public && refresh) this.repo.rss_route_cache.public_attempt(cache_key, Date.now());
-    if (snapshot && feed_public && !refresh && request_url.pathname.startsWith("/_public/feed/")) {
+    const scheduled_private = snapshot && !feed_public && this.app.discovery?.managed_private_snapshot_keys?.().has(cache_key);
+    if (snapshot && (feed_public || scheduled_private) && !refresh && request_url.pathname.startsWith("/_public/feed/")) {
       const stored = this.ports.route_cache.resolve(cache_key, Date.now(), true);
       const body = stored?.rendered?.get(format + "\n");
       if (body === undefined) throw do_error("订阅源快照正在后台生成，请稍后重试", 503, {}, { "Retry-After": "5" });
-      return { body, headers: { "Content-Type": FeedModel.content_type(format), "Cache-Control": "public, max-age=120",
+      return { body, headers: { "Content-Type": FeedModel.content_type(format), "Cache-Control": feed_public ? "public, max-age=120" : "private, no-cache",
         "X-Content-Type-Options": "nosniff", "X-Api-RSS-Cache": "hit" } };
     }
     // 只在写账本那一跳归一；这里原样透传，因此最多错标调用方自己那一行。
@@ -1178,7 +1190,7 @@ export class ServiceScript {
         throw do_error(invoke_failure.message, invoke_failure.status, debug_details, invoke_failure.headers);
       }
       if (failure.problem) {
-        throw do_error(failure.problem.detail, failure.problem.status, { ...debug_details, code: failure.problem.code });
+        throw do_error(failure.problem.error, failure.problem.status, { ...debug_details, code: failure.problem.code });
       }
       throw do_error(request_url.pathname.startsWith("/_admin/feed/") ? fields.message : "script failed", 502, debug_details);
     }

@@ -3,7 +3,7 @@
 // 只回数据或抛 DurableObjectError，绝不造 Response：头像取回回 `{ bytes, content_type }`，
 // 由 api 层组装需要长缓存的二进制 Response。
 import { DiscoverySourceModel, SourceAvatarModel } from "../../domain/discovery_source.js";
-import { DISCOVERY_CATEGORIES, RSS_ROUTE_CACHE_TTL_MS } from "../../lib/constants.js";
+import { DISCOVERY_CATEGORIES } from "../../lib/constants.js";
 import { do_error, do_result } from "./error.js";
 import { rss_route_cache_key } from "../../infra/rss_cache.js";
 import { SourceAddressModel } from "../../domain/source_address.js";
@@ -12,8 +12,11 @@ import { DISCOVERY_CATALOG_KEY } from "../../lib/discovery_catalog.js";
 import { discovery_platforms, discovery_platform_id } from "../../lib/discovery_platform.js";
 import { RssRoutePatternModel } from "../../domain/rss_route.js";
 import { gzip_html } from "../../infra/discovery_compression.js";
+import { snapshot_policy, snapshot_next_at } from "../../lib/snapshot_schedule.js";
+import { default_poll_policy, learn_poll_interval } from "../../lib/poll_schedule.js";
+import { sha256_hex } from "../../lib/crypto.js";
 
-const snapshot_interval = RSS_ROUTE_CACHE_TTL_MS;
+const snapshot_interval = default_poll_policy().interval * 1000;
 
 function http_origin(value) {
   try {
@@ -35,8 +38,10 @@ export class ServiceDiscovery {
   /**
    * @param {{ repo: Record<string, any>, storage?: any, route_cache?: any, object_store?: any, load_snapshot?: Function, schedule_alarm?: Function, render_catalog?: Function, public_origin?: string }} deps
    */
-  constructor({ repo, storage, route_cache = null, object_store = null, load_snapshot = null, schedule_alarm = null, render_catalog = null, statistics = null, public_origin = "" }) {
+  constructor({ repo, storage, route_cache = null, object_store = null, load_snapshot = null, schedule_alarm = null, render_catalog = null, statistics = null, public_origin = "", snapshot_settings = () => null }) {
     this.repo = repo;
+    this.snapshot_settings = snapshot_settings;
+    this.schedule_cache = new Map();
     this.statistics = statistics;
     this.storage = storage;
     this.route_cache = route_cache;
@@ -125,12 +130,21 @@ export class ServiceDiscovery {
     const model = DiscoverySourceModel.fromRow(row);
     const source = model.toValue();
     source.tags = model.discovery_tags();
-    source.snapshot = source.require_token ? { saved_at: 0, articles: [] } : snapshot_value(row, include_disabled);
+    source.snapshot = source.require_token ? { saved_at: 0, articles: [], ...(include_disabled ? { error: String(row.snapshot_error || row.error || "") } : {}) }
+      : snapshot_value(row, include_disabled);
+    if (include_disabled) {
+      source.poll_effective = snapshot_policy(source, this.snapshot_settings());
+      source.next_snapshot_at = this.scheduled_at(row);
+    }
     if (include_disabled && this.route_cache && SourceAddressModel(source.feed_url).is_route()) {
       const address = new URL(source.feed_url.replace("{{hostname}}", "https://template.invalid"));
       const pathname = address.pathname.replace(/^\/(rss|atom)/, "");
       address.searchParams.delete("token");
       source.cache = this.route_cache.inspect((source.require_token ? "private-snapshot:" : "public-snapshot:") + rss_route_cache_key(pathname, address.searchParams));
+      if (source.cache.saved_at) {
+        source.cache.expires_at = source.next_snapshot_at;
+        source.cache.status = source.next_snapshot_at === null || source.next_snapshot_at > Date.now() ? "fresh" : "expired";
+      }
     }
     return source;
   }
@@ -209,43 +223,98 @@ export class ServiceDiscovery {
   next_snapshot_at() {
     if (!this.load_snapshot) return this.catalog_retry_at;
     if (this.snapshot_refreshing) return Date.now() + 60000;
-    const next = this.repo.discovery.snapshot_next_at(snapshot_interval);
+    const candidates = this.scheduled_sources();
+    const next = candidates ? candidates[0]?.next_at ?? null : this.repo.discovery.snapshot_next_at(snapshot_interval);
     const snapshot_at = next === null ? null : Math.max(Number(next), Date.now() + 5000);
     return this.catalog_retry_at === null ? snapshot_at : Math.min(snapshot_at ?? Infinity, this.catalog_retry_at);
   }
 
   refresh_due_snapshots() {
     if (this.snapshot_refreshing) return this.snapshot_refreshing;
-    const sources = this.repo.discovery.snapshot_due(Date.now() - snapshot_interval, 4);
-    this.snapshot_refreshing = Promise.all(sources.map(source => this.refresh_discovery_snapshot(source.id)))
+    const candidates = this.scheduled_sources();
+    const sources = candidates ? candidates.filter(source => source.next_at <= Date.now()).slice(0, 4)
+      : this.repo.discovery.snapshot_due(Date.now() - snapshot_interval, 4);
+    this.snapshot_refreshing = Promise.all(sources.map(source => this.refresh_discovery_snapshot(source.id, "", { automatic: true })))
       .finally(async () => { this.snapshot_refreshing = null; await this.schedule_alarm?.(); });
     return this.snapshot_refreshing;
   }
 
-  async refresh_discovery_snapshot(source_id, public_url = "") {
+  scheduled_at(source, settings = this.snapshot_settings()) {
+    if (source.require_token && !SourceAddressModel(source.feed_url).is_route()) return null;
+    const key = JSON.stringify([source.feed_url, source.poll_policy || source.poll_policy_json, source.snapshot_attempted_at, source.poll_updated_at,
+      source.enabled, source.require_token, source.created_at, source.adaptive_interval, settings]);
+    const cached = this.schedule_cache.get(source.id);
+    if (cached?.key === key) return cached.next_at;
+    const next_at = snapshot_next_at(source, settings);
+    if (this.schedule_cache.size >= DiscoverySourceModel.MAX_SOURCES) this.schedule_cache.clear();
+    this.schedule_cache.set(source.id, { key, next_at });
+    return next_at;
+  }
+
+  scheduled_sources() {
+    if (!this.repo.discovery.snapshot_schedule) return null;
+    const settings = this.snapshot_settings();
+    return this.repo.discovery.snapshot_schedule().map(source => ({ ...source, next_at: this.scheduled_at(source, settings) }))
+      .filter(source => source.next_at !== null).sort((a, b) => a.next_at - b.next_at || a.id.localeCompare(b.id));
+  }
+
+  managed_snapshot_keys() {
+    const sources = this.repo.discovery.snapshot_schedule?.() || this.repo.discovery.list_public_routes?.() || [];
+    return new Set(sources.filter(source => !source.require_token).map(source => {
+      const address = SourceAddressModel(source.feed_url);
+      if (!address.is_route()) return "";
+      const url = new URL(source.feed_url.replace("{{hostname}}", "https://template.invalid"));
+      return "public-snapshot:" + rss_route_cache_key(address.route_pathname, url.searchParams);
+    }).filter(Boolean));
+  }
+
+  managed_private_snapshot_keys() {
+    return new Set((this.repo.discovery.list_private_routes?.() || []).map(source => {
+      const address = SourceAddressModel(source.feed_url);
+      if (!address.is_route()) return "";
+      const url = new URL(source.feed_url.replace("{{hostname}}", "https://template.invalid"));
+      return "private-snapshot:" + rss_route_cache_key(address.route_pathname, url.searchParams);
+    }).filter(Boolean));
+  }
+
+  async refresh_discovery_snapshot(source_id, public_url = "", { automatic = false } = {}) {
     if (this.snapshot_pending.has(source_id)) return this.snapshot_pending.get(source_id);
     const source = this.repo.discovery.find(source_id);
     if (!source) throw do_error("discovery source not found", 404);
     if (source.require_token && !SourceAddressModel(source.feed_url).is_route()) throw do_error("外部私密源的快照由上游管理", 400);
     if (!this.load_snapshot) throw do_error("snapshot service is unavailable", 503);
-    if (!source.require_token) this.repo.discovery.snapshot_attempt(source_id, source.feed_url, Date.now());
+    const previous = this.repo.discovery.snapshot_get(source_id) || {};
+    this.repo.discovery.snapshot_attempt(source_id, source.feed_url, Date.now());
     const pending = (async () => {
       try {
         const origin = await this.snapshot_origin(public_url);
-        const articles = await this.load_snapshot(source, origin);
+        const result = await this.load_snapshot(source, origin);
+        const articles = Array.isArray(result) ? result : result.articles;
+        const fingerprint = source.require_token ? result.fingerprint || await sha256_hex(JSON.stringify(articles)) : "";
         // 抓取期间编辑 / 删除源时，不能把旧地址的内容重新发布到新卡片。
         const current = this.repo.discovery.find(source_id);
-        if (current?.feed_url === source.feed_url && !current.require_token) {
-          this.repo.discovery.snapshot_save(source_id, source.feed_url, articles, Date.now());
+        if (current?.feed_url === source.feed_url && Boolean(current.require_token) === Boolean(source.require_token)) {
+          this.repo.discovery.snapshot_save(source_id, source.feed_url, source.require_token ? [] : articles, Date.now(), "", fingerprint);
+          const policy = snapshot_policy(current, this.snapshot_settings());
+          if (policy.mode === "adaptive") {
+            let old_articles = [];
+            try { old_articles = JSON.parse(previous.articles_json || "[]"); } catch {}
+            const old = new Set((Array.isArray(old_articles) ? old_articles : []).map(article => article.link || article.title));
+            this.repo.discovery.snapshot_adaptive?.(source_id, learn_poll_interval(policy, previous.adaptive_interval, {
+              first: !previous.saved_at, manual: !automatic, new_count: source.require_token ? Number(previous.poll_fingerprint !== fingerprint)
+                : articles.filter(article => !old.has(article.link || article.title)).length,
+            }));
+          }
         }
       } catch (error) {
-        if (source.require_token) throw error;
         this.repo.discovery.snapshot_save(source_id, source.feed_url, [], 0, String(error.message || "快照更新失败").slice(0, 240));
-      } finally { this.snapshot_pending.delete(source_id); }
+        if (source.require_token && !automatic) throw error;
+      } finally { this.snapshot_pending.delete(source_id); await this.schedule_alarm?.(); }
       if (!source.require_token) await this.publish_catalog();
-      return { snapshot: source.require_token ? { saved_at: 0, articles: [], error: "" }
-        : snapshot_value(this.repo.discovery.snapshot_get(source_id) || {}, true),
-        cache: this.source_value(source, true).cache };
+      const latest = this.repo.discovery.snapshot_get(source_id) || {};
+      const value = this.source_value({ ...source, ...latest, snapshot_attempted_at: latest.attempted_at }, true);
+      return { snapshot: source.require_token ? { saved_at: 0, articles: [], error: String(latest.error || "") }
+        : snapshot_value(latest, true), cache: value.cache, poll_effective: value.poll_effective, next_snapshot_at: value.next_snapshot_at };
     })();
     this.snapshot_pending.set(source_id, pending);
     return pending;
@@ -292,6 +361,7 @@ export class ServiceDiscovery {
       require_token: source.require_token ? 1 : 0,
       sort_order: source.sort_order,
       source_type: source.source_type,
+      poll_policy_json: JSON.stringify(source.poll_policy),
       created_at: now,
       updated_at: now,
     });
@@ -350,9 +420,11 @@ export class ServiceDiscovery {
       require_token: source.require_token ? 1 : 0,
       sort_order: source.sort_order,
       source_type: source.source_type,
+      poll_policy_json: JSON.stringify(source.poll_policy),
+      poll_updated_at: JSON.stringify(current.poll_policy) === JSON.stringify(source.poll_policy) ? Number(existing.poll_updated_at || 0) : Date.now(),
       updated_at: Date.now(),
     });
-    if (existing.feed_url !== source.feed_url || source.require_token) this.repo.discovery.snapshot_delete(source_id);
+    if (existing.feed_url !== source.feed_url || Boolean(existing.require_token) !== source.require_token) this.repo.discovery.snapshot_delete(source_id);
     this.statistics?.invalidate_sources();
     if (existing.feed_url !== source.feed_url || Boolean(existing.require_token) !== source.require_token || Boolean(existing.enabled) !== source.enabled) this.route_cache?.invalidate_all?.();
     await this.publish_catalog();

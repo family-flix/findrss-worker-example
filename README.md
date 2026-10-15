@@ -80,7 +80,7 @@ RSS 是供阅读器获取更新的订阅格式。阅读器是用来集中查看�
 
 1. 点击 [Fork 本项目](https://github.com/ltaoo/findrss-worker/fork)，将仓库 Fork 到自己的 GitHub 账号，保留 `master` 分支。
 2. 按[部署指南](docs/setup.md#fork-部署到-cloudflare-workers)在 Cloudflare 创建 Worker，设置后台密码 `ADMIN_PASSWORD`，并准备 R2 桶。
-3. 在 Worker 的 **Settings → Builds → Connect** 中连接自己的 Fork 仓库，生产分支选择 `master`，部署命令使用 `npm run deploy`。
+3. 在 Worker 的 **Settings → Builds → Connect** 中连接自己的 Fork 仓库，生产分支选择 `master`，**Build command 留空，Deploy command 填写 `npm run deploy`**。若部署命令是 `npx wrangler deploy`，需手动替换，否则会跳过静态资源构建。
 4. 等待部署成功，打开站点地址；在地址后加 `/admin/` 进入后台。
 
 完整步骤与构建设置见 [Fork 部署指南](docs/setup.md#fork-部署到-cloudflare-workers)。首次部署后需要自行配置并发布采集规则。

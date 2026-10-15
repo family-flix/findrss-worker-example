@@ -184,15 +184,16 @@ assert db.execute('SELECT COUNT(*) FROM discovery_source_snapshots').fetchone()[
   assert.equal(result.status, 0, result.stderr);
 });
 
-test("管理员刷新自有私密源不写公开文章快照，定时频率为 10 分钟", async () => {
+test("管理员刷新自有私密源只保存抓取状态，默认定时频率为 1 小时", async () => {
   let loaded = 0, interval;
   const f = fixture(async source => { loaded++; assert.equal(source.require_token, 1); return [{ title: "私密文章" }]; });
   f.source.feed_url = "{{hostname}}/rss/private";
   f.source.require_token = 1;
   f.service.repo.discovery.snapshot_next_at = value => { interval = value; return null; };
   f.service.next_snapshot_at();
-  assert.equal(interval, 600000);
+  assert.equal(interval, 3600000);
   const result = await f.service.refresh_discovery_snapshot("a");
-  assert.equal(loaded, 1); assert.equal(f.saves, 0);
+  assert.equal(loaded, 1); assert.equal(f.saves, 1);
   assert.deepEqual(result.snapshot.articles, []);
+  assert.equal(f.service.repo.discovery.snapshot_get("a").articles_json, "[]");
 });

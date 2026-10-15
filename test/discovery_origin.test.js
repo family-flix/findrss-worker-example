@@ -141,11 +141,12 @@ test("无请求的首次任务给出明确提示，非法或内部地址不会�
 
 test("Atom 与私密源仍走正确内部路由，外部私网源继续拒绝", async () => {
   let called;
-  const articles = await load_discovery_snapshot({ feed_url: "{{hostname}}/atom/private?id=1", require_token: true },
-    "https://findrss.cloud", async (_format, _pathname, request) => { called = request; return { body: "" }; });
+  const result = await load_discovery_snapshot({ feed_url: "{{hostname}}/atom/private?id=1", require_token: true },
+    "https://findrss.cloud", async (_format, _pathname, request) => { called = request; return { body: '<feed xmlns="http://www.w3.org/2005/Atom"><title>私密源</title></feed>' }; });
   assert.equal(called.url, "https://internal/_admin/feed/atom/private?id=1");
   assert.equal(called.headers.get("X-Feed-Public-URL"), "https://findrss.cloud/atom/private?id=1");
-  assert.deepEqual(articles, []);
+  assert.deepEqual(result.articles, []);
+  assert.match(result.fingerprint, /^[0-9a-f]{64}$/);
   await assert.rejects(load_discovery_snapshot({ feed_url: "http://192.168.1.1/feed.xml" }, "https://findrss.cloud",
     () => assert.fail("外部源不应走脚本路由")), /订阅源地址被拒绝/);
 });

@@ -1,4 +1,5 @@
 import { PaginationView } from "../components/pagination.js";
+import { PollPolicyView, poll_policy_label } from "../components/poll_policy.js";
 import { discovery_platform_label, discovery_platform_icon_url } from "../components/discovery_platform.js";
 import { is_template_feed_url, is_managed_rss_url, DiscoveryAdminViewModel } from "./discovery.model.js";
 
@@ -405,6 +406,10 @@ function SourceFormView({ store: vm$ }) {
               "line-height": "1.5"
             }, attributes: { n: "discovery-source-order-hint" } }, ["数值越小，展示越靠前。"]),
           ]),
+          FieldView({ semantic_name: "discovery-source-poll-policy-field", label: "快照抓取规则" }, [
+            PollPolicyView(vm$.poll_editor, { name: "discovery-source-poll", disabled: vm$.state.saving }),
+            View({ class: "text-muted" }, ["公开源自动更新 XML 和广场预览；私密自有源自动更新 XML，仍需凭证访问且不发布预览。选择仅手动可停止自动抓取。外部私密源的快照由上游管理。"]),
+          ]),
           FieldView({ semantic_name: "discovery-source-require-token-field", label: "访问权限" }, [
             Input({class: "box-border",  label: "需要 token 访问",
               attributes: { n: "discovery-source-require-token-input", type: "checkbox",
@@ -647,7 +652,7 @@ function SourceCardView({ store, source }) {
                 View({ class: "whitespace-nowrap" }, ["XML 快照"]),
                 View({ class: "flex flex-wrap items-center min-w-0 gap-space-2" }, [
                   Badge({ tone: cache.status === "fresh" ? "success" : cache.status === "expired" ? "warning" : "neutral" },
-                    [cache.status === "fresh" ? "有效（10 分钟）" : cache.status === "expired" ? "待更新" : "未生成"]),
+                    [cache.status === "fresh" ? "有效" : cache.status === "expired" ? "待更新" : "未生成"]),
                   ...(cache.refreshing ? [Badge({ tone: "brand" }, ["正在生成"])] : []),
                   ...(cache.saved_at ? [
                     View({ class: "tabular-nums whitespace-nowrap" }, ["抓取于 " + format_time(cache.saved_at)]),
@@ -671,6 +676,13 @@ function SourceCardView({ store, source }) {
                   ? "更新失败，保留上次内容" : "生成失败：" + source.snapshot.error]),
               ] : []),
             ]),
+          ]),
+          View({ class: "box-border grid min-w-0 gap-space-2", attributes: { n: "discovery-source-poll-status" } }, [
+            View({ class: "text-muted break-anywhere" }, ["抓取规则：" + poll_policy_label(source.poll_policy)
+              + (source.poll_policy.mode === "inherit" && source.poll_effective ? "（" + poll_policy_label(source.poll_effective) + "）" : "")]),
+            ...(source.enabled && (!source.require_token || is_managed_rss_url(source.feed_url_template || source.feed_url)) ? [View({ class: "text-muted break-anywhere" }, [source.next_snapshot_at === null
+              ? "仅手动抓取" : "下次抓取：" + (source.next_snapshot_at <= Date.now() ? "等待调度" : format_time(source.next_snapshot_at))])] : []),
+            ...(source.require_token && source.snapshot.error ? [View({ class: "text-danger break-anywhere", attributes: { role: "alert" } }, ["XML 更新失败：" + source.snapshot.error])] : []),
           ]),
         ],
       ),

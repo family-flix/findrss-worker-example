@@ -3,6 +3,7 @@ import { public_http_url } from "../lib/proxy_url.js";
 import { discovery_feed_preview, fetch_discovery_document } from "./feed_fetch.js";
 import { encode_cover_blurhash } from "./cover_blurhash.js";
 import { SourceAddressModel } from "../domain/source_address.js";
+import { sha256_hex } from "../lib/crypto.js";
 
 export async function load_discovery_snapshot(source, origin, serve_route) {
   const address = SourceAddressModel(source.feed_url);
@@ -21,7 +22,12 @@ export async function load_discovery_snapshot(source, origin, serve_route) {
     if (result.error || result.http_status !== 200) throw new Error(result.error || "订阅源读取失败");
     xml = result.xml;
   }
-  return source.require_token ? [] : discovery_snapshot_articles(xml, feed_url);
+  if (source.require_token) {
+    const feed = discovery_feed_preview(xml, feed_url);
+    const identities = feed.articles.map(article => JSON.stringify([article.id, article.link, article.title, article.published_at])).sort();
+    return { articles: [], fingerprint: await sha256_hex(JSON.stringify(identities)) };
+  }
+  return { articles: await discovery_snapshot_articles(xml, feed_url) };
 }
 
 // 只读取图片头，不解码像素；限制读取量，避免大封面占用 Worker 内存。

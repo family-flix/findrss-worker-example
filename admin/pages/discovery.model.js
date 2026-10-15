@@ -1,4 +1,5 @@
 import { PaginationModel } from "../components/pagination.js";
+import { PollPolicyModel } from "../components/poll_policy.model.js";
 import {
   discovery_platforms,
   discovery_platform_id,
@@ -104,6 +105,9 @@ function normalize_source(source) {
     require_token: source.require_token === true,
     sort_order: Number(source.sort_order || 0),
     source_type: String(source.source_type || "website"),
+    poll_policy: source.poll_policy || { mode: "inherit" },
+    poll_effective: source.poll_effective || null,
+    next_snapshot_at: source.next_snapshot_at ?? null,
     avatar_url: safe_avatar_url(source.avatar_url),
     created_at: Number(source.created_at || 0),
     updated_at: Number(source.updated_at || 0),
@@ -130,6 +134,7 @@ async function request_json(url, options = {}) {
 }
 
 function DiscoveryAdminViewModel() {
+  const poll_editor = PollPolicyModel({ ui: Timeless });
   const sources_ = refarr([]);
   const platforms_ = ref(discovery_platforms());
   const tags_ = ref([]);
@@ -212,8 +217,12 @@ function DiscoveryAdminViewModel() {
     list_error: list_error_,
     form_error: form_error_,
     form_message: form_message_,
-    import_open: import_open_, import_text: import_text_, import_error: import_error_,
-    import_message: import_message_, import_busy: import_busy_, import_reading: import_reading_,
+    import_open: import_open_,
+    import_text: import_text_,
+    import_error: import_error_,
+    import_message: import_message_,
+    import_busy: import_busy_,
+    import_reading: import_reading_,
   };
 
   let list_generation = 0;
@@ -232,7 +241,11 @@ function DiscoveryAdminViewModel() {
         );
         platforms_.set(
           Array.isArray(payload.platforms)
-            ? payload.platforms.map(({ id, name, label, icon }) => ({ id, label: name || label, ...(icon === undefined ? {} : { icon }) }))
+            ? payload.platforms.map(({ id, name, label, icon }) => ({
+                id,
+                label: name || label,
+                ...(icon === undefined ? {} : { icon }),
+              }))
             : discovery_platforms(),
         );
       }
@@ -283,6 +296,7 @@ function DiscoveryAdminViewModel() {
       require_token: draft_require_token_.value === true,
       sort_order: Number.isInteger(sort_order) ? sort_order : 0,
       source_type: draft_source_type_.value || "website",
+      poll_policy: poll_editor.methods.value(),
     };
   }
 
@@ -403,15 +417,18 @@ function DiscoveryAdminViewModel() {
       import_error_.set("");
       import_message_.set("");
       if (!/\.json$/i.test(file.name) || file.size > 2 * 1024 * 1024) {
-        import_error_.set("请选择不超过 2 MB 的 JSON 文件"); return;
+        import_error_.set("请选择不超过 2 MB 的 JSON 文件");
+        return;
       }
       const generation = ++import_generation;
       import_reading_.set(true);
       try {
         const text = await file.text();
-        if (generation === import_generation) import_text_.set(text.replace(/^\uFEFF/, ""));
+        if (generation === import_generation)
+          import_text_.set(text.replace(/^\uFEFF/, ""));
       } catch (error) {
-        if (generation === import_generation) import_error_.set("读取失败：" + (error.message || String(error)));
+        if (generation === import_generation)
+          import_error_.set("读取失败：" + (error.message || String(error)));
       } finally {
         if (generation === import_generation) import_reading_.set(false);
       }
@@ -422,45 +439,103 @@ function DiscoveryAdminViewModel() {
       import_message_.set("");
       let sources;
       try {
-        if (import_text_.value.length > 2 * 1024 * 1024) throw new Error("JSON 内容过大");
+        if (import_text_.value.length > 2 * 1024 * 1024)
+          throw new Error("JSON 内容过大");
         const parsed = JSON.parse(import_text_.value.replace(/^\uFEFF/, ""));
         sources = Array.isArray(parsed) ? parsed : parsed?.sources;
-        if (!Array.isArray(sources) || !sources.length || sources.length > 1000) {
-          throw new Error('请提供包含 1–1000 个订阅源的数组或 { "sources": [...] }');
+        if (
+          !Array.isArray(sources) ||
+          !sources.length ||
+          sources.length > 1000
+        ) {
+          throw new Error(
+            '请提供包含 1–1000 个订阅源的数组或 { "sources": [...] }',
+          );
         }
         sources = sources.map((source, index) => {
-          if (!source || typeof source !== "object" || Array.isArray(source) ||
-              typeof source.title !== "string" || !source.title.trim() ||
-              typeof source.feed_url !== "string" || !source.feed_url.trim()) {
-            throw new Error("第 " + (index + 1) + " 项必须包含 title 和 feed_url 字符串");
+          if (
+            !source ||
+            typeof source !== "object" ||
+            Array.isArray(source) ||
+            typeof source.title !== "string" ||
+            !source.title.trim() ||
+            typeof source.feed_url !== "string" ||
+            !source.feed_url.trim()
+          ) {
+            throw new Error(
+              "第 " + (index + 1) + " 项必须包含 title 和 feed_url 字符串",
+            );
           }
-          return Object.fromEntries(["title", "description", "website", "feed_url", "category", "tags", "enabled", "require_token", "sort_order", "source_type"]
-            .filter(key => source[key] !== undefined).map(key => [key, key === "feed_url" ?
-              (typeof source.feed_url_template === "string" && source.feed_url_template ? source.feed_url_template : source.feed_url).trim() : source[key]]));
+          return Object.fromEntries(
+            [
+              "title",
+              "description",
+              "website",
+              "feed_url",
+              "category",
+              "tags",
+              "enabled",
+              "require_token",
+              "sort_order",
+              "source_type",
+              "poll_policy",
+            ]
+              .filter((key) => source[key] !== undefined)
+              .map((key) => [
+                key,
+                key === "feed_url"
+                  ? (typeof source.feed_url_template === "string" &&
+                    source.feed_url_template
+                      ? source.feed_url_template
+                      : source.feed_url
+                    ).trim()
+                  : source[key],
+              ]),
+          );
         });
       } catch (error) {
-        import_error_.set("JSON 格式错误：" + (error.message || String(error))); return;
+        import_error_.set("JSON 格式错误：" + (error.message || String(error)));
+        return;
       }
       import_busy_.set(true);
-      const existing = new Set(sources_.value.flatMap(source => [source.feed_url, source.feed_url_template]).filter(Boolean));
-      let imported = 0, skipped = 0, processed = 0;
+      const existing = new Set(
+        sources_.value
+          .flatMap((source) => [source.feed_url, source.feed_url_template])
+          .filter(Boolean),
+      );
+      let imported = 0,
+        skipped = 0,
+        processed = 0;
       try {
         for (const source of sources) {
           if (existing.has(source.feed_url)) skipped++;
           else {
-            const result = await request_json("/admin/api/discovery/sources", { method: "POST", body: JSON.stringify(source) });
+            const result = await request_json("/admin/api/discovery/sources", {
+              method: "POST",
+              body: JSON.stringify(source),
+            });
             const saved = normalize_source(result.source);
             sources_.as([saved, ...sources_.value]);
             existing.add(source.feed_url);
             imported++;
           }
           processed++;
-          import_message_.set("已导入 " + imported + " 个，跳过重复地址 " + skipped + " 个。");
+          import_message_.set(
+            "已导入 " + imported + " 个，跳过重复地址 " + skipped + " 个。",
+          );
         }
         import_text_.set("");
       } catch (error) {
-        import_error_.set("第 " + (processed + 1) + " 项导入失败：" + (error.message || String(error)) + "。已保存的订阅源保留，可重试剩余内容。");
-        import_text_.set(JSON.stringify({ sources: sources.slice(processed) }, null, 2));
+        import_error_.set(
+          "第 " +
+            (processed + 1) +
+            " 项导入失败：" +
+            (error.message || String(error)) +
+            "。已保存的订阅源保留，可重试剩余内容。",
+        );
+        import_text_.set(
+          JSON.stringify({ sources: sources.slice(processed) }, null, 2),
+        );
       } finally {
         pagination.reset();
         import_busy_.set(false);
@@ -472,7 +547,14 @@ function DiscoveryAdminViewModel() {
       let object_url = "";
       try {
         const sources = sources_.value.map(
-          ({ cache, snapshot, feed_url_template, ...source }) => ({
+          ({
+            cache,
+            snapshot,
+            feed_url_template,
+            poll_effective,
+            next_snapshot_at,
+            ...source
+          }) => ({
             ...source,
             feed_url: feed_url_template || source.feed_url,
           }),
@@ -530,6 +612,12 @@ function DiscoveryAdminViewModel() {
                   ...item,
                   snapshot: result.snapshot,
                   cache: result.cache || item.cache,
+                  ...(result.next_snapshot_at === undefined
+                    ? {}
+                    : { next_snapshot_at: result.next_snapshot_at }),
+                  ...(result.poll_effective
+                    ? { poll_effective: result.poll_effective }
+                    : {}),
                 }
               : item,
           ),
@@ -567,10 +655,15 @@ function DiscoveryAdminViewModel() {
     async preview_feed() {
       const address = draft_feed_url_.value.trim();
       if (saving_.value || previewing_.value || !address) return;
-      if (is_template_feed_url(address) &&
-        (!/^\{\{hostname\}\}\/(rss|atom)\//.test(address) || !is_managed_rss_url(address))) {
+      if (
+        is_template_feed_url(address) &&
+        (!/^\{\{hostname\}\}\/(rss|atom)\//.test(address) ||
+          !is_managed_rss_url(address))
+      ) {
         form_message_.set("");
-        form_error_.set("模板订阅源地址必须以 {{hostname}}/rss/ 或 {{hostname}}/atom/ 开头");
+        form_error_.set(
+          "模板订阅源地址必须以 {{hostname}}/rss/ 或 {{hostname}}/atom/ 开头",
+        );
         return;
       }
       const generation = ++preview_generation;
@@ -718,6 +811,7 @@ function DiscoveryAdminViewModel() {
       draft_enabled_.set(source.enabled);
       draft_require_token_.set(source.require_token);
       draft_source_type_.set(source.source_type || "website");
+      poll_editor.methods.reset(source.poll_policy);
       source_type_touched_.set(false);
       tags_touched_.set(false);
       clear_avatar_file();
@@ -741,6 +835,7 @@ function DiscoveryAdminViewModel() {
       draft_enabled_.set(true);
       draft_require_token_.set(false);
       draft_source_type_.set("website");
+      poll_editor.methods.reset();
       source_type_touched_.set(false);
       clear_avatar_file();
       form_error_.set("");
@@ -866,6 +961,7 @@ function DiscoveryAdminViewModel() {
   return {
     state,
     methods,
+    poll_editor,
     visible_sources,
     paged_sources,
     pagination,

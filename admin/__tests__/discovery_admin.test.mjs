@@ -1,3 +1,4 @@
+import { PollPolicyView, poll_policy_label } from "../components/poll_policy.js";
 import { page_source } from "./page_source.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -5,10 +6,11 @@ import vm from "node:vm";
 import { PaginationModel, PaginationView } from "../components/pagination.js";
 import * as platform_helpers from "../components/discovery_platform.js";
 import { RssRoutePatternModel } from "../../server/domain/rss_route.js";
+import { PollPolicyModel } from "../components/poll_policy.model.js";
 
 function modal_model(fetch) {
   const ref = value => ({ value, set(next) { this.value = next; }, as(next) { this.value = next; } });
-  const context = vm.createContext({ ...platform_helpers, RssRoutePatternModel, PaginationModel, PaginationView, URL, File, document: { querySelector: () => null }, window: {
+  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, PaginationModel, PaginationView, URL, File, document: { querySelector: () => null }, window: {
     FindRSSAdminUI: { DOM: {}, ref, refarr: ref, computed: () => ({}), combine: () => ({}) },
     FindRSSAdminShell: {}, FindRSSAdminPages: {}, FindRSSAdminAuth: { fetch },
   } });
@@ -63,12 +65,12 @@ test("JSON 导入兼容导出格式，保留配置和模板，跳过已有及重
   await model.methods.refresh_list();
   model.methods.open_import();
   const source = { id: "ignored", title: "导入源", feed_url: "https://old.example/rss/test", feed_url_template: "{{hostname}}/rss/test",
-    tags: ["标签"], enabled: false, require_token: true, source_type: "website", sort_order: 3, avatar_url: "/old-avatar", snapshot: { saved_at: 1 } };
+    tags: ["标签"], enabled: false, require_token: true, source_type: "website", sort_order: 3, avatar_url: "/old-avatar", snapshot: { saved_at: 1 }, poll_policy: { mode: "manual" } };
   model.methods.set_import_text(JSON.stringify({ sources: [
     { title: "已有", feed_url: "https://example.com/existing" }, source, source,
   ] }));
   await model.methods.import_sources();
-  assert.deepEqual(writes, [{ title: "导入源", feed_url: "{{hostname}}/rss/test", tags: ["标签"], enabled: false, require_token: true, source_type: "website", sort_order: 3 }]);
+  assert.deepEqual(writes, [{ title: "导入源", feed_url: "{{hostname}}/rss/test", tags: ["标签"], enabled: false, require_token: true, source_type: "website", sort_order: 3, poll_policy: { mode: "manual" } }]);
   assert.equal(model.state.sources.value.length, 2);
   assert.match(model.state.import_message.value, /已导入 1 个.*跳过重复地址 2 个/);
   assert.equal(model.state.import_text.value, "");
@@ -347,7 +349,7 @@ test("RSS 地址输入及失焦不读取订阅源，点击按钮才读取", () =
   const component = (props, children) => { nodes.push({ props, children }); return {}; };
   const calls = [];
   const ref = (value) => ({ value, set(next) { this.value = next; }, as(next) { this.value = next; } });
-  const context = vm.createContext({ ...platform_helpers, RssRoutePatternModel, PaginationModel, PaginationView, URL, document: { querySelector: () => null }, window: {
+  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, PaginationModel, PaginationView, URL, document: { querySelector: () => null }, window: {
     Timeless: { DOM: {}, ref, refarr: ref, computed: (source, map) => ({ get value() { return map(source.value); } }),
       combine: (sources, map) => ({ get value() { return map(Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.value]))); } }),
       View: component, Input: component, FeedAddressEditor: component, Button: component, Select: component, Textarea: component, Dialog: component, Icon: component,
@@ -428,7 +430,7 @@ test("新增源回填默认值，异步旧地址不覆盖新草稿，头像随�
   const calls = [];
   let finish;
   const ref = (value) => ({ value, set(next) { this.value = next; }, as(next) { this.value = next; } });
-  const context = vm.createContext({ ...platform_helpers, RssRoutePatternModel, PaginationModel, PaginationView, URL, File, Uint8Array, atob, document: { querySelector: () => null }, window: {
+  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, PaginationModel, PaginationView, URL, File, Uint8Array, atob, document: { querySelector: () => null }, window: {
     Timeless: { DOM: {}, ref, refarr: ref, computed: () => ({}), combine: () => ({}) },
     FindRSSAdminShell: {}, FindRSSAdminPages: {}, FindRSSAdminAuth: { fetch(url, options) {
       calls.push({ url, options });
@@ -492,7 +494,7 @@ test("读取订阅源信息失败时展示具体错误描述，清除读取中�
   const message = "脚本执行失败：脚本异常：小红书笔记缺少有效的 noteId";
   let calls = 0;
   const ref = value => ({ value, set(next) { this.value = next; }, as(next) { this.value = next; } });
-  const context = vm.createContext({ ...platform_helpers, RssRoutePatternModel, PaginationModel, PaginationView, URL, document: { querySelector: () => null }, window: {
+  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, PaginationModel, PaginationView, URL, document: { querySelector: () => null }, window: {
     Timeless: { DOM: {}, ref, refarr: ref, computed: () => ({}), combine: () => ({}) }, FindRSSAdminShell: {}, FindRSSAdminPages: {},
     FindRSSAdminAuth: { fetch: async () => { calls++; return Response.json({ error: message }, { status: 502 }); } },
   } });
