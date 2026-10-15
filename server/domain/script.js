@@ -8,6 +8,7 @@ import { MAX_SCRIPTS, MAX_SCRIPT_BYTES } from "../lib/constants.js";
 import { RssRoutePatternModel } from "./rss_route.js";
 import { script_type } from "../lib/script_type.js";
 import { script_platform } from "../lib/discovery_platform.js";
+import { script_tags } from "../lib/script_tags.js";
 
 /** 脚本名字符上限。 */
 const NAME_MAX_LENGTH = 128;
@@ -42,6 +43,7 @@ export function ScriptModel(row) {
     name: String(metadata.name || source.title || ""),
     url: String(metadata.url || ""),
     platform: Object.freeze(script_platform(metadata.platform)),
+    tags: Object.freeze(script_tags(metadata.tags)),
     maintainers: Object.freeze(
       Array.isArray(metadata.maintainers) ? metadata.maintainers.map(value =>
         value && typeof value === "object" ? Object.freeze({ nickname: String(value.nickname || ""),
@@ -56,6 +58,7 @@ export function ScriptModel(row) {
       (Array.isArray(metadata.routes) ? metadata.routes : [{ ...metadata, path: metadata.path || source.path || "" }])
         .filter(entry => entry && typeof entry === "object")
         .map(({ type, ...entry }, route_index) => Object.freeze({ ...entry, platform: Object.freeze(script_platform(entry.platform ?? metadata.platform)),
+          tags: Object.freeze(script_tags(entry.tags ?? metadata.tags)),
           // 兼容已保存的旧图片路由，公开性与返回内容的格式无关。
           public: entry.public === undefined ? type === "image_proxy" : entry.public === true, route_index })),
     ),
@@ -94,11 +97,12 @@ export function ScriptModel(row) {
       name: state.name,
       url: state.url,
       platform: { ...state.platform },
+      tags: [...state.tags],
       maintainers: state.maintainers.map(value => typeof value === "object" ? { ...value } : value),
       example: state.example,
       parameters: state.parameters,
       description: state.description,
-      ...(Array.isArray(metadata.routes) ? { routes: state.routes.map(entry => ({ ...entry, platform: { ...entry.platform } })) } : {}),
+      ...(Array.isArray(metadata.routes) ? { routes: state.routes.map(entry => ({ ...entry, platform: { ...entry.platform }, tags: [...entry.tags] })) } : {}),
       cookie_grant_id: String(metadata.cookie_grant_id || ""),
       permissions: metadata.permissions || { cookies: [] },
       debug: state.debug,

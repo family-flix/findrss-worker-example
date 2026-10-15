@@ -14,7 +14,7 @@ const request = body => new Request("https://internal/source", { method: "POST",
 function fixture() {
   const bucket = create_memory_bucket(), metadata = new Map();
   const sources = new Map(), snapshots = new Map(), avatars = new Map();
-  const repo = { discovery: {
+  const repo = { tags: { list: () => ["脚本标签"] }, discovery: {
     list(filters) { assert.equal(filters.include_disabled, false); assert.equal(filters.limit, 1000);
       return [...sources.values()].filter(row => row.enabled).map(row => ({ ...row, ...snapshots.get(row.id) })); },
     find: id => sources.get(id), exists: id => sources.has(id), count: () => sources.size,
@@ -50,7 +50,8 @@ test("首次发布读取完整 1000 条目录，排除下架源和需要凭证�
   assert.equal(published.sources.length, 999);
   assert.equal(published.sources.at(-1).id, "999");
   assert.deepEqual(published.sources[0].snapshot, { saved_at: 0, articles: [] });
-  assert.deepEqual(published.tags, ["文章", "科技"]);
+  assert.deepEqual(published.tags, ["脚本标签"]);
+  assert.deepEqual(published.sources[0].tags, ["文章", "科技"]);
   const object = await f.dependencies.object_store.get(DISCOVERY_CATALOG_KEY);
   assert.equal(object.httpMetadata.contentEncoding, "gzip");
   assert.ok(object.size < Buffer.byteLength(JSON.stringify(published)));
@@ -78,6 +79,21 @@ test("增删改、快照和头像变化均发布，收紧权限清掉旧文章",
   await f.service.delete_discovery_source(id);
   assert.equal(f.sources.size, 0);
   assert.equal((await f.published()).sources.length, 0);
+});
+
+test("已有静态目录升级为脚本标签目录时重新发布一次，源的手填标签不进入目录", async () => {
+  const f = fixture();
+  f.sources.set("a", row("a"));
+  await f.service.ensure_catalog();
+  f.metadata.delete("discovery_catalog_script_tags_v1");
+  f.dependencies.repo.tags.list = () => ["新脚本标签"];
+  const writes = f.bucket.calls.put;
+  const restarted = new ServiceDiscovery(f.dependencies);
+  await restarted.ensure_catalog();
+  assert.equal(f.bucket.calls.put, writes + 1);
+  assert.deepEqual((await f.published()).tags, ["新脚本标签"]);
+  await restarted.ensure_catalog();
+  assert.equal(f.bucket.calls.put, writes + 1);
 });
 
 test("串行发布避免慢写覆盖后续编辑，失败清理旧产物且重启后可重试", async () => {

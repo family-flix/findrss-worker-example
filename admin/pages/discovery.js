@@ -366,12 +366,27 @@ function SourceFormView({ store: vm$ }) {
           FieldView({ semantic_name: "discovery-source-tags-field", label: "标签（逗号分隔）" }, [
             Input({class: "box-border",
               value: vm$.state.draft_tags,
-              placeholder: "科技, 视频, 文章, 音频, 博客",
+              placeholder: "选择下方标签，或输入标签",
               attributes: { n: "discovery-source-tags-input", "aria-label": "标签", maxlength: "512" },
               onInput(event) {
                 vm$.methods.set_draft("tags", event.target.value);
               },
             }),
+            View({ class: "box-border flex flex-wrap gap-space-3 min-w-0", attributes: { n: "discovery-source-tag-options", role: "group", "aria-label": "脚本标签" } }, [
+              For({ each: vm$.state.tags, render(tag_value) {
+                const tag = source_value(tag_value);
+                return Input({
+                  label: tag,
+                  disabled: vm$.state.saving,
+                  attributes: { n: "discovery-source-tag-option", type: "checkbox",
+                    checked: computed(vm$.state.draft_tags, value => value.split(",").map(item => item.trim()).includes(tag)) },
+                  onChange() { vm$.methods.toggle_tag(tag); },
+                });
+              } }),
+            ]),
+            View({ class: "box-border m-0 text-muted break-anywhere col-span-full", attributes: { n: "discovery-source-tags-hint" } }, [
+              "可选标签来自已发布脚本；新增时按匹配路由预填，可手动修改。",
+            ]),
           ]),
           FieldView({ semantic_name: "discovery-source-order-field", label: "排序值" }, [
             Input({class: "box-border",

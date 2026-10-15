@@ -26,6 +26,7 @@ export function migrate_script_tables(sql) {
 /** 本模块 DDL 里恰好这些表。 @type {readonly string[]} */
 export const API_TABLE_NAMES = Object.freeze([
   "platforms",
+  "tags",
   "rss_cookie_grants",
   "device_tokens",
   "script_agent_settings",
@@ -59,6 +60,9 @@ export const API_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS platforms (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, icon TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS tags (
+    name TEXT PRIMARY KEY, created_at INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS rss_cookie_grants (
     id TEXT PRIMARY KEY, script_id TEXT NOT NULL, script_hash TEXT NOT NULL,

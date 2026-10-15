@@ -29,6 +29,8 @@ test("知识中的 RSS 工具示例实际抓取、校验、排序、渲染和记
     return new Response(response);
   };
   const metadata = await compile(SCRIPT_AGENT_UTIL_EXAMPLE);
+  assert.deepEqual(metadata.platform, { name: "网页", icon: "" });
+  assert.deepEqual(metadata.tags, ["文章"]);
   const result = await execute_script(SCRIPT_AGENT_UTIL_EXAMPLE, metadata);
   const feed = JSON.parse(result.output);
   assert.deepEqual(feed.items.map(item => item.id), ["new", "old", "unknown"]);

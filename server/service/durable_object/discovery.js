@@ -101,7 +101,7 @@ export class ServiceDiscovery {
       pagination = { total_count, limit, offset, has_more: offset + limit < total_count };
     }
     const rows = this.repo.discovery.list(filters);
-    return { ...pagination, platforms: discovery_platforms(platforms, rows), sources: rows.map(row => this.source_value(row, include_disabled)), tags: [...new Set(this.repo.discovery.list_tags().flatMap((row) => DiscoverySourceModel.fromRow(row).discovery_tags()))] }
+    return { ...pagination, platforms: discovery_platforms(platforms, rows), sources: rows.map(row => this.source_value(row, include_disabled)), tags: this.tags() }
   }
 
   platforms() {
@@ -109,12 +109,16 @@ export class ServiceDiscovery {
       this.repo.discovery.list_types?.() || []);
   }
 
+  tags() {
+    return this.repo.tags?.list() || [];
+  }
+
   validate_source(body) {
     const pathname = SourceAddressModel(body.feed_url).route_pathname;
     const route = (this.repo.scripts?.list() || []).map(row => ScriptModel.fromRow(row))
       .filter(script => script.status === "published").flatMap(script => script.routes)
       .find(entry => RssRoutePatternModel.fromValue(entry.path)?.match(pathname));
-    return DiscoverySourceModel.validate(body, new Set([...DiscoverySourceModel.TYPES, ...this.platforms().map(platform => platform.id)]), discovery_platform_id(route?.platform));
+    return DiscoverySourceModel.validate({ ...body, tags: body.tags === undefined ? route?.tags : body.tags }, new Set([...DiscoverySourceModel.TYPES, ...this.platforms().map(platform => platform.id)]), discovery_platform_id(route?.platform));
   }
 
   source_value(row, include_disabled = false) {
@@ -134,14 +138,14 @@ export class ServiceDiscovery {
   public_catalog() {
     const rows = this.repo.discovery.list({ include_disabled: false, limit: DiscoverySourceModel.MAX_SOURCES, offset: 0 });
     const sources = rows.map(row => this.source_value(row));
-    return { sources, platforms: discovery_platforms(this.platforms(), rows), tags: [...new Set(sources.flatMap(source => source.tags))] };
+    return { sources, platforms: discovery_platforms(this.platforms(), rows), tags: this.tags() };
   }
 
   async ensure_catalog() {
     if (!this.object_store || !this.render_catalog || this.catalog_checked && this.catalog_retry_at === null) return;
     let needed;
     try {
-      needed = await this.storage.get("discovery_catalog_dirty") || !await this.object_store.head(DISCOVERY_CATALOG_KEY) || !await this.storage.get("discovery_catalog_lazy_avatars_v1") || !await this.storage.get("discovery_catalog_platforms_v1");
+      needed = await this.storage.get("discovery_catalog_dirty") || !await this.object_store.head(DISCOVERY_CATALOG_KEY) || !await this.storage.get("discovery_catalog_lazy_avatars_v1") || !await this.storage.get("discovery_catalog_platforms_v1") || !await this.storage.get("discovery_catalog_script_tags_v1");
     } catch (error) {
       this.catalog_retry_at = Date.now() + 60000;
       await this.schedule_alarm?.();
@@ -165,6 +169,7 @@ export class ServiceDiscovery {
         await this.storage.delete("discovery_catalog_dirty");
         await this.storage.put("discovery_catalog_lazy_avatars_v1", true);
         await this.storage.put("discovery_catalog_platforms_v1", true);
+        await this.storage.put("discovery_catalog_script_tags_v1", true);
         this.catalog_checked = true;
         this.catalog_retry_at = null;
       } catch (error) {

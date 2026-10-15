@@ -40,6 +40,7 @@ test("ScriptModel 优先取 metadata_json，缺失字段回退到 row 上的列"
       name: "公众号",
       url: "https://example.com",
       platform: { name: "网页", icon: "" },
+      tags: [],
       maintainers: ["a", "1"],
       example: "biz",
       parameters: { biz: "Mzkx" },

@@ -36,6 +36,19 @@ function catalog_fixture(count = 81) {
 
 const ids = model => Array.from(model.state.feeds.value, feed => feed.source_id);
 
+test("标签只展示脚本目录及 URL 中已选标签，空源仍显示脚本标签，不补固定标签或源标签", async () => {
+  const model = model_fixture(() => {}, undefined, { sources: [], tags: ["脚本标签", "脚本标签"] });
+  await model.methods.init();
+  assert.deepEqual(Array.from(model.state.available_tags.value), ["脚本标签"]);
+  const restored = model_fixture(() => {}, "https://discover.example/?tag=旧标签", {
+    sources: [{ id: "a", feed_url: "https://example.com/feed", tags: ["源标签"] }], tags: [],
+  });
+  await restored.methods.init();
+  assert.deepEqual(Array.from(restored.state.available_tags.value), ["旧标签"]);
+  await restored.methods.clear_tags();
+  assert.deepEqual(Array.from(restored.state.available_tags.value), []);
+});
+
 test("平台列表默认网页，空源目录仍展示脚本平台，自定义平台支持 URL 恢复和筛选", async () => {
   const empty = model_fixture(() => {}, undefined, { sources: [], tags: [] });
   assert.deepEqual(Array.from(empty.state.platforms.value, platform => platform.label), ["网页"]);

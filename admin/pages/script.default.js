@@ -1,6 +1,7 @@
 export const DEFAULT_RSS_SCRIPT = String.raw`/** RSS */
 import { utils } from '@findrss/util';
 export const kind = 'rss';
+export const tags = ['科技', '文章'];
 class SolidotRSS extends RSSScript {
   async fetch(ctx) {
     ctx.log('开始获取 Solidot RSS');
@@ -20,6 +21,7 @@ export const route = { path: '/solidot', name: 'Solidot', platform: {"name": "�
 export const DEFAULT_HOT_SCRIPT = String.raw`/** HOT */
 export const platform = {"name": "网页", "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#98a0ae\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" data-n=\"website-platform-icon\"><circle cx=\"12\" cy=\"12\" r=\"8.5\" data-n=\"website-icon-circle-1\" /><ellipse cx=\"12\" cy=\"12\" rx=\"3.6\" ry=\"8.5\" data-n=\"website-icon-ellipse-2\" /><path d=\"M3.7 9.4h16.6M3.7 14.6h16.6\" data-n=\"website-icon-path-3\" /></svg>"};
 export const kind = "hot";
+export const tags = ["热榜"];
 import { utils } from "@findrss/util";
 
 // 热榜是一次榜单快照：rank 决定顺序，heat 表达平台热度，observed_at 是采集时间。

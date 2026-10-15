@@ -38,7 +38,6 @@ export function match_discovery_route(pathname) {
 }
 
 const default_platforms = [{ id: "website", label: "网页" }];
-const default_tags = ["科技", "视频", "文章", "音频", "博客"];
 const search_debounce_ms = 350;
 const copy_status_ms = 2000;
 export const SOURCE_PAGE_SIZE = 20;
@@ -117,7 +116,7 @@ export function DiscoveryViewModel(catalog = null) {
   const selected_platform_ = ref("");
   const platforms_ = ref(default_platforms);
   const selected_tags_ = ref([]);
-  const available_tags_ = ref(default_tags);
+  const available_tags_ = ref([]);
   const feeds_ = ref([]);
   const page_ = ref(0);
   const total_count_ = ref(0);
@@ -304,7 +303,6 @@ export function DiscoveryViewModel(catalog = null) {
     );
     available_tags_.set([
       ...new Set([
-        ...default_tags,
         ...(catalog.tags || []),
         ...selected_tags_.value,
       ]),

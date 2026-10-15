@@ -16,6 +16,8 @@ test("全局 XiaoxunAgent 每轮注入脚本 SDK 知识，知识不会增加脚�
   let calls = 0;
   const agent = new XiaoxunAdminAgent({ ports: { context: () => ({}) }, provider: { async complete(messages, options) {
     assert.ok(messages[0].content.includes(SCRIPT_AGENT_RUNTIME_KNOWLEDGE));
+    for (const declaration of ["export const platform", "export const tags", "route.platform", "route.tags", "data.tags", "script_routes"])
+      assert.ok(messages[0].content.includes(declaration), declaration);
     assert.equal(options.tools.some(tool => ['edit_script_draft', 'publish_script', 'debug_script_draft'].includes(tool.name)), false);
     return calls++ === 0 ? turn(call('get_admin_context')) : done;
   } } });

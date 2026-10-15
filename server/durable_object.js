@@ -42,6 +42,7 @@ import { RepositoryRssCookieGrant } from "./repository/rss_cookie_grant.js";
 import { RepositoryRssCookie } from "./repository/rss_cookie.js";
 import { RepositoryScript } from "./repository/script.js";
 import { RepositoryPlatform } from "./repository/platform.js";
+import { RepositoryTag } from "./repository/tag.js";
 import { RepositoryScriptLog } from "./repository/script_log.js";
 import { RepositoryRssRouteCache } from "./repository/rss_route_cache.js";
 import { RepositoryUser } from "./repository/user.js";
@@ -341,6 +342,7 @@ export const route = {
       rss_cookies: new RepositoryRssCookie({ sql: this.ctx.storage.sql }),
       scripts: new RepositoryScript({ sql: this.ctx.storage.sql }),
       platforms: new RepositoryPlatform({ sql: this.ctx.storage.sql }),
+      tags: new RepositoryTag({ sql: this.ctx.storage.sql }),
       script_logs: new RepositoryScriptLog({ sql: this.ctx.storage.sql }),
       rss_route_cache: new RepositoryRssRouteCache({ sql: this.ctx.storage.sql, storage: this.ctx.storage }),
       users: new RepositoryUser({ sql: this.ctx.storage.sql }),
@@ -352,7 +354,11 @@ export const route = {
      * `infra/` import `repository/`，所以持久化只能由组合根注进去），而
      * `RepositoryRssRouteCache` 的方法名**就是** store 接口，直接注入即可。
      */
-    this.ctx.storage.transactionSync(() => this.repo.platforms.import_published(this.repo.scripts.list()));
+    this.ctx.storage.transactionSync(() => {
+      const scripts = this.repo.scripts.list();
+      this.repo.platforms.import_published(scripts);
+      this.repo.tags.import_published(scripts);
+    });
     const ports = {
       transaction: callback => this.ctx.storage.transactionSync(callback),
       sockets: new DeviceSocketHub(ctx),
@@ -421,9 +427,9 @@ export const route = {
         source_types: () => this.app.discovery.platforms().map(platform => platform.id),
         context: async page => {
           if (["overview", "devices"].includes(page)) return this.app.devices.summary();
-          if (page === "discovery") return { source_count: this.repo.discovery.count(), source_types: Object.fromEntries(this.app.discovery.platforms().map(platform => [platform.id, platform.label])),
-            script_routes: (await this.app.scripts.list_scripts()).scripts.flatMap(script => (script.routes || [{ path: script.path }]).map(route => ({ path: route.path, enabled: script.enabled }))) };
-          if (page === "scripts") return { scripts: (await this.app.scripts.list_scripts()).scripts.map(({ id, name, path, enabled, routes }) => ({ id, name, path, enabled, routes })) };
+          if (page === "discovery") return { source_count: this.repo.discovery.count(), source_types: Object.fromEntries(this.app.discovery.platforms().map(platform => [platform.id, platform.label])), tags: this.app.discovery.tags(),
+            script_routes: (await this.app.scripts.list_scripts()).scripts.filter(script => script.status === "published").flatMap(script => (script.routes || [script]).map(route => ({ path: route.path, platform: route.platform, tags: route.tags, enabled: script.enabled }))) };
+          if (page === "scripts") return { scripts: (await this.app.scripts.list_scripts()).scripts.map(({ id, name, path, platform, tags, enabled, routes }) => ({ id, name, path, platform, tags, enabled, routes })) };
           if (page === "users") return this.app.users.list_admin_users(new URL("https://internal/?limit=20"));
           if (page === "redemptions") return this.app.redemption.list_redemption_campaigns(new URL("https://internal/?limit=20"));
           if (page === "cookies") { const cookies = this.repo.rss_cookies.get(); return { cookie_count: cookies.length, domains: [...new Set(cookies.map(cookie => cookie.domain))] }; }

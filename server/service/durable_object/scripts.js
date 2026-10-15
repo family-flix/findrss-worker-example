@@ -468,7 +468,10 @@ export class ServiceScript {
   save_script(write, metadata, now, collect) {
     const save = () => {
       write();
-      if (collect) this.repo.platforms?.collect(metadata, now);
+      if (collect) {
+        this.repo.platforms?.collect(metadata, now);
+        this.repo.tags?.collect(metadata, now);
+      }
     };
     if (this.ports.transaction) this.ports.transaction(save);
     else save();

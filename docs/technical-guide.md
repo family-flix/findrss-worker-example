@@ -86,7 +86,7 @@ Cloudflare Worker 改名会创建新的 DO 命名空间：已有生产数据需�
 管理后台所有页面右下角提供「小讯」全局对话入口，提供对话框、输入框和左下模型选择，与脚本助手共用大模型配置和加密密钥。`GET /admin/api/agent/ws` 仍需管理员会话，并拒绝跨站 Origin。每次发送携带当前管理路由和页面上下文；切换路由取消当前运行并清空上一页历史，对话窗口保持打开。上下文包含页面用途；Cookie 页只提供域名和数量，不提供密钥值。脚本页仍使用三栏编辑器中的助手实时改草稿和 Debug。
 
 `/admin/discovery` 的全局助手可查询、新增、编辑和删除订阅源，使用现有 `ServiceDiscovery` 校验、重复地址限制、模板保存和头像清理。编辑/删除必须先读取真实记录，写入点检查读取后记录是否变更，冲突时要求重新读取；只修改用户指定字段，不覆盖缺省字段。成功操作经 `resource_changed` 事件刷新列表，保留其它未保存表单；删除正在编辑的源会关闭该表单。当前筛选、选中源和未保存表单通过页面适配器注入；其它页面不提供订阅源写工具，不允许模型伪造跨页面操作。
-## 脚本平台与维护者
+## 脚本平台、标签与维护者
 
 平台使用 `{ name, icon }`，`icon` 支持完整 SVG 源码、无凭据的 HTTP(S) 图片地址或站内图片路径，可为空。默认值为 `{ name: "网页", icon: "" }`，兼容旧字符串。可 `export const platform = { name, icon }` 供全部路由共用，或通过 `route.platform` 逐条覆盖。示例脚本已直接内嵌 `public/platform-icons/` 中对应的 SVG，无需额外导入图标文件。
 
@@ -94,10 +94,15 @@ Cloudflare Worker 改名会创建新的 DO 命名空间：已有生产数据需�
 
 `maintainers` 支持多个 `{ nickname, url, avatar }` 对象，后台展示昵称、头像和个人链接。`nickname` 必填，`url`、`avatar` 可留空，非空时必须是无用户名密码的 HTTP(S) 地址；旧字符串数组继续支持。
 
+标签使用 `export const tags = ['科技', '文章']` 为所有路由设置默认值，`route.tags` 或 `routes` 中的 `tags` 可逐条覆盖，空数组表示不带标签。每条路由最多 13 个不同标签，每个标签去除首尾空白后为 1–32 字符，不含控制字符，按名称精确去重。标签保存在路由元数据中，不是 handler 返回值或 RSS 条目分类。
+
+与平台一样，正式发布成功后在同一事务中聚合脚本标签到 `tags` 表，草稿、调试和失败发布不收集；重启时回填已发布脚本，删除或退回草稿不清除已收集标签。discover 和管理后台共用这份可选标签列表，不再补固定默认标签或从订阅源、旧分类聚合。新增自有源按匹配路由预填标签，可手动修改，修改源不会注册新标签。XiaoxunAgent 的共享知识和订阅源上下文包含这套平台、标签声明与选择规则；全局助手只能修改订阅源配置，脚本声明由脚本编辑器助手协助修改草稿，管理员发布后生效。
+
 ```js
 export const route = {
   name: "知乎用户作品",
   path: "/zhihu/people/:id/:kind?",
+  tags: ["文章"],
   platform: { name: "知乎", icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>' },
   maintainers: [
     { nickname: "findrss", url: "https://example.com/", avatar: "https://example.com/avatar.png" },

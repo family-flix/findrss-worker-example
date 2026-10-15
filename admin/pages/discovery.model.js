@@ -45,7 +45,7 @@ function is_managed_rss_url(value) {
 /**
  * 自有 RSS/Atom 地址按匹配的脚本路由预填平台，其余归为网页。
  */
-function infer_source_type(feed_url, scripts) {
+function infer_source_route(feed_url, scripts) {
   const text = String(feed_url || "");
   const candidate = is_template_feed_url(text)
     ? feed_host_placeholder + text.slice(feed_host_token.length)
@@ -54,17 +54,24 @@ function infer_source_type(feed_url, scripts) {
   try {
     pathname = new URL(candidate).pathname;
   } catch {
-    return "website";
+    return null;
   }
   const match = /^\/(?:rss|atom)(\/.*)$/.exec(pathname);
-  if (!match) return "website";
-  const route = scripts
-    .filter(script => script.status !== "draft")
+  if (!match) return null;
+  return scripts
+    .filter((script) => script.status !== "draft")
     .flatMap((script) => script.routes || [script])
     .find((entry) =>
       RssRoutePatternModel.fromValue(entry.path)?.match(match[1]),
     );
-  return discovery_platform_id(route?.platform);
+}
+
+function infer_source_type(feed_url, scripts) {
+  return discovery_platform_id(infer_source_route(feed_url, scripts)?.platform);
+}
+
+function infer_source_tags(feed_url, scripts) {
+  return infer_source_route(feed_url, scripts)?.tags || [];
 }
 
 /** @param {unknown} value 头像只接受站内相对路径（服务端给的就是 `/api/avatar/<id>?v=`）。*/
@@ -125,6 +132,7 @@ async function request_json(url, options = {}) {
 function DiscoveryAdminViewModel() {
   const sources_ = refarr([]);
   const platforms_ = ref(discovery_platforms());
+  const tags_ = ref([]);
   const snapshot_refreshing_ = ref([]);
   const snapshot_errors_ = ref(new Map());
   const scripts_ = ref([]);
@@ -144,6 +152,7 @@ function DiscoveryAdminViewModel() {
   const draft_source_type_ = ref("website");
   // 手改过「平台」之后就不再按地址自动预判（否则用户的选择会被下一次输入覆盖）。
   const source_type_touched_ = ref(false);
+  const tags_touched_ = ref(false);
   const avatar_file_ = ref(null);
   // 记住 file input 的 DOM 节点：上传成功后要把它的 value 清空，否则同一个文件选不了第二次。
   let avatar_input_node = null;
@@ -168,6 +177,7 @@ function DiscoveryAdminViewModel() {
   const state = {
     sources: sources_,
     platforms: platforms_,
+    tags: tags_,
     platform_options: computed(platforms_, (platforms) =>
       platforms.map((type) => ({ value: type.id, label: type.label })),
     ),
@@ -214,6 +224,7 @@ function DiscoveryAdminViewModel() {
     try {
       const payload = await request_json("/admin/api/discovery/sources");
       if (current === list_generation) {
+        tags_.set(Array.isArray(payload.tags) ? [...new Set(payload.tags.filter(tag => typeof tag === "string"))] : []);
         sources_.as(
           (Array.isArray(payload.sources) ? payload.sources : []).map(
             normalize_source,
@@ -240,6 +251,8 @@ function DiscoveryAdminViewModel() {
     try {
       const payload = await request_json("/admin/api/scripts?kind=rss");
       scripts_.set(Array.isArray(payload.scripts) ? payload.scripts : []);
+      if (editing_id_.value === "" && !tags_touched_.value)
+        draft_tags_.set(infer_source_tags(draft_feed_url_.value, scripts_.value).join(", "));
       if (editing_id_.value === "" && !source_type_touched_.value)
         draft_source_type_.set(
           infer_source_type(draft_feed_url_.value, scripts_.value),
@@ -583,12 +596,17 @@ function DiscoveryAdminViewModel() {
         for (const [key, field] of Object.entries(fields)) {
           if (
             field.value !== before[key] ||
+            (key === "tags" && tags_touched_.value) ||
             (key === "source_type" &&
               (source_type_touched_.value || editing_id_.value !== ""))
           )
             continue;
           if (key === "source_type" && is_managed_rss_url(address)) {
             field.set(infer_source_type(address, scripts_.value));
+            continue;
+          }
+          if (key === "tags" && infer_source_route(address, scripts_.value)) {
+            field.set(infer_source_tags(address, scripts_.value).join(", "));
             continue;
           }
           field.set(
@@ -648,6 +666,8 @@ function DiscoveryAdminViewModel() {
         if (preview_avatar_.value) clear_avatar_file();
         preview_avatar_.set("");
         draft_feed_url_.set(String(value));
+        if (editing_id_.value === "" && !tags_touched_.value)
+          draft_tags_.set(infer_source_tags(String(value), scripts_.value).join(", "));
         // 只有「新增」且用户没手改过平台时才自动预判；编辑已有源时不覆盖已保存的选择。
         if (editing_id_.value === "" && !source_type_touched_.value) {
           draft_source_type_.set(
@@ -657,13 +677,22 @@ function DiscoveryAdminViewModel() {
       }
       if (name === "website") draft_website_.set(String(value));
       if (name === "description") draft_description_.set(String(value));
-      if (name === "tags") draft_tags_.set(String(value));
+      if (name === "tags") {
+        tags_touched_.set(true);
+        draft_tags_.set(String(value));
+      }
       if (name === "sort_order") draft_sort_order_.set(String(value));
       if (name === "require_token") draft_require_token_.set(value === true);
       if (name === "source_type") {
         source_type_touched_.set(true);
         draft_source_type_.set(String(value));
       }
+    },
+    toggle_tag(tag) {
+      if (!tags_.value.includes(tag)) return;
+      const selected = draft_tags_.value.split(",").map(value => value.trim()).filter(Boolean);
+      methods.set_draft("tags", [...new Set(selected.includes(tag)
+        ? selected.filter(value => value !== tag) : [...selected, tag])].join(", "));
     },
     set_avatar_file(file, input_node) {
       preview_avatar_.set("");
@@ -690,6 +719,7 @@ function DiscoveryAdminViewModel() {
       draft_require_token_.set(source.require_token);
       draft_source_type_.set(source.source_type || "website");
       source_type_touched_.set(false);
+      tags_touched_.set(false);
       clear_avatar_file();
       form_error_.set("");
       form_message_.set("");
@@ -706,6 +736,7 @@ function DiscoveryAdminViewModel() {
       draft_website_.set("");
       draft_description_.set("");
       draft_tags_.set("");
+      tags_touched_.set(false);
       draft_sort_order_.set("0");
       draft_enabled_.set(true);
       draft_require_token_.set(false);

@@ -17,6 +17,41 @@ function modal_model(fetch) {
   return context.model;
 }
 
+test("后台可选标签使用脚本目录，匹配路由预填且手动修改保留，草稿和源标签不进入选项", async () => {
+  let tags = ["科技", "视频", "无源标签"];
+  const scripts = [{ status: "draft", routes: [{ path: "/demo/:id", tags: ["草稿标签"] }] },
+    { status: "published", routes: [{ path: "/demo/:id", tags: ["科技"] }, { path: "/video/:id", tags: ["视频"] }] }];
+  const model = modal_model(async url => Response.json(url.endsWith("/preview")
+    ? { defaults: { title: "预览", website: "", description: "", tags: ["feed 标签"] } }
+    : url.includes("scripts") ? { scripts }
+    : { tags, sources: [{ id: "old", title: "源", tags: ["旧源标签"], feed_url: "{{hostname}}/rss/demo/1", enabled: true }] }));
+  await model.methods.refresh_list();
+  assert.deepEqual(Array.from(model.state.tags.value), tags);
+  model.methods.create_source();
+  model.methods.set_draft("feed_url", "{{hostname}}/rss/demo/2");
+  await new Promise(setImmediate);
+  assert.equal(model.state.draft_tags.value, "科技");
+  await model.methods.preview_feed();
+  assert.equal(model.state.draft_tags.value, "科技");
+  model.methods.set_draft("feed_url", "{{hostname}}/atom/video/2");
+  assert.equal(model.state.draft_tags.value, "视频");
+  model.methods.toggle_tag("无源标签");
+  model.methods.set_draft("feed_url", "{{hostname}}/rss/demo/3");
+  await model.methods.preview_feed();
+  assert.equal(model.state.draft_tags.value, "视频, 无源标签");
+  model.methods.toggle_tag("视频");
+  model.methods.toggle_tag("不存在");
+  assert.equal(model.state.draft_tags.value, "无源标签");
+  model.methods.close_form();
+  model.methods.edit_source("old");
+  model.methods.set_draft("feed_url", "{{hostname}}/rss/video/3");
+  await new Promise(setImmediate);
+  assert.equal(model.state.draft_tags.value, "旧源标签");
+  tags = [];
+  await model.methods.refresh_list();
+  assert.deepEqual(Array.from(model.state.tags.value), []);
+});
+
 test("JSON 导入兼容导出格式，保留配置和模板，跳过已有及重复地址", async () => {
   const writes = [];
   const model = modal_model(async (_, options) => {
@@ -316,7 +351,7 @@ test("RSS 地址输入及失焦不读取订阅源，点击按钮才读取", () =
     Timeless: { DOM: {}, ref, refarr: ref, computed: (source, map) => ({ get value() { return map(source.value); } }),
       combine: (sources, map) => ({ get value() { return map(Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.value]))); } }),
       View: component, Input: component, FeedAddressEditor: component, Button: component, Select: component, Textarea: component, Dialog: component, Icon: component,
-      Show: () => ({}),
+      Show: () => ({}), For: () => ({}),
     },
     FindRSSAdminShell: {}, FindRSSAdminPages: {}, FindRSSAdminAuth: { fetch() {} },
   } });

@@ -78,6 +78,7 @@ function normalize_script(raw) {
     name: String(raw.name || ""),
     url: String(raw.url || ""),
     platform: script_platform(raw.platform),
+    tags: Array.isArray(raw.tags) ? raw.tags.map(String) : [],
     website_url,
     maintainers: Array.isArray(raw.maintainers)
       ? raw.maintainers.map((value) =>

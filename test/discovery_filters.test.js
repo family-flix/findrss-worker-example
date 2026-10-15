@@ -8,9 +8,9 @@ import { ServiceDiscovery } from "../server/service/durable_object/discovery.js"
 function fixture() {
   const calls = [];
   const row = { id: "old", category: "technology", tags_json: '["文章","科技"]', enabled: 1, source_type: "zhihu" };
-  const repo = { discovery: {
+  const repo = { tags: { list: () => ["文章", "科技", "博客"] }, discovery: {
     list(filters) { calls.push(filters); return [row]; },
-    list_tags() { return [row, { tags_json: '["博客"]' }, { tags_json: "broken" }]; },
+    list_tags() { throw new Error("标签目录不能再从订阅源聚合"); },
     find_enabled() { return row; },
     list_related(...args) { calls.push(args); return []; },
   } };
@@ -74,10 +74,10 @@ assert len(public)==500
 
 test("公开目录按筛选后的总数返回分页元数据，管理列表维持完整响应", () => {
   const calls = [];
-  const service = new ServiceDiscovery({ repo: { discovery: {
+  const service = new ServiceDiscovery({ repo: { tags: { list: () => ["科技", "文章", "其他"] }, discovery: {
     count_filtered(filters) { calls.push({ count: { ...filters } }); return 41; },
     list(filters) { calls.push({ list: { ...filters } }); return [{ id: "page-item", enabled: 1 }]; },
-    list_tags() { return [{ tags_json: '["科技","文章","其他"]' }]; },
+    list_tags() { throw new Error("标签目录不能再从订阅源聚合"); },
   } } });
   const url = new URL("https://api/discovery/sources?limit=20&offset=20&source_type=zhihu&tag=科技&tag=文章&q=日报");
   const result = service.list_discovery_sources(url, false);

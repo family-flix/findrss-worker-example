@@ -26,6 +26,8 @@ class ExampleRSS extends RSSScript {
   }
 }
 const script = new ExampleRSS();
+export const platform = { name: '网页', icon: '' };
+export const tags = ['文章'];
 export const route = { path: '/demo/utils', name: '工具模块示例', handler: ctx => script.run(ctx) };`;
 
 export const SCRIPT_AGENT_HOT_RANK_EXAMPLE = `import { utils } from ${JSON.stringify("@findrss/util")};
@@ -89,6 +91,10 @@ HotRankScript.run(ctx) 返回 {kind:'hot_rank',observed_at,entries,...} 的 Resu
 模块可 export const kind="hot" 或 "rss"，兼容旧 script_type；未声明时按顶部 /** HOT */ 或 /** RSS */，再按基类推断。迁移前无标记的 NewsNow 和 Instagram 示例兼容归为 hot，其余旧普通脚本默认为 rss。列表接口支持 ?kind=hot|rss。/admin/scripts 的标题是 Hot/RSS Tabs，Tab 内筛选、数量和列表按 kind 只展示当前类型，新增使用对应类型的默认脚本。迁移示例分别在 examples/hot（53 个）与 examples/rss（17 个），严格按原文件顶部 /** RSS */ 分类，不自动导入管理后台。route.path 不包含 /rss、/atom、/debug 前缀。新增脚本可存 draft，发布为 published 且 enabled 才生效；回退 draft 后不参与正式路由。脚本助手只能修改未保存草稿和 Debug，不能自行保存/发布/回退，全局助手不能声称修改脚本。
 
 platform 使用 { name: '知乎', icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">...</svg>' }，icon 可以直接包含完整 SVG 源码，也支持无凭据的 HTTP(S) 或站内图片地址，允许为空；缺省为 { name: '网页', icon: '' }。可 export const platform 供全部路由共用，也可在 route.platform 覆盖；兼容旧字符串。正式版本发布成功后才收集平台并写入数据库，按名称去重，同名新图标更新旧图标；保存草稿和调试不注册平台。订阅广场平台列表与后台平台筛选 Select 从同一平台表读取。route.maintainers 支持多个 {nickname,url,avatar} 对象，也兼容字符串数组；nickname 必填，url/avatar 可空，非空必须是无凭据 HTTP(S) 地址。
+
+设置脚本标签使用模块声明 export const tags = ['科技', '文章']，全部路由共用；也可在 route.tags 或 routes 中每条路由的 tags 覆盖。路由数组覆盖公共标签，tags: [] 表示该路由无标签，不自动合并；未声明时为空数组。tags 是字符串数组，每条路由最多 13 个不同标签，每个标签去除首尾空白后为 1–32 字符，不能有控制字符；按精确名称去重。标签属于路由元数据，不要放进 handler 返回的 feed 或 item.categories 代替声明。
+平台与标签都在正式版本校验成功后，随脚本在同一事务中收集入库；草稿、Debug 与失败发布不注册。discover 的标签筛选与后台订阅源表单的可选标签统一读取脚本标签表，取消固定默认标签，不从订阅源手填标签或旧分类生成目录。无需先创建订阅源；删除脚本或退回草稿不会清除已收集的平台和标签。旧脚本没有 tags 时不会产生默认标签。
+订阅源配置与脚本声明分开：source_type 使用 get_admin_context.data.source_types 中的平台 ID，tags 使用字符串数组，可选标签见 data.tags；script_routes 提供已发布路由的平台和标签。新增自有 RSS/Atom 源默认带入匹配路由的平台和标签，管理员可以手动修改；修改源的 tags/source_type 不会注册新的脚本标签或平台。需要新增平台或可选标签时，在脚本页编辑 export const platform/tags 或 route.platform/tags 并发布。全局 XiaoxunAgent 可以说明和按授权修改订阅源配置，但没有脚本写入/发布工具，不能声称已更改脚本；三栏编辑器中的脚本助手可修改当前未保存草稿，正式发布仍由管理员操作。
 
 四、显式 Cookie 权限与日志
 ctx.fetchText 默认匿名，宿主不按 URL 自动注入 Cookie，不能填写 headers.Cookie。模块导出 permissions.cookies=[{id,origin,path_prefix,names,purpose}]：origin 是完整公网 HTTPS origin，无路径；path_prefix 是规范绝对路径；names 明确列出非空 Cookie 名称，不用通配符；purpose 说明读取用途。
