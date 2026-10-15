@@ -13,6 +13,8 @@ const styles = minify(stylesheet.replace('@import url("/base.css");', base_style
 // 只精简静态外壳，SSR 正文中的空白与 hydration 节点保持原样。
 const compact_template = template.trim().replace(/>\s+</g, "><");
 let style_hash = null;
+// 页头等 HTML 结构变更时递增，旧 R2 产物与边缘缓存共用这一版本。
+export const DISCOVERY_ASSETS_VERSION = "6";
 
 export function discovery_style_hash() {
   return style_hash ||= crypto.subtle.digest("SHA-256", new TextEncoder().encode(styles))
@@ -37,5 +39,5 @@ export function render_home_document(catalog, origin) {
 
 export function render_embedded_home(catalog, origin) {
   return render_home_document(catalog, origin).replace("</head>",
-    '<meta data-n="discovery-embedded-assets" name="discovery-embedded-assets" content="4"></head>');
+    `<meta data-n="discovery-embedded-assets" name="discovery-embedded-assets" content="${DISCOVERY_ASSETS_VERSION}"></head>`);
 }

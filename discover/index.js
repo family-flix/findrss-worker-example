@@ -556,6 +556,26 @@ export function HeaderView() {
             ]),
           ],
         ),
+        Link(
+          {
+            class: "github-link",
+            href: "https://github.com/ltaoo/findrss-worker",
+            attributes: {
+              n: "github-link",
+              href: "https://github.com/ltaoo/findrss-worker",
+              target: "_blank",
+              rel: "noopener noreferrer",
+              "aria-label": "FindRSS GitHub 仓库（新标签页打开）",
+              title: "GitHub",
+            },
+          },
+          [
+            View({
+              class: "github-icon",
+              attributes: { n: "github-icon", "aria-hidden": "true" },
+            }, []),
+          ],
+        ),
       ]),
     ]),
   ]);

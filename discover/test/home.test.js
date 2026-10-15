@@ -152,7 +152,7 @@ test("SSR 与旧 R2 头像都按需加载，HTML 不含图片字节且不请求�
     const html = await response.text();
     assert.doesNotMatch(html, /data:image\/png;base64|127\.0\.0\.1|<img[^>]*n="feed-avatar-image"/);
     assert.match(html, /n="feed-avatar-placeholder"/);
-    assert.match(html, /name="discovery-embedded-assets" content="4"/);
+    assert.match(html, /name="discovery-embedded-assets" content="6"/);
     assert.equal(bootstrap_data(html).sources[0].avatar_url, "/api/avatar/0?v=123");
     assert.equal(calls.length, legacy ? 0 : 1);
   }
@@ -201,6 +201,39 @@ test("已有 R2 首页的外链样式在响应时内嵌，不需要等待目录�
   assert_styled_home(upgraded, response);
   assert.match(upgraded, /\/assets\/timeless\/0\.34\.2\/timeless\.dom\.umd\.min\.js/);
   assert.doesNotMatch(upgraded, /\/assets\/timeless\/0\.34\.0\//);
+});
+
+test("旧版 R2 首页升级页头，跳过旧版边缘缓存并保留目录", async () => {
+  const previous = globalThis.caches;
+  const cache_keys = [];
+  const old_html = render_home_document(catalog, DISCOVERY_CATALOG_ORIGIN)
+    .replace(/(<a[^>]*n="github-link"[^>]*>)[^]*?(<\/a>)/, "$1GitHub$2")
+    .replace("</head>", '<meta data-n="discovery-embedded-assets" name="discovery-embedded-assets" content="5"></head>');
+  globalThis.caches = { default: {
+    async match(request) {
+      cache_keys.push(request.url);
+      if (new URL(request.url).searchParams.get("assets") === "5") return new Response(old_html);
+    },
+    async put() {},
+  } };
+  try {
+    const bucket = create_memory_bucket();
+    await bucket.put(DISCOVERY_CATALOG_KEY, await gzip_html(old_html), { httpMetadata: { contentEncoding: "gzip" } });
+    const response = await worker.fetch(request(), { API_STORAGE: bucket,
+      API: { fetch() { throw Error("升级旧首页不应请求 API"); } } });
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    const link = html.match(/<a[^>]*n="github-link"[^>]*>[^]*?<\/a>/)?.[0];
+    assert.ok(link);
+    assert.match(link, /href="https:\/\/github\.com\/ltaoo\/findrss-worker"/);
+    assert.match(link, /target="_blank"[^>]*rel="noopener noreferrer"/);
+    assert.match(link, /aria-label="FindRSS GitHub 仓库（新标签页打开）"/);
+    assert.match(link, /<div class="github-icon" n="github-icon" aria-hidden="true"><\/div><\/a>$/);
+    assert.match(html, /name="discovery-embedded-assets" content="6"/);
+    assert.deepEqual(bootstrap_data(html), bootstrap_data(old_html.replaceAll(DISCOVERY_CATALOG_ORIGIN, "https://discover.example")));
+    assert.equal(new URL(cache_keys[0]).searchParams.get("assets"), "6");
+    assert.equal(bucket.calls.get, 1);
+  } finally { globalThis.caches = previous; }
 });
 
 test("gzip R2 读取后缓存明文，按原始客户端编码头交给平台压缩，HEAD 不返回正文", async () => {

@@ -131,6 +131,30 @@ input:focus-visible {
 .masthead-inner {
   display: flex;
   align-items: center;
+  gap: var(--s5);
+}
+
+.github-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  min-width: 44px;
+  min-height: 44px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.github-link:hover { color: var(--brand-ink); }
+
+.github-icon {
+  width: calc(var(--s4) * 2);
+  height: calc(var(--s4) * 2);
+  background: currentColor;
+  --github-mask: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox='0 0 24 24'%3E%3Cpath d='M12 .297a12 12 0 0 0-3.793 23.385c.6.111.82-.261.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.043-1.61-4.043-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.083-.729.083-.729 1.205.084 1.839 1.236 1.839 1.236 1.07 1.835 2.809 1.305 3.494.998.108-.776.418-1.305.762-1.605-2.665-.303-5.467-1.334-5.467-5.931 0-1.31.469-2.381 1.236-3.221-.124-.303-.536-1.524.118-3.176 0 0 1.008-.322 3.301 1.23A11.52 11.52 0 0 1 12 6.097c1.02.005 2.047.138 3.005.404 2.291-1.552 3.297-1.23 3.297-1.23.656 1.652.244 2.873.12 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.625-5.479 5.922.43.372.823 1.102.823 2.222 0 1.606-.015 2.898-.015 3.293 0 .319.216.694.825.576A12.001 12.001 0 0 0 12 .297Z'/%3E%3C/svg%3E");
+  -webkit-mask: var(--github-mask) center / contain no-repeat;
+  mask: var(--github-mask) center / contain no-repeat;
 }
 
 .search-row { padding-top: var(--s4); }
@@ -497,6 +521,8 @@ input:focus-visible {
 
 @media (max-width: 640px) {
   .filter-row { flex-wrap: wrap; gap: 10px; }
+  .feed-pagination { flex-direction: column; text-align: center; }
+  .feed-pagination .pagination-controls { justify-content: center; }
   .feed-rank { width: 20px; font-size: 11px; }
   .feed-title { font-size: 20px; }
 }

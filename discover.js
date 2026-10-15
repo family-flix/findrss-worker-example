@@ -9,6 +9,7 @@ import {
 } from "./server/lib/discovery_feeds.js";
 import { managed_source_result } from "./server/lib/discovery_sources.js";
 import {
+  DISCOVERY_ASSETS_VERSION,
   discovery_style_hash,
   inline_home_styles,
   render_embedded_home,
@@ -44,7 +45,7 @@ async function home_page(request, env, api_fetch) {
   const cache_url = new URL("/index.html", url.origin);
   cache_url.searchParams.set("feed_origin", origin);
   cache_url.searchParams.set("runtime", "0.34.2");
-  cache_url.searchParams.set("assets", "4");
+  cache_url.searchParams.set("assets", DISCOVERY_ASSETS_VERSION);
   cache_url.searchParams.set("compression", "v2");
   const cache = globalThis.caches?.default;
   try {
@@ -61,7 +62,7 @@ async function home_page(request, env, api_fetch) {
       html = html
         .replaceAll(DISCOVERY_CATALOG_ORIGIN, origin)
         .replaceAll("/assets/timeless/0.34.0/", "/assets/timeless/0.34.2/");
-      if (!html.includes('name="discovery-embedded-assets" content="4"')) {
+      if (!html.includes(`name="discovery-embedded-assets" content="${DISCOVERY_ASSETS_VERSION}"`)) {
         const bootstrap =
           /<script data-n="discovery-catalog" type="application\/json">([^]*?)<\/script>/.exec(
             html,
