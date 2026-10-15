@@ -45,7 +45,9 @@ function PlatformOptionView(id, platforms, label) {
 function format_time(value) {
   if (!value) return "未知";
   const date = new Date(Number(value));
-  return Number.isNaN(date.getTime()) ? "未知" : date.toLocaleString();
+  if (Number.isNaN(date.getTime())) return "未知";
+  const pad = value => String(value).padStart(2, "0");
+  return `${String(date.getFullYear()).padStart(4, "0")}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function format_bytes(value) {
@@ -559,16 +561,26 @@ function SourceCardView({ store, source }) {
               ]),
             ],
           ),
-          View(
-            {
-              class: "box-border " + ("flex-none rounded-pill " + (!source.enabled ? "bg-surface-raised text-muted" : "bg-selected text-link")), style: {
-                "padding": "5px 9px",
-                "font-size": "11px"
+          View({ class: "box-border flex flex-col flex-none items-end gap-space-1" }, [
+            View(
+              {
+                class: "box-border " + ("flex-none rounded-pill " + (!source.enabled ? "bg-surface-raised text-muted" : "bg-selected text-link")), style: {
+                  "padding": "5px 9px",
+                  "font-size": "11px"
+                },
+                attributes: { n: "discovery-source-status" },
               },
-              attributes: { n: "discovery-source-status" },
-            },
-            [source.enabled ? "启用" : "停用"],
-          ),
+              [source.enabled ? "启用" : "停用"],
+            ),
+            Show({
+              // 自有路由源始终展示公开性；其它地址只在勾了「需要 token 访问」时给出提示。
+              when: is_managed_rss_url(source.feed_url) || source.require_token === true,
+              ok() {
+                return Badge({ tone: source.require_token ? "warning" : "success",
+                  attributes: { n: "discovery-source-access-badge" } }, [source.require_token ? "需 token" : "公开"]);
+              },
+            }),
+          ]),
         ],
       ),
       View(
@@ -592,43 +604,59 @@ function SourceCardView({ store, source }) {
         },
       }),
       View(
-        { class: "box-border flex flex-wrap text-muted", style: {
-          "gap": "6px",
-          "font-size": "11px"
+        { class: "box-border grid min-w-0 text-muted", style: {
+          "gap": "var(--frui-space-2)",
+          "padding-top": "var(--frui-space-3)",
+          "border-top": "1px solid var(--frui-color-border-soft)",
+          "font-size": "12px",
+          "line-height": "1.6"
         }, attributes: { n: "discovery-source-card-metadata" } },
         [
-          View({class: "box-border",  attributes: { n: "discovery-source-card-order" } }, ["排序 " + source.sort_order]),
-          View({class: "box-border",  attributes: { n: "discovery-source-card-updated" } }, ["更新于 " + format_time(source.updated_at)]),
+          Show({
+            when: source.sort_order !== 0,
+            ok() {
+              return View({ class: "box-border tabular-nums", attributes: { n: "discovery-source-card-order" } }, ["排序 " + source.sort_order]);
+            },
+          }),
+          View({ class: "box-border flex flex-wrap items-center gap-space-1", attributes: { n: "discovery-source-card-updated" } }, [
+            "更新于",
+            View({ class: "text-text tabular-nums whitespace-nowrap" }, [format_time(source.updated_at)]),
+          ]),
           Show({
             when: Boolean(source.cache),
             ok() {
               const cache = source.cache;
-              return View({class: "box-border",  attributes: { n: "discovery-source-cache-status" } }, [
-                (cache.status === "fresh" ? "XML 快照有效（10 分钟）" : cache.status === "expired" ? "XML 快照待更新" : "无 XML 快照") +
-                (cache.refreshing ? " · 正在生成" : "") +
-                (cache.saved_at ? " · 抓取于 " + format_time(cache.saved_at) + " · " + format_bytes(cache.bytes) +
-                  (cache.persistent ? " · 已持久化" : " · 仅内存") : ""),
+              return View({ class: "box-border grid items-start min-w-0 gap-space-2", style: {
+                "grid-template-columns": "64px minmax(0, 1fr)"
+              }, attributes: { n: "discovery-source-cache-status" } }, [
+                View({ class: "whitespace-nowrap" }, ["XML 快照"]),
+                View({ class: "flex flex-wrap items-center min-w-0 gap-space-2" }, [
+                  Badge({ tone: cache.status === "fresh" ? "success" : cache.status === "expired" ? "warning" : "neutral" },
+                    [cache.status === "fresh" ? "有效（10 分钟）" : cache.status === "expired" ? "待更新" : "未生成"]),
+                  ...(cache.refreshing ? [Badge({ tone: "brand" }, ["正在生成"])] : []),
+                  ...(cache.saved_at ? [
+                    View({ class: "tabular-nums whitespace-nowrap" }, ["抓取于 " + format_time(cache.saved_at)]),
+                    View({ class: "tabular-nums whitespace-nowrap" }, [format_bytes(cache.bytes)]),
+                    View({ class: "whitespace-nowrap" }, [cache.persistent ? "已持久化" : "仅内存"]),
+                  ] : []),
+                ]),
               ]);
             },
           }),
-          View({class: "box-border",  attributes: { n: "discovery-source-snapshot-status" } }, [
-            source.require_token ? "不生成公开快照" : source.snapshot.saved_at
-              ? "广场快照 · " + format_time(source.snapshot.saved_at) + (source.snapshot.error ? " · 更新失败，保留上次内容" : "")
-              : "广场快照 · " + (source.snapshot.error ? "生成失败：" + source.snapshot.error : "等待生成"),
+          View({ class: "box-border grid items-start min-w-0 gap-space-2", style: {
+            "grid-template-columns": "64px minmax(0, 1fr)"
+          }, attributes: { n: "discovery-source-snapshot-status" } }, [
+            View({ class: "whitespace-nowrap" }, ["广场快照"]),
+            View({ class: "flex flex-wrap items-center min-w-0 gap-space-2" }, [
+              source.require_token ? "不生成公开快照" : source.snapshot.saved_at
+                ? View({ class: "text-text tabular-nums whitespace-nowrap" }, [format_time(source.snapshot.saved_at)])
+                : source.snapshot.error ? "" : "等待生成",
+              ...(!source.require_token && source.snapshot.error ? [
+                View({ class: "text-warning break-anywhere min-w-0" }, [source.snapshot.saved_at
+                  ? "更新失败，保留上次内容" : "生成失败：" + source.snapshot.error]),
+              ] : []),
+            ]),
           ]),
-          Show({
-            // 自有路由源始终展示公开性；其它地址只在勾了「需要 token 访问」时给出提示。
-            when: is_managed_rss_url(source.feed_url) || source.require_token === true,
-            ok() {
-              return View(
-                {
-                  class: "box-border " + (" " + (source.require_token ? "bg-warning-bg text-warning" : !source.require_token ? "bg-success-bg text-success" : "")), style: {},
-                  attributes: { n: "discovery-source-access-badge" },
-                },
-                [source.require_token ? "需 token" : "公开"],
-              );
-            },
-          }),
         ],
       ),
       View({ class: "box-border flex items-center min-w-0", style: {

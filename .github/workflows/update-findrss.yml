@@ -1,0 +1,76 @@
+name: 更新 FindRSS
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 20 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-findrss
+  cancel-in-progress: false
+
+jobs:
+  update:
+    if: >-
+      github.repository != 'ltaoo/findrss-worker' &&
+      (github.event_name == 'workflow_dispatch' || vars.AUTO_UPDATE_FINDRSS == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      UPDATE_BRANCH: ${{ vars.FINDRSS_UPDATE_BRANCH || github.event.repository.default_branch }}
+    steps:
+      - name: 读取现有部署仓库
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.UPDATE_BRANCH }}
+
+      - name: 准备 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Load the updater from upstream so old generated repositories only need
+      # this workflow file. Do not place the temporary script in the checkout.
+      - name: 同步最新代码并保留部署配置
+        id: sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags https://github.com/ltaoo/findrss-worker.git master
+          upstream_sha=$(git rev-parse FETCH_HEAD)
+          git show "$upstream_sha:scripts/sync_upstream.mjs" > "$RUNNER_TEMP/findrss-sync-upstream.mjs"
+          node "$RUNNER_TEMP/findrss-sync-upstream.mjs" "$upstream_sha"
+
+      - name: 检查构建与部署产物
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          npm ci
+          npm run dry-run
+          git diff --exit-code
+
+      - name: 提交更新，交由 Cloudflare Builds 部署
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          UPSTREAM_SHA: ${{ steps.sync.outputs.upstream_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: update FindRSS to ${UPSTREAM_SHA:0:12}"
+          git push origin "HEAD:$UPDATE_BRANCH"
+
+      - name: 更新结果
+        env:
+          CHANGED: ${{ steps.sync.outputs.changed }}
+          UPSTREAM_SHA: ${{ steps.sync.outputs.upstream_sha }}
+        shell: bash
+        run: |
+          if [ "$CHANGED" = true ]; then
+            echo "代码已更新到 $UPSTREAM_SHA。请前往 Cloudflare 查看构建与部署结果。" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "当前已是最新版本，无需重新部署。" >> "$GITHUB_STEP_SUMMARY"
+          fi

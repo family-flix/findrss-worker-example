@@ -10,7 +10,8 @@
   <a href="#快速开始">怎么使用</a> ·
   <a href="#界面预览">界面预览</a> ·
   <a href="#采集示例">采集示例</a> ·
-  <a href="#一键部署到-cloudflare-workers">一键部署</a>
+  <a href="#fork-部署到-cloudflare-workers">部署（推荐）</a> ·
+  <a href="#更新已部署的站点">更新站点</a>
 </p>
 
 FindRSS 是一个可以自己部署的爬虫工具。你可以为任意网站自定义采集规则，将文章、视频、动态等内容转换成 RSS 订阅源。
@@ -38,7 +39,7 @@ FindRSS 是一个可以自己部署的爬虫工具。你可以为任意网站自
 
 从网站内容到订阅更新：
 
-1. **部署工具**：通过下方[一键部署](#一键部署到-cloudflare-workers)创建自己的站点。
+1. **部署工具**：推荐按照下方 [Fork 部署流程](#fork-部署到-cloudflare-workers)创建自己的站点，方便后续同步更新。
 2. **配置采集**：进入后台「脚本」，新建采集规则。可以复制下方的[常用脚本](#采集示例)，也可以配置内置助手，告诉它网站地址和想采集的内容。
 3. **预览并发布**：点击「运行调试」查看结果，确认后发布正式版本并启用。
 4. **添加订阅源**：在后台「订阅源」中添加与已发布规则对应的订阅地址。
@@ -73,9 +74,20 @@ RSS 是供阅读器获取更新的订阅格式。阅读器是用来集中查看�
 
 > 可以配合 [dm-extension 浏览器插件](https://github.com/ltaoo/dm-extension)，将 Cookie 提交到自己部署的 FindRSS，供采集脚本使用。
 
+## Fork 部署到 Cloudflare Workers
+
+**推荐使用此流程**：先 Fork 项目，再让 Cloudflare 连接你的 Fork 仓库。后续在 GitHub 点击 **Sync fork → Update branch** 即可同步新版，Cloudflare 自动构建并部署。
+
+1. 点击 [Fork 本项目](https://github.com/ltaoo/findrss-worker/fork)，将仓库 Fork 到自己的 GitHub 账号，保留 `master` 分支。
+2. 按[部署指南](docs/setup.md#fork-部署到-cloudflare-workers)在 Cloudflare 创建 Worker，设置后台密码 `ADMIN_PASSWORD`，并准备 R2 桶。
+3. 在 Worker 的 **Settings → Builds → Connect** 中连接自己的 Fork 仓库，生产分支选择 `master`，部署命令使用 `npm run deploy`。
+4. 等待部署成功，打开站点地址；在地址后加 `/admin/` 进入后台。
+
+完整步骤与构建设置见 [Fork 部署指南](docs/setup.md#fork-部署到-cloudflare-workers)。首次部署后需要自行配置并发布采集规则。
+
 ## 一键部署到 Cloudflare Workers
 
-点击下方按钮，将采集工具部署到自己的账号：
+也可以使用下方按钮部署。此方式会创建独立仓库，后续通过「更新 FindRSS」工作流更新；推荐优先使用上方的 Fork 流程。
 
 <p>
   <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/ltaoo/findrss-worker">
@@ -88,6 +100,20 @@ RSS 是供阅读器获取更新的订阅格式。阅读器是用来集中查看�
 3. 等待完成，打开生成的站点地址；在地址后加 `/admin/` 进入后台。
 
 首次部署后没有预置采集规则，需要先在后台配置并发布。遇到配置问题，查看[安装与配置指南](docs/setup.md)。
+
+## 更新已部署的站点
+
+**Fork 部署的站点**：打开自己的 GitHub 仓库，选择 `master` 分支，点击 **Sync fork → Update branch**，等待 Cloudflare 自动构建、部署。如果修改过仓库中的部署配置，可使用下方工作流保留实例配置并更新。
+
+**一键部署创建的独立仓库**：使用项目提供的更新工作流，无需安装 Git 或重新创建站点：
+
+1. 打开 Cloudflare 中该 Worker 的 **Settings → Builds**，进入绑定的 GitHub 仓库。
+2. 在仓库选择 **Actions → 更新 FindRSS → Run workflow**，点击运行。
+3. 等待工作流成功，再到 Cloudflare 查看构建与部署结果。
+
+更新会保留原 Worker 名称、现有 R2 桶、自定义域名和配置变量，应用代码跟随原项目更新。已有脚本和订阅仍使用原来的存储。
+
+**旧部署没有「更新 FindRSS」入口？** 只需在 GitHub 网页中补一个工作流文件，详见[更新指南](docs/setup.md#更新已部署的站点)。也可以按指南开启每天自动更新。
 
 ## 更多文档
 

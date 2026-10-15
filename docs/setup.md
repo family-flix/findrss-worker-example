@@ -2,7 +2,47 @@
 
 [返回项目介绍](../README.md)。本指南包含部署、本地运行、自定义订阅源与设备配置。
 
+## Fork 部署到 Cloudflare Workers
+
+**推荐使用此流程**。先 Fork 项目，再连接 Cloudflare Workers Builds，后续可以在 GitHub 通过 **Sync fork → Update branch** 更新。整个过程可在网页完成，无需安装 Git 或配置 GitHub 中的 Cloudflare API Token。
+
+需要 GitHub 账号，以及可使用 Workers、SQLite Durable Objects 和 R2 的 Cloudflare 账号。
+
+### 1. Fork 仓库
+
+点击 [Fork 本项目](https://github.com/ltaoo/findrss-worker/fork)，将仓库 Fork 到自己的账号，保留默认的 `master` 分支。后续 Cloudflare 应连接你账号下的这个 Fork 仓库。
+
+### 2. 准备 Worker、后台密码和存储
+
+1. 在 Cloudflare 打开 **Workers & Pages → Create application**，通过 Hello World 创建一个 Worker，名称填写 `findrss-worker`，先完成初始部署。
+2. 进入该 Worker 的 **Settings → Variables and Secrets → Add**，类型选择 **Secret**，名称填写 `ADMIN_PASSWORD`，值设置为自行生成的随机长密码，保存并部署。这是 FindRSS 后台的登录密码。[Cloudflare Secrets 说明](https://developers.cloudflare.com/workers/configuration/secrets/#via-the-dashboard)
+3. 在 Cloudflare **R2 Object Storage** 中启用 R2，并创建名为 `findrss-storage` 的桶；已有该桶时可直接使用。部署会按 `wrangler.jsonc` 绑定此桶，并创建 Durable Object，无需手动创建 DO。
+
+Worker 名称必须与仓库 `wrangler.jsonc` 中的 `name` 一致，R2 桶名必须与 `r2_buckets` 中的 `bucket_name` 一致。上面的默认名称可以直接使用原配置；若要自定义，请在自己的 Fork 中同步修改配置后再连接构建。已有站点升级时保留原名称和存储资源。
+
+`ADMIN_PASSWORD` 应配置在 Worker 的 **Variables and Secrets** 中；**Builds** 中的变量只供构建过程使用，不会自动成为 Worker 的运行时密钥。[Cloudflare 构建配置说明](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#build-settings)
+
+### 3. 连接 Fork 仓库并部署
+
+打开刚才创建的 Worker，进入 **Settings → Builds → Connect**，授权 GitHub，选择**你账号下的 Fork 仓库**，按以下设置连接：[Cloudflare Git 部署说明](https://developers.cloudflare.com/workers/ci-cd/builds/#connect-an-existing-worker)
+
+| 设置 | 填写内容 |
+| --- | --- |
+| Production branch | `master` |
+| Root directory | 仓库根目录 `/` |
+| Build command | 留空，部署命令已包含构建 |
+| Deploy command | `npm run deploy` |
+| 构建环境变量 | `NODE_VERSION=22.19.0` |
+
+Cloudflare 会根据锁文件安装依赖，`npm run deploy` 会先构建后台和订阅广场，再部署 Worker。保持自动构建开启；如果连接后尚未启动构建，可在 Builds 中运行一次构建，或在仓库提交一次修改来触发。
+
+部署成功后打开 Worker 的站点地址，在地址后加 `/admin/`，使用 `ADMIN_PASSWORD` 登录。首次没有预置采集规则，需要自行配置并发布，详见[创建自己的订阅源](#创建自己的订阅源)。自定义域名可在 Worker 的 **Settings → Domains & Routes** 中添加。
+
+后续按下方 [Fork 仓库更新步骤](#fork-仓库更新)更新即可。
+
 ## 一键部署到 Cloudflare Workers
+
+这是可选部署方式；推荐优先使用上方的 [Fork 流程](#fork-部署到-cloudflare-workers)，方便通过 GitHub 原生入口同步更新。
 
 <p align="left">
   <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/ltaoo/findrss-worker">
@@ -13,6 +53,53 @@
 点击上方 **Deploy to Cloudflare**，按引导连接 GitHub / GitLab，选择 Cloudflare 账号，设置 Worker 名称和密钥后部署。Cloudflare 会复制项目、配置 Workers Builds，并按 Wrangler 配置创建所需的 Durable Object 和 R2 资源。[官方部署说明](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
 
 部署时必须填写 `ADMIN_PASSWORD`，作为后台登录密码；该密钥没有默认值，请自行设置随机长密码。无需传入 `DEVICE_TOKEN`、`FINDRSS_HOSTNAME` 或 `FEED_HOSTNAME`，域名默认使用当前访问地址。使用项目定义的构建命令 `npm run build` 和部署命令 `npm run deploy`。完成后打开 Worker 域名的 `/admin/`，输入密码登录并创建第一个脚本；需要连接设备时，在「设备管理 → Device Token」创建凭证。
+
+## 更新已部署的站点
+
+### Fork 仓库更新
+
+1. 打开你自己的 Fork 仓库，切换到连接 Cloudflare 的 `master` 分支。
+2. 点击文件列表上方的 **Sync fork → Update branch**，将原项目最新提交同步到自己的仓库。[GitHub 同步说明](https://docs.github.com/en/pull-requests/how-tos/work-with-forks/syncing-a-fork)
+3. Cloudflare 收到分支更新后自动构建、部署；在 Worker 的 Builds 中查看结果。部署成功后自行打开站点检查后台和订阅。
+
+如果仓库已经是最新版本，无需操作。若你修改过 `wrangler.jsonc` 等文件，同步可能产生冲突，需要保留自己的 Worker 名称、R2 桶名和实例配置后合并；也可以使用下方「更新 FindRSS」工作流，由它保留实例配置并同步应用代码。自行修改应用代码的用户应通过 GitHub Pull Request 合并上游更新。
+
+### 使用更新工作流
+
+一键部署创建的是独立仓库，没有 GitHub 的 `Sync fork` 按钮。本项目提供「更新 FindRSS」工作流，支持独立仓库和 Fork 仓库，在 GitHub 网页中点击运行即可同步代码；Cloudflare Builds 负责后续构建、部署，无需在 GitHub 配置 Cloudflare API Token。
+
+1. 在 Cloudflare 中打开 **Workers & Pages → 你的 Worker → Settings → Builds**，找到绑定的 GitHub 仓库，确认自动构建已开启。
+2. 打开这个仓库，选择 **Actions → 更新 FindRSS → Run workflow**，使用默认分支上的工作流并点击运行。首次使用时，如果提示 Actions 未启用，先按提示启用。
+3. 等待工作流完成。它会获取原项目 `master` 分支的最新代码，保留部署配置，通过依赖安装与构建、部署产物检查后提交更新；没有代码差异时不提交。
+4. 打开 Cloudflare 查看本次构建、部署是否成功。GitHub 工作流成功表示代码已更新，线上版本以 Cloudflare 部署结果为准。部署成功后自行打开站点，检查后台和订阅是否正常。
+
+默认更新仓库的默认分支。**如果 Cloudflare 的 Production branch 与默认分支不同**，在 GitHub 仓库 **Settings → Secrets and variables → Actions → Variables** 中添加变量 `FINDRSS_UPDATE_BRANCH`，值填写 Cloudflare 的生产分支名称。工作流文件仍需放在仓库默认分支，才能显示手动运行入口和执行定时任务。
+
+工作流已声明仓库内容写权限；如果提交时报权限错误，请检查仓库或组织的 Actions 策略，在 **Settings → Actions → General → Workflow permissions** 中允许 **Read and write permissions**。如果生产分支要求通过 Pull Request 才能更新，此工作流的直接推送会被拒绝，需要先调整对应分支规则或自行通过 PR 更新。
+
+更新以原项目代码为准，会替换应用文件并删除上游已经移除的文件，不适用于需要保留自行修改应用代码的部署。同步 `wrangler.jsonc` 时保留 Worker 名称、账号、自定义路由、`workers_dev` / `preview_urls`、已有变量及同名 R2 绑定的桶配置；Durable Object 绑定保留对外部 Worker 的引用，其余应用配置（包括静态资源路由、兼容日期、别名及 DO 声明）跟随新版更新。Cloudflare 中的 secrets 不由工作流读取或修改。
+
+已有 `.github/workflows/` 文件会保留，上游的新工作流或工作流修改不会自动覆盖它们；以后更新工作流本身时，按下方步骤重新复制对应文件。
+
+### 旧部署补上更新入口
+
+如果 Actions 中找不到「更新 FindRSS」，只需在**原来的部署仓库**添加一次文件：
+
+1. 打开原项目的 [update-findrss.yml](https://github.com/ltaoo/findrss-worker/blob/master/.github/workflows/update-findrss.yml)，复制完整内容。
+2. 在你自己的仓库默认分支点击 **Add file → Create new file**，文件名填写 `.github/workflows/update-findrss.yml`。
+3. 粘贴内容并提交，然后按上方「使用更新工作流」运行。更新脚本会自动从原项目加载，无需另外复制脚本或操作本地 Git。
+
+继续使用原来的 Worker、仓库和存储资源；不要再次点击 README 的一键部署按钮来升级，以免创建另一套实例。
+
+### 可选：每天自动更新
+
+定时更新默认关闭。在 GitHub 仓库 **Settings → Secrets and variables → Actions → Variables** 添加 Repository variable：
+
+| Name | Value |
+| --- | --- |
+| `AUTO_UPDATE_FINDRSS` | `true` |
+
+启用后，工作流每天约北京时间 **04:23** 检查并更新，运行时间可能因 GitHub 排队而延后。删除变量或将其改为 `false` 即可关闭，手动更新仍然可用。它会直接跟随原项目 `master` 最新代码；希望自行决定升级时机时，使用手动更新即可。GitHub 可能暂停长期无活动的公开仓库定时工作流，遇到这种情况需在 Actions 中重新启用。
 
 ## 本地运行
 
