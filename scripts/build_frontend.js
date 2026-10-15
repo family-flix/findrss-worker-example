@@ -25,7 +25,7 @@ for (const name of readdirSync(join(stage, "brand"))) {
   cpSync(join(stage, "brand", name), join(stage, "admin", name));
 }
 const static_headers = ["/*", ...Object.entries(SITE_HEADERS).map(([name, value]) => `  ${name}: ${value}`)];
-const styles = /<style data-n="discovery-stylesheet">([^]*?)<\/style>/.exec(readFileSync(join(stage, "index.html"), "utf8"))[1];
+const styles = /<style id="discovery-stylesheet">([^]*?)<\/style>/.exec(readFileSync(join(stage, "index.html"), "utf8"))[1];
 const style_hash = createHash("sha256").update(styles).digest("base64");
 for (const path of ["/", "/index.html", "/account", "/account.html"]) {
   static_headers.push(path, `  Content-Security-Policy: ${SITE_CSP.discovery.replace("style-src 'self'", `style-src 'self' 'sha256-${style_hash}'`)}`);

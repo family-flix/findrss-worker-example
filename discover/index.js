@@ -1268,11 +1268,11 @@ function bootstrap() {
   if (!route) {
     throw new Error("订阅广场页面不存在");
   }
-  const root = document.querySelector('[data-n="discovery-root"]');
+  const root = document.getElementById("discovery-root");
   if (!root) {
     throw new Error("FindRSS 订阅广场无法启动：缺少根节点");
   }
-  const model = DiscoveryViewModel(read_json('[data-n="discovery-catalog"]'));
+  const model = DiscoveryViewModel(read_json('#discovery-catalog, [data-n="discovery-catalog"]'));
   if (root.firstChild) {
     globalThis.Timeless.DOM.hydrate(HomePage({ vm$: model }), root);
   } else {

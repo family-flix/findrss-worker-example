@@ -30,6 +30,7 @@ export class YoutubeRSS extends RSSScript {
       };
       const items = [];
       const seen = new Set();
+      const now = Date.now();
       const walk = function(value) {
         if ((!value || typeof value !== "object")) {
           return undefined;
@@ -48,11 +49,11 @@ export class YoutubeRSS extends RSSScript {
           seen.add(id);
           const metadata = modern?.metadata?.lockupMetadataViewModel;
           const thumbnail = modern?.contentImage?.thumbnailViewModel;
-          const details = (modern ? (
-            (metadata?.metadata?.contentMetadataViewModel?.metadataRows || [])).flatMap(function(row) {
-            return ((row.metadataParts || [])).map(function(part) {
-              return (part.accessibilityLabel || YoutubeRSS.text_of(part.text));
-            });
+          const metadata_parts = (metadata?.metadata?.contentMetadataViewModel?.metadataRows || []).flatMap(function(row) {
+            return row.metadataParts || [];
+          });
+          const details = (modern ? metadata_parts.map(function(part) {
+            return part.accessibilityLabel || YoutubeRSS.text_of(part.text);
           }) : [
             YoutubeRSS.text_of(video.descriptionSnippet),
             YoutubeRSS.text_of(video.viewCountText),
@@ -63,7 +64,14 @@ export class YoutubeRSS extends RSSScript {
           }).map(function(badge) {
             return (badge.thumbnailBadgeViewModel?.text || "");
           }).filter(Boolean).join(" · ") : YoutubeRSS.text_of(video.lengthText));
-          const published = undefined;
+          const time_labels = modern ? metadata_parts.flatMap(function(part) {
+            return [YoutubeRSS.text_of(part.text), part.accessibilityLabel];
+          }) : [YoutubeRSS.text_of(video.publishedTimeText)];
+          const published = time_labels.map(function(label) {
+            return YoutubeRSS.relative_timestamp(label, now);
+          }).find(function(timestamp) {
+            return timestamp !== undefined;
+          });
           const title = (YoutubeRSS.text_of((metadata?.title || video.title)) || id);
           const image = (YoutubeRSS.thumbnail_url((thumbnail?.image?.sources || video.thumbnail?.thumbnails)) || "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg");
           const media_url = "https://www.youtube.com/embed/" + id;
@@ -119,6 +127,28 @@ export class YoutubeRSS extends RSSScript {
     return String((((value?.simpleText ?? value?.content) ?? value?.runs?.map(function(run) {
       return (run.text || "");
     }).join("")) ?? ""));
+  }
+  static relative_timestamp(value, now) {
+    const text = String(value || "").trim().toLowerCase();
+    const english = /(?:^|\s)(\d+)\s+(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s+ago\b/.exec(text);
+    const chinese = /(?:^|[^\d.\-])(\d+)\s*(秒(?:钟|鐘)?|分(?:钟|鐘)|小[时時]|天|[周週]|[个個]?月|年)\s*前/.exec(text);
+    const match = english || chinese;
+    // YouTube 只给相对时间时按抓取时刻估算；月、年分别按 30、365 天计算。
+    const units = {
+      second: 1, minute: 60, hour: 3600, day: 86400, week: 604800, month: 2592000, year: 31536000,
+      秒: 1, 秒钟: 1, 秒鐘: 1, 分钟: 60, 分鐘: 60, 小时: 3600, 小時: 3600,
+      天: 86400, 周: 604800, 週: 604800, 月: 2592000, 个月: 2592000, 個月: 2592000, 年: 31536000,
+    };
+    let seconds;
+    if (match) {
+      seconds = Number(match[1]) * units[match[2].replace(/s$/, "")];
+    } else if (/^(?:just now|刚刚|剛剛)$/.test(text)) {
+      seconds = 0;
+    } else {
+      return undefined;
+    }
+    const timestamp = now - seconds * 1000;
+    return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : undefined;
   }
   static thumbnail_url(sources) {
     const image = ((sources || [])).reduce(function(best, image) {
@@ -216,6 +246,6 @@ export const route = {
   "parameters": {
     "handle": "频道 handle，例如 @goldfishbrain（@ 可省略）"
   },
-  "description": "解析频道 /videos 页面内嵌的视频首屏列表，包含标题、封面、作者、YouTube 播放地址及 content 内嵌播放器。",
+  "description": "解析频道 /videos 页面内嵌的视频首屏列表，包含标题、封面、作者、YouTube 播放地址及 content 内嵌播放器。发布时间根据页面中英文相对时间估算，月、年按 30、365 天计算。",
   handler: ctx => script.run(ctx),
 };

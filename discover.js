@@ -12,6 +12,7 @@ import {
   DISCOVERY_ASSETS_VERSION,
   discovery_style_hash,
   inline_home_styles,
+  resolve_home_metadata,
   render_embedded_home,
 } from "./server/infra/discovery_home.js";
 import { create_api_object_store } from "./server/infra/object_store.js";
@@ -64,7 +65,7 @@ async function home_page(request, env, api_fetch) {
         .replaceAll("/assets/timeless/0.34.0/", "/assets/timeless/0.34.2/");
       if (!html.includes(`name="discovery-embedded-assets" content="${DISCOVERY_ASSETS_VERSION}"`)) {
         const bootstrap =
-          /<script data-n="discovery-catalog" type="application\/json">([^]*?)<\/script>/.exec(
+          /<script (?:id|data-n)="discovery-catalog" type="application\/json">([^]*?)<\/script>/.exec(
             html,
           );
         if (bootstrap)
@@ -85,7 +86,7 @@ async function home_page(request, env, api_fetch) {
       }
       html = render_embedded_home(await response.json(), origin);
     }
-    html = inline_home_styles(html);
+    html = resolve_home_metadata(inline_home_styles(html), url.origin);
     const response = new Response(html, {
       headers: {
         "Content-Type": "text/html; charset=utf-8",

@@ -100,7 +100,11 @@ for (const fixture of content_cases) test('迁移脚本保留内容与媒体：'
     assert.equal(value.kind, 'hot_rank');
     assert.equal('items' in value, false);
   }
-  if (fixture.file === 'youtube') assert.equal(items[0].published, undefined, '相对描述不伪造发布时间');
+  if (fixture.file === 'youtube') {
+    const estimated = Date.parse(items[0].published);
+    assert.ok(Math.abs(Date.now() - 4 * 86400000 - estimated) < 10000, '根据 4天前 估算发布时间');
+    assert.equal(value.updated, items[0].published);
+  }
   if (fixture.file === 'bilibili' && !fixture.route_index) assert.equal(items[0].images.length, 2);
   if (fixture.file === 'bilibili' && fixture.route_index === 1) assert.equal(items[0].enclosure.length, 456);
   if (fixture.file === 'douyin_user') { assert.equal(items[1].images.length, 2); assert.equal(items[0].media_group, true); }

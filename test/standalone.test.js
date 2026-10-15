@@ -101,7 +101,7 @@ test("统一构建取数后 SSR，保留旧品牌 URL、安全策略和取数失
     assert.doesNotMatch(html, /<img[^>]+src="(?:https?:|\/api\/avatar|\/brand|\/platform-icons)/);
     assert.match(html, /https:\/\/feeds\.example\/rss\/build-source/);
     assert.doesNotMatch(html, /<link[^>]*rel="stylesheet"|@import/);
-    const styles = /<style data-n="discovery-stylesheet">([^]*?)<\/style>/.exec(html)[1];
+    const styles = /<style id="discovery-stylesheet">([^]*?)<\/style>/.exec(html)[1];
     assert.match(styles, /box-sizing:border-box/);
     assert.doesNotMatch(styles, /\n|\/\*/);
     assert.doesNotMatch(html, /\r|\n/);

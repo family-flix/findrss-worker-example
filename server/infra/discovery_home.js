@@ -14,7 +14,7 @@ const styles = minify(stylesheet.replace('@import url("/base.css");', base_style
 const compact_template = template.trim().replace(/>\s+</g, "><");
 let style_hash = null;
 // 页头等 HTML 结构变更时递增，旧 R2 产物与边缘缓存共用这一版本。
-export const DISCOVERY_ASSETS_VERSION = "6";
+export const DISCOVERY_ASSETS_VERSION = "7";
 
 export function discovery_style_hash() {
   return style_hash ||= crypto.subtle.digest("SHA-256", new TextEncoder().encode(styles))
@@ -22,8 +22,18 @@ export function discovery_style_hash() {
 }
 
 export function inline_home_styles(html) {
-  return html.replace(/<link data-n="discovery-stylesheet"[^>]*>|<style data-n="discovery-stylesheet">[^]*?<\/style>/,
-    () => `<style data-n="discovery-stylesheet">${styles}</style>`);
+  return html.replace(/<link (?:id|data-n)="discovery-stylesheet"[^>]*>|<style (?:id|data-n)="discovery-stylesheet">[^]*?<\/style>/,
+    () => `<style id="discovery-stylesheet">${styles}</style>`);
+}
+
+export function resolve_home_metadata(html, origin) {
+  const page_url = new URL("/", origin).href;
+  const image_url = new URL("/brand/icon-512.png", origin).href;
+  return html
+    .replace(/<link rel="canonical" href="[^"]*">/, () => `<link rel="canonical" href="${page_url}">`)
+    .replace(/<meta property="og:url" content="[^"]*">/, () => `<meta property="og:url" content="${page_url}">`)
+    .replace(/<meta property="og:image" content="[^"]*">/, () => `<meta property="og:image" content="${image_url}">`)
+    .replace(/<meta name="twitter:image" content="[^"]*">/, () => `<meta name="twitter:image" content="${image_url}">`);
 }
 
 export function render_home_document(catalog, origin) {
@@ -32,12 +42,12 @@ export function render_home_document(catalog, origin) {
   })) };
   const body = renderToString(HomePage({ vm$: DiscoveryViewModel(data) }));
   const bootstrap = JSON.stringify(data).replace(/</g, "\\u003c");
-  return inline_home_styles(compact_template).replace('<main data-n="discovery-root" id="discovery-root"></main>',
-    () => `<main data-n="discovery-root" id="discovery-root">${body}</main>` +
-      `<script data-n="discovery-catalog" type="application/json">${bootstrap}</script>`);
+  return resolve_home_metadata(inline_home_styles(compact_template), origin).replace('<main id="discovery-root"></main>',
+    () => `<main id="discovery-root">${body}</main>` +
+      `<script id="discovery-catalog" type="application/json">${bootstrap}</script>`);
 }
 
 export function render_embedded_home(catalog, origin) {
   return render_home_document(catalog, origin).replace("</head>",
-    `<meta data-n="discovery-embedded-assets" name="discovery-embedded-assets" content="${DISCOVERY_ASSETS_VERSION}"></head>`);
+    `<meta name="discovery-embedded-assets" content="${DISCOVERY_ASSETS_VERSION}"></head>`);
 }

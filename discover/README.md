@@ -36,7 +36,9 @@ site.webmanifest       前台 manifest，兼作后台生成基础
 
 前后台共用 `/brand/*` 资源，广场内嵌其使用的图标和 `/base.css`，Timeless 运行时统一保存在 `../public/assets/timeless/0.34.2/`，浏览器构建适配模块位于 `../public/assets/timeless/compat.js`。广场、后台与 SSR 使用配套的 Timeless 0.34.2；DOM 产物包含 hydration 的 DOM 游标、嵌套占位节点和空/相邻文本修复，Core、DOM、lite 与 SSR 必须同批同步，并同时验证 SSR/hydrate。旧 R2 首页返回时自动升级运行时脚本引用，首页边缘缓存键包含运行时版本。
 
-首页通过同一套 SSR 渲染器生成内容，并将 `style.css` 与其依赖的 `public/base.css` 合并到 `<style data-n="discovery-stylesheet">` 中；返回的 HTML 自带样式和首屏内容，不依赖外部 CSS 或浏览器 JavaScript 才能显示首屏。响应 CSP 使用该内嵌样式的 SHA-256 哈希，不开放 `unsafe-inline`。已有 R2 首页在读取时替换为当前版本的内嵌样式；边缘缓存键包含样式哈希，样式升级不会命中旧样式页面。`/style.css` 和 `/base.css` 仍保留供兼容访问。
+首页通过同一套 SSR 渲染器生成内容，并将 `style.css` 与其依赖的 `public/base.css` 合并到 `<style id="discovery-stylesheet">` 中；返回的 HTML 自带样式和首屏内容，不依赖外部 CSS 或浏览器 JavaScript 才能显示首屏。响应 CSP 使用该内嵌样式的 SHA-256 哈希，不开放 `unsafe-inline`。已有 R2 首页在读取时替换为当前版本的内嵌样式；边缘缓存键包含样式哈希，样式升级不会命中旧样式页面。`/style.css` 和 `/base.css` 仍保留供兼容访问。
+
+HTML 外壳、内嵌样式和目录 JSON 使用 `id` 定位，不生成 `data-n`。页头提供订阅广场标题、描述、canonical、Open Graph 和 Twitter 分享元数据；运行时按访问 origin 输出绝对页面与图片地址，canonical 统一指向 `/`，不含筛选参数、分页参数或订阅接口域名。旧 R2 产物在读取时按页面版本重新渲染，仍兼容旧目录 JSON 的 `data-n` 标记。
 
 
 Logo 与平台 SVG 通过 `icons.js` 转为 data URL。订阅源头像只在目录 JSON 中保留轻量 URL，HTML 不内嵌头像字节；`lazy_img.js` 的 LazyAvatar 复用 LazyImgModel，SSR 显示首字占位，进入视口后才创建图片节点并发起请求，成功渐显，失败保留占位。API 返回的绝对 `/api/avatar/<id>` 或 `/discovery/avatars/<id>` 地址归一到同源 `/api/avatar/<id>?v=...`，保留版本参数；其他头像仅接受 HTTPS 或安全站内路径。构建、R2 发布和 SSR 均不读取头像字节，旧 R2 目录中的 raster data URL 按源 ID 恢复为头像接口并重新发布。构建同时生成可直接打开的 `index.html` 与无损 gzip 产物 `index.html.gz`，并打印原始字节数、压缩字节数和缩减比例。R2 的同一 HTML key 保存 gzip 字节与 `contentEncoding: gzip` 元数据，读取时兼容旧版明文；已有部署会在下一次目录检查时补发压缩产物。首页缓存保存解压后的 HTML，响应按原始客户端的编码能力由 Workers 自动压缩，并带 `Vary: Accept-Encoding`；避免对预压缩字节重复编码，或把压缩正文交给不支持的客户端。源码精简与传输压缩分开执行：共享 SSR 渲染器先去掉静态 HTML 外壳的缩进与换行，并用 CSSO 的浏览器 ESM 版本压缩合并后的 CSS（不重排规则）；`index.html` 本身即为紧凑源码，CSP 哈希基于压缩后的 CSS。SSR 正文、目录 JSON、内嵌图片和 hydration 节点保持原样；gzip 再对精简后的整份 HTML 做无损压缩。旧 R2 产物按渲染版本自动重新生成。

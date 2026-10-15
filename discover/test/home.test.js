@@ -29,7 +29,7 @@ const catalog = { sources: Array.from({ length: 41 }, (_, index) => ({ id: Strin
   snapshot: { saved_at: 100, articles: [{ title: "文章", link: "https://example.com/article", published_at: 100 }] },
 })), tags: ["科技"] };
 const request = (path = "/", init) => new Request("https://discover.example" + path, init);
-const bootstrap_data = html => JSON.parse(/<script data-n="discovery-catalog" type="application\/json">([^]*?)<\/script>/.exec(html)[1]);
+const bootstrap_data = html => JSON.parse(/<script (?:id|data-n)="discovery-catalog" type="application\/json">([^]*?)<\/script>/.exec(html)[1]);
 
 test("广场账号页面与登录、会话、积分接口已移除，旧 Cookie 不触发账号服务", async () => {
   const env = {
@@ -48,7 +48,7 @@ test("广场账号页面与登录、会话、积分接口已移除，旧 Cookie 
 });
 
 function assert_styled_home(html, response) {
-  const styles = /<style data-n="discovery-stylesheet">([^]*?)<\/style>/.exec(html)?.[1];
+  const styles = /<style id="discovery-stylesheet">([^]*?)<\/style>/.exec(html)?.[1];
   assert.ok(styles, "HTML 必须包含内嵌样式");
   assert.match(styles, /--ink-950:#0a0c10/);
   assert.match(styles, /box-sizing:border-box/);
@@ -107,6 +107,24 @@ test("预生成首屏与完整目录，链接有效，bootstrap 转义 script �
   assert.equal(data.tags[0], malicious.tags[0]);
 });
 
+test("首页 HTML 移除 data-n，SSR 输出订阅广场标题、描述与绝对分享地址", () => {
+  const template = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  assert.doesNotMatch(template, /\sdata-n=/);
+  const html = render_home_document(catalog, "https://discover.example");
+  assert.doesNotMatch(html, /\sdata-n=/);
+  assert.match(html, /<html lang="zh-CN">/);
+  const title = html.match(/<title>([^<]+)<\/title>/)?.[1];
+  assert.equal(title, "FindRSS 订阅广场 - RSS / Atom 订阅源搜索与发现");
+  assert.ok(html.includes(`<meta property="og:title" content="${title}">`));
+  assert.ok(html.includes(`<meta name="twitter:title" content="${title}">`));
+  assert.match(html, /<meta name="description" content="[^"]*RSS、Atom[^"]*">/);
+  assert.match(html, /<link rel="canonical" href="https:\/\/discover\.example\/">/);
+  assert.match(html, /<meta property="og:url" content="https:\/\/discover\.example\/">/);
+  assert.match(html, /<meta name="twitter:card" content="summary">/);
+  assert.match(html, /<main id="discovery-root">[^]*源19/);
+  assert.match(html, /<script id="discovery-catalog" type="application\/json">/);
+});
+
 test("源码精简保留正文连续空格、换行和内嵌 JSON，不影响 hydration 文本", () => {
   const title = "第一行  两个空格\n  第二行";
   const data = { sources: [{ ...catalog.sources[0], title, snapshot: { saved_at: 100,
@@ -143,7 +161,7 @@ test("SSR 与旧 R2 头像都按需加载，HTML 不含图片字节且不请求�
       env.API_STORAGE = create_memory_bucket();
       const old_data = { sources: [{ ...data.sources[0], avatar_url: "data:image/png;base64,YQ==" }] };
       const html = render_home_document(data, DISCOVERY_CATALOG_ORIGIN)
-        .replace(/<script data-n="discovery-catalog" type="application\/json">[^]*?<\/script>/,
+        .replace(/<script id="discovery-catalog" type="application\/json">[^]*?<\/script>/,
           '<script data-n="discovery-catalog" type="application/json">' + JSON.stringify(old_data) + '</script>');
       await env.API_STORAGE.put(DISCOVERY_CATALOG_KEY, html);
     }
@@ -152,7 +170,7 @@ test("SSR 与旧 R2 头像都按需加载，HTML 不含图片字节且不请求�
     const html = await response.text();
     assert.doesNotMatch(html, /data:image\/png;base64|127\.0\.0\.1|<img[^>]*n="feed-avatar-image"/);
     assert.match(html, /n="feed-avatar-placeholder"/);
-    assert.match(html, /name="discovery-embedded-assets" content="6"/);
+    assert.match(html, /name="discovery-embedded-assets" content="7"/);
     assert.equal(bootstrap_data(html).sources[0].avatar_url, "/api/avatar/0?v=123");
     assert.equal(calls.length, legacy ? 0 : 1);
   }
@@ -182,7 +200,12 @@ test("首页只读 R2，查询参数与 Cookie 不影响公共产物，按环境
   assert.equal(html.includes("私人查询"), false);
   assert.equal(bootstrap_data(html).sources[0].feed_url, "https://discover.example/rss/demo/0");
   const fixed = await worker.fetch(request("/index.html"), { ...env, FINDRSS_HOSTNAME: "feeds.example:8443" });
-  assert.equal(bootstrap_data(await fixed.text()).sources[0].feed_url, "https://feeds.example:8443/rss/demo/0");
+  const fixed_html = await fixed.text();
+  assert.equal(bootstrap_data(fixed_html).sources[0].feed_url, "https://feeds.example:8443/rss/demo/0");
+  assert.match(fixed_html, /<link rel="canonical" href="https:\/\/discover\.example\/">/);
+  assert.match(fixed_html, /<meta property="og:url" content="https:\/\/discover\.example\/">/);
+  assert.match(fixed_html, /<meta property="og:image" content="https:\/\/discover\.example\/brand\/icon-512\.png">/);
+  assert.match(fixed_html, /<meta name="twitter:image" content="https:\/\/discover\.example\/brand\/icon-512\.png">/);
   const head = await worker.fetch(request("/", { method: "HEAD" }), env);
   assert.equal(head.status, 200); assert.equal(await head.text(), "");
   assert.equal(head.headers.get("Content-Security-Policy"), response.headers.get("Content-Security-Policy"));
@@ -192,7 +215,7 @@ test("已有 R2 首页的外链样式在响应时内嵌，不需要等待目录�
   const bucket = create_memory_bucket();
   const html = render_home_document(catalog, DISCOVERY_CATALOG_ORIGIN)
     .replaceAll("/assets/timeless/0.34.2/", "/assets/timeless/0.34.0/")
-    .replace(/<style data-n="discovery-stylesheet">[^]*?<\/style>/,
+    .replace(/<style id="discovery-stylesheet">[^]*?<\/style>/,
       '<link data-n="discovery-stylesheet" rel="stylesheet" href="./style.css">');
   await bucket.put(DISCOVERY_CATALOG_KEY, html);
   const response = await worker.fetch(request(), { API_STORAGE: bucket });
@@ -207,6 +230,9 @@ test("旧版 R2 首页升级页头，跳过旧版边缘缓存并保留目录", a
   const previous = globalThis.caches;
   const cache_keys = [];
   const old_html = render_home_document(catalog, DISCOVERY_CATALOG_ORIGIN)
+    .replace('id="discovery-catalog"', 'data-n="discovery-catalog"')
+    .replace('id="discovery-stylesheet"', 'data-n="discovery-stylesheet"')
+    .replace(/<title>[^]*?<\/title>/, "<title>旧版标题</title>")
     .replace(/(<a[^>]*n="github-link"[^>]*>)[^]*?(<\/a>)/, "$1GitHub$2")
     .replace("</head>", '<meta data-n="discovery-embedded-assets" name="discovery-embedded-assets" content="5"></head>');
   globalThis.caches = { default: {
@@ -229,9 +255,11 @@ test("旧版 R2 首页升级页头，跳过旧版边缘缓存并保留目录", a
     assert.match(link, /target="_blank"[^>]*rel="noopener noreferrer"/);
     assert.match(link, /aria-label="FindRSS GitHub 仓库（新标签页打开）"/);
     assert.match(link, /<div class="github-icon" n="github-icon" aria-hidden="true"><\/div><\/a>$/);
-    assert.match(html, /name="discovery-embedded-assets" content="6"/);
+    assert.match(html, /name="discovery-embedded-assets" content="7"/);
+    assert.match(html, /<title>FindRSS 订阅广场 - RSS \/ Atom 订阅源搜索与发现<\/title>/);
+    assert.doesNotMatch(html, /\sdata-n=/);
     assert.deepEqual(bootstrap_data(html), bootstrap_data(old_html.replaceAll(DISCOVERY_CATALOG_ORIGIN, "https://discover.example")));
-    assert.equal(new URL(cache_keys[0]).searchParams.get("assets"), "6");
+    assert.equal(new URL(cache_keys[0]).searchParams.get("assets"), "7");
     assert.equal(bucket.calls.get, 1);
   } finally { globalThis.caches = previous; }
 });
