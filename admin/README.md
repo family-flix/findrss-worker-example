@@ -3,7 +3,7 @@
 本目录是纯前端模块，由 `findrss-worker/index.js` 所在的主 Worker 提供页面与接口。统一安装、启动与部署见 [Worker README](../README.md)。
 
 
-完整的部署、初始配置和后台使用说明见[部署指南](../README.md#一键部署到-cloudflare-workers)。
+完整的部署、初始配置和后台使用说明见[安装与配置指南](../docs/setup.md)。
 
 本目录保存管理后台模块，所有页面位于同一个 Worker 的 `/admin/`。
 
