@@ -232,7 +232,16 @@ RSS / Atom 默认需要访问 Token，可通过 `?token=`、`Authorization: Bear
 | 功能 / 源码 | 订阅路由 | 内容与设备方法 |
 | --- | --- | --- |
 | [公众号](examples/rss/wxmp_biz_msg_list.js) | `/wxmp/:account?` | 文章与图集；`wxmp.biz.msg.list` |
-| [视频号](examples/rss/wxchannels_contact_feed_list.js) | `/wxchannels/:account` | 视频、图集、Live Photo 与直播；`wxchannels.contact.feed.list` |
+
+### <img src="public/platform-icons/wxchannels.svg" width="24" height="24" alt="" data-n="rss-wxchannels-icon"> 微信视频号
+
+需连接支持 `wxchannels.contact.feed.list` 方法的设备。`account` 为视频号作者的 `username`（如 `v2_…@finder`），不是昵称。
+
+| 功能 / 源码 | 订阅路由 | 内容 |
+| --- | --- | --- |
+| [作者动态](examples/scripts/rss/wxchannels_contact_feed_list.js) | `/wxchannels/:account` | 视频、图集、Live Photo 与直播，按发布时间倒序输出 |
+
+订阅地址为 `{{hostname}}/rss/wxchannels/<username>`，也可将 `/rss` 替换为 `/atom`。可选 query 参数 `offset` 为分页游标，默认为空；视频条目通过 `enclosure` 提供原始视频地址与 `key` 解密密钥，正文包含播放器 iframe 作为回退。
 
 ### <img src="public/platform-icons/fanqienovel.svg" width="24" height="24" alt="" data-n="rss-fanqienovel-icon"> 番茄小说
 
