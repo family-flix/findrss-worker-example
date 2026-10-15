@@ -69,11 +69,17 @@ export function discovery_feed_defaults(xml, feed_url) {
     tags: [...new Set(categories)].filter((tag) => !/[\r\n]/.test(tag)).slice(0, 12).map((tag) => tag.slice(0, 32)) };
 }
 
-export async function fetch_discovery_avatar(url) {
+export async function fetch_discovery_avatar(url, { local_origin = "", fetch_local } = {}) {
   for (let hop = 0; hop <= 5; hop++) {
-    const target = proxy_target_url(url);
+    let local_url;
+    try {
+      const parsed = new URL(url);
+      if (fetch_local && parsed.origin === local_origin && ["http:", "https:"].includes(parsed.protocol)
+        && !parsed.username && !parsed.password) local_url = parsed.href;
+    } catch {}
+    const target = local_url || proxy_target_url(url);
     if (!target) throw new Error("头像地址被拒绝");
-    const response = await fetch(target, { redirect: "manual", signal: AbortSignal.timeout(15000) });
+    const response = await (local_url ? fetch_local : fetch)(target, { redirect: "manual", signal: AbortSignal.timeout(15000) });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       await response.body?.cancel();
       url = new URL(response.headers.get("Location"), target).href;

@@ -18,7 +18,7 @@ function fixture(file, factory, fetch = async () => Response.json({})) {
   const ui = context.Timeless;
   ui.DOM = {};
   const element = (props, children = []) => ({ props, children });
-  Object.assign(ui, { View: element, Button: element, Select: element, Field: element });
+  Object.assign(ui, { View: element, Button: element, Select: element, Field: element, Img: element });
   context.FindRSSAdminUI = ui;
   context.FindRSSAdminAuth = { fetch };
   context.FindRSSAdminShell = {};
@@ -38,7 +38,7 @@ test("共享分页处理空列表、末页、条数切换和加载中的按钮�
   const total = ui.ref(0), loading = ui.ref(false);
   const model = PaginationModel(ui, { total, loading });
   const view = PaginationView(ui, { model, name: "test-pagination", label: "列表分页" });
-  const controls = view.children.at(-1).children;
+  const controls = view.children.find(child => child.props.attributes.n === "test-pagination-pages").children;
   assert.equal(model.state.value.first, 0);
   assert.equal(model.state.value.last, 0);
   assert.equal(model.state.value.pages, 1);
@@ -162,6 +162,25 @@ test("订阅源列表显示 JSON 导出入口，无数据或加载中禁用", ()
   assert.equal(button.props.disabled.value, true);
   assert.equal(typeof button.props.onClick, "function");
   assert.match(button.props.attributes.title, /导出所有订阅源/);
+});
+
+test("平台筛选 Select 使用数据库 SVG，切换选中平台后图标同步变化", () => {
+  const { context, model, ui } = fixture("discovery.js", "DiscoveryAdminViewModel");
+  const element = (props, children = []) => ({ props, children });
+  Object.assign(ui, { Img: element, Input: element });
+  const first_icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M1 2h3v4H1z"/></svg>';
+  const second_icon = first_icon.replace("M1 2", "M3 4");
+  model.state.platforms.set([{ id: "甲", label: "甲平台", icon: first_icon }, { id: "乙", label: "乙平台", icon: second_icon }]);
+  context.root = vm.runInContext("FilterFormView({ store: model })", context);
+  const field = context.root.children[1];
+  const select = field.children[0];
+  const option = select.props.render_option({ value: "甲", label: "甲平台" });
+  assert.equal(option.children[0].props.src.value, "data:image/svg+xml," + encodeURIComponent(first_icon));
+  const selected = select.props.render_value({ label: "选中平台" });
+  model.methods.set_filter("platform", "甲");
+  assert.equal(selected.children[0].props.src.value, "data:image/svg+xml," + encodeURIComponent(first_icon));
+  model.methods.set_filter("platform", "乙");
+  assert.equal(selected.children[0].props.src.value, "data:image/svg+xml," + encodeURIComponent(second_icon));
 });
 
 test("脚本跨页搜索附加路由，筛选回首页且删除末页不会留下空页", async () => {

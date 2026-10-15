@@ -11,13 +11,16 @@ function fixture() {
     if (path === "/api/sources") return api_fetch("https://api/discovery/sources");
     return env.ASSETS.fetch(request);
   } });
-  const env = { ADMIN_PASSWORD: "admin-secret", ASSETS: { fetch: request => new Response(new URL(request.url).pathname) } };
+  const env = { ADMIN_PASSWORD: "admin-secret", ASSETS: { fetch: request => {
+    const path = new URL(request.url).pathname;
+    return new Response(path, { status: path.startsWith("/admin/") && !path.includes(".") ? 404 : 200 });
+  } } };
   return { worker, env, calls };
 }
 
 test("广场与管理后台共享静态绑定，管理 SPA 深链接留在 /admin/", async () => {
   const { worker, env } = fixture();
-  for (const [path, asset] of [["/", "/index.html"], ["/admin/discovery", "/admin/index.html"], ["/admin/style.css", "/admin/style.css"]]) {
+  for (const [path, asset] of [["/", "/index.html"], ["/admin/discovery", "/admin/index.html"], ["/admin/settings", "/admin/index.html"], ["/admin/settings/models", "/admin/index.html"], ["/admin/style.css", "/admin/style.css"]]) {
     assert.equal(await (await worker.fetch(new Request("https://feeds.example" + path), env)).text(), asset);
   }
   const redirect = await worker.fetch(new Request("https://feeds.example/admin"), env);

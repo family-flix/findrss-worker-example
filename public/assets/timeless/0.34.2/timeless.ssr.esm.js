@@ -1,4 +1,4 @@
-import { isElement } from "@timeless/timeless";
+import { isElement } from "timeless";
 var package_default = {
 	name: "@timeless/timeless-ssr",
 	version: "0.34.2",

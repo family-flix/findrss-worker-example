@@ -9,11 +9,19 @@ import { rss_route_cache_key } from "../../infra/rss_cache.js";
 import { SourceAddressModel } from "../../domain/source_address.js";
 import { ScriptModel } from "../../domain/script.js";
 import { DISCOVERY_CATALOG_KEY } from "../../lib/discovery_catalog.js";
-import { discovery_platforms } from "../../lib/discovery_platform.js";
+import { discovery_platforms, discovery_platform_id } from "../../lib/discovery_platform.js";
 import { RssRoutePatternModel } from "../../domain/rss_route.js";
 import { gzip_html } from "../../infra/discovery_compression.js";
 
 const snapshot_interval = RSS_ROUTE_CACHE_TTL_MS;
+
+function http_origin(value) {
+  try {
+    const url = new URL(value);
+    if (["http:", "https:"].includes(url.protocol) && !url.username && !url.password && url.hostname !== "internal") return url.origin;
+  } catch {}
+  return "";
+}
 
 function snapshot_value(row, include_error = false) {
   let articles = [];
@@ -25,9 +33,9 @@ function snapshot_value(row, include_error = false) {
 
 export class ServiceDiscovery {
   /**
-   * @param {{ repo: Record<string, any>, storage?: any, route_cache?: any, object_store?: any, load_snapshot?: Function, schedule_alarm?: Function, render_catalog?: Function }} deps
+   * @param {{ repo: Record<string, any>, storage?: any, route_cache?: any, object_store?: any, load_snapshot?: Function, schedule_alarm?: Function, render_catalog?: Function, public_origin?: string }} deps
    */
-  constructor({ repo, storage, route_cache = null, object_store = null, load_snapshot = null, schedule_alarm = null, render_catalog = null, statistics = null }) {
+  constructor({ repo, storage, route_cache = null, object_store = null, load_snapshot = null, schedule_alarm = null, render_catalog = null, statistics = null, public_origin = "" }) {
     this.repo = repo;
     this.statistics = statistics;
     this.storage = storage;
@@ -41,6 +49,20 @@ export class ServiceDiscovery {
     this.catalog_retry_at = null;
     this.snapshot_pending = new Map();
     this.snapshot_refreshing = null;
+    this.public_origin = http_origin(public_origin);
+    this.last_public_origin = "";
+  }
+
+  async remember_public_origin(public_url) {
+    const origin = http_origin(public_url);
+    if (this.public_origin || !origin || origin === this.last_public_origin) return;
+    await this.storage?.put("discovery_public_origin", origin);
+    this.last_public_origin = origin;
+  }
+
+  async snapshot_origin(public_url) {
+    return this.public_origin || http_origin(public_url) || this.last_public_origin
+      || http_origin(await this.storage?.get("discovery_public_origin"));
   }
 
   /**
@@ -79,20 +101,20 @@ export class ServiceDiscovery {
       pagination = { total_count, limit, offset, has_more: offset + limit < total_count };
     }
     const rows = this.repo.discovery.list(filters);
-    return { ...pagination, platforms: discovery_platforms(platforms.map(platform => platform.id), rows), sources: rows.map(row => this.source_value(row, include_disabled)), tags: [...new Set(this.repo.discovery.list_tags().flatMap((row) => DiscoverySourceModel.fromRow(row).discovery_tags()))] }
+    return { ...pagination, platforms: discovery_platforms(platforms, rows), sources: rows.map(row => this.source_value(row, include_disabled)), tags: [...new Set(this.repo.discovery.list_tags().flatMap((row) => DiscoverySourceModel.fromRow(row).discovery_tags()))] }
   }
 
   platforms() {
-    const scripts = (this.repo.scripts?.list() || []).map(row => ScriptModel.fromRow(row));
-    return discovery_platforms(scripts.flatMap(script => script.routes.map(route => route.platform)),
+    return discovery_platforms(this.repo.platforms?.list() || [],
       this.repo.discovery.list_types?.() || []);
   }
 
   validate_source(body) {
     const pathname = SourceAddressModel(body.feed_url).route_pathname;
-    const route = (this.repo.scripts?.list() || []).flatMap(row => ScriptModel.fromRow(row).routes)
+    const route = (this.repo.scripts?.list() || []).map(row => ScriptModel.fromRow(row))
+      .filter(script => script.status === "published").flatMap(script => script.routes)
       .find(entry => RssRoutePatternModel.fromValue(entry.path)?.match(pathname));
-    return DiscoverySourceModel.validate(body, new Set([...DiscoverySourceModel.TYPES, ...this.platforms().map(platform => platform.id)]), route?.platform || "website");
+    return DiscoverySourceModel.validate(body, new Set([...DiscoverySourceModel.TYPES, ...this.platforms().map(platform => platform.id)]), discovery_platform_id(route?.platform));
   }
 
   source_value(row, include_disabled = false) {
@@ -112,14 +134,14 @@ export class ServiceDiscovery {
   public_catalog() {
     const rows = this.repo.discovery.list({ include_disabled: false, limit: DiscoverySourceModel.MAX_SOURCES, offset: 0 });
     const sources = rows.map(row => this.source_value(row));
-    return { sources, platforms: discovery_platforms(this.platforms().map(platform => platform.id), rows), tags: [...new Set(sources.flatMap(source => source.tags))] };
+    return { sources, platforms: discovery_platforms(this.platforms(), rows), tags: [...new Set(sources.flatMap(source => source.tags))] };
   }
 
   async ensure_catalog() {
     if (!this.object_store || !this.render_catalog || this.catalog_checked && this.catalog_retry_at === null) return;
     let needed;
     try {
-      needed = await this.storage.get("discovery_catalog_dirty") || !await this.object_store.head(DISCOVERY_CATALOG_KEY) || !await this.storage.get("discovery_catalog_lazy_avatars_v1");
+      needed = await this.storage.get("discovery_catalog_dirty") || !await this.object_store.head(DISCOVERY_CATALOG_KEY) || !await this.storage.get("discovery_catalog_lazy_avatars_v1") || !await this.storage.get("discovery_catalog_platforms_v1");
     } catch (error) {
       this.catalog_retry_at = Date.now() + 60000;
       await this.schedule_alarm?.();
@@ -142,6 +164,7 @@ export class ServiceDiscovery {
           { httpMetadata: { contentType: "text/html; charset=utf-8", contentEncoding: "gzip" } });
         await this.storage.delete("discovery_catalog_dirty");
         await this.storage.put("discovery_catalog_lazy_avatars_v1", true);
+        await this.storage.put("discovery_catalog_platforms_v1", true);
         this.catalog_checked = true;
         this.catalog_retry_at = null;
       } catch (error) {
@@ -194,7 +217,7 @@ export class ServiceDiscovery {
     return this.snapshot_refreshing;
   }
 
-  async refresh_discovery_snapshot(source_id) {
+  async refresh_discovery_snapshot(source_id, public_url = "") {
     if (this.snapshot_pending.has(source_id)) return this.snapshot_pending.get(source_id);
     const source = this.repo.discovery.find(source_id);
     if (!source) throw do_error("discovery source not found", 404);
@@ -203,7 +226,8 @@ export class ServiceDiscovery {
     if (!source.require_token) this.repo.discovery.snapshot_attempt(source_id, source.feed_url, Date.now());
     const pending = (async () => {
       try {
-        const articles = await Promise.resolve().then(() => this.load_snapshot(source));
+        const origin = await this.snapshot_origin(public_url);
+        const articles = await this.load_snapshot(source, origin);
         // 抓取期间编辑 / 删除源时，不能把旧地址的内容重新发布到新卡片。
         const current = this.repo.discovery.find(source_id);
         if (current?.feed_url === source.feed_url && !current.require_token) {

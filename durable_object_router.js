@@ -269,7 +269,7 @@ async function dispatch(request, app) {
   }
   const discovery_snapshot_match = url.pathname.match(/^\/_admin\/discovery\/sources\/([A-Za-z0-9-]+)\/snapshot$/);
   if (discovery_snapshot_match && request.method === "POST") {
-    return app.discovery.refresh_discovery_snapshot(discovery_snapshot_match[1]);
+    return app.discovery.refresh_discovery_snapshot(discovery_snapshot_match[1], request.headers.get("X-Feed-Public-URL"));
   }
   const discovery_source_avatar_match = url.pathname.match(
     /^\/_admin\/discovery\/sources\/([A-Za-z0-9-]+)\/avatar$/,
@@ -336,6 +336,10 @@ async function dispatch(request, app) {
   }
   if (url.pathname === "/_admin/scripts/debug" && request.method === "POST") {
     return app.scripts.debug_script(request);
+  }
+  const preview_asset_match = url.pathname.match(/^\/_admin\/scripts\/preview-assets\/([a-f0-9-]{36})$/);
+  if (preview_asset_match && ["GET", "HEAD"].includes(request.method)) {
+    return app.scripts.preview_script_asset(request, preview_asset_match[1]);
   }
   if (url.pathname === "/_admin/scripts/routes" && request.method === "POST") {
     return app.scripts.preview_script_routes(request);

@@ -1,4 +1,5 @@
 /** RSS */
+export const platform = {"name": "YouTube", "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\" viewBox=\"0 0 32 32\" data-n=\"youtube-platform-icon\"><rect width=\"32\" height=\"22\" y=\"5\" rx=\"5\" fill=\"#ff0033\" data-n=\"youtube-icon-rect-1\" /><path fill=\"#fff\" d=\"m13 12 8 4-8 5z\" data-n=\"youtube-icon-path-2\" /></svg>"};
 import { utils } from '@findrss/util';
 export class YoutubeRSS extends RSSScript {
   async fetch(ctx) {

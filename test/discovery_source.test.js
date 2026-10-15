@@ -29,7 +29,7 @@ const value_of = (overrides = {}) => DiscoverySourceModel.fromRow(source_row(ove
 
 test("DiscoverySourceModel.TYPES 支持平台目录", () => {
   assert.deepEqual([...DiscoverySourceModel.TYPES].sort(), ["douyin", "wxchannels", "wxmp", "zhihu", "x", "xiaohongshu", "bilibili", "weibo", "kuaishou", "youtube", "instagram", "telegram", "website"].sort());
-  assert.equal(SourceAvatarModel.MAX_BYTES, 256 * 1024);
+  assert.equal(SourceAvatarModel.MAX_BYTES, 5 * 1024 * 1024);
 });
 
 test("DiscoverySourceModel.infer_type 按 route 首段判定来源", () => {

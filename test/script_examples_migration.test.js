@@ -35,10 +35,10 @@ test('所有脚本按用户的 RSS 标记分类，保持路由并采用全局基
     assert.equal(compiled.metadata.kind, kind, name);
     const old = await compile_script_module(original);
     assert.equal(old.error, '', name);
-    const paths = name === "zhihu_user.js" ? [
-      "/zhihu/people/:user_id", "/zhihu/people/:user_id/answers", "/zhihu/people/:user_id/zvideos",
-      "/zhihu/people/:user_id/asks", "/zhihu/people/:user_id/posts", "/zhihu/column/:column_id",
-      "/zhihu/people/:user_id/pins", "/zhihu/collection/:collection_id",
+    const paths = name === "zhihu.js" ? [
+      "/zhihu/people/:user", "/zhihu/people/:user/answers", "/zhihu/people/:user/zvideos",
+      "/zhihu/people/:user/asks", "/zhihu/people/:user/posts", "/zhihu/column/:column_id",
+      "/zhihu/people/:user/pins", "/zhihu/collection/:collection_id",
     ] : old.metadata.routes.map(route => route.path);
     assert.deepEqual(compiled.metadata.routes.map(route => route.path), paths, name);
   }
@@ -57,7 +57,7 @@ test('已保存的 70 个旧示例缺少 kind 和顶部标记时仍按用户分�
   assert.deepEqual(counts, { hot: 53, rss: 17 });
 });
 
-for (const fixture of content_cases) test('迁移脚本保留内容与媒体：' + fixture.file + (fixture.route_index ? (fixture.file === 'zhihu_user' ? ' 回答' : ' 正文代理') : ''), async t => {
+for (const fixture of content_cases) test('迁移脚本保留内容与媒体：' + fixture.file + (fixture.route_index ? (fixture.file === 'zhihu' ? ' 回答' : fixture.file === 'bilibili' ? ' 视频' : ' 正文代理') : ''), async t => {
   const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });
   const kind = fixture.kind || 'rss';
@@ -101,8 +101,8 @@ for (const fixture of content_cases) test('迁移脚本保留内容与媒体：'
     assert.equal('items' in value, false);
   }
   if (fixture.file === 'youtube') assert.equal(items[0].published, undefined, '相对描述不伪造发布时间');
-  if (fixture.file === 'bilibili_user_dynamic') assert.equal(items[0].images.length, 2);
-  if (fixture.file === 'bilibili_user_video') assert.equal(items[0].enclosure.length, 456);
+  if (fixture.file === 'bilibili' && !fixture.route_index) assert.equal(items[0].images.length, 2);
+  if (fixture.file === 'bilibili' && fixture.route_index === 1) assert.equal(items[0].enclosure.length, 456);
   if (fixture.file === 'douyin_user') { assert.equal(items[1].images.length, 2); assert.equal(items[0].media_group, true); }
   if (fixture.file === 'wxchannels_contact_feed_list') { assert.equal(items[0].live_photos[0].key, 'photo-key'); assert.equal(items[1].enclosure.key, 'key-1'); }
   if (fixture.file === 'wxmp_biz_msg_list') assert.equal(items[0].live_photos[0].key, 'live-key');

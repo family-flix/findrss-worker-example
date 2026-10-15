@@ -1,5 +1,5 @@
 import { PaginationView } from "../components/pagination.js";
-import { discovery_platform_label, discovery_platform_icon } from "../components/discovery_platform.js";
+import { discovery_platform_label, discovery_platform_icon_url } from "../components/discovery_platform.js";
 import { is_template_feed_url, is_managed_rss_url, DiscoveryAdminViewModel } from "./discovery.model.js";
 
 const Timeless = window.FindRSSAdminUI;
@@ -19,7 +19,7 @@ const { Badge, Button, CopyButton, Dialog, For, FilePicker, FeedAddressEditor, F
 
 const avatar_accept = "image/png,image/jpeg,image/webp,image/gif";
 
-const avatar_max_bytes = 256 * 1024;
+const avatar_max_bytes = 5 * 1024 * 1024;
 
 const filter_status_options = [
   { value: "all", label: "全部" },
@@ -30,6 +30,16 @@ const filter_status_options = [
 /** @param {unknown} value */
 function source_value(value) {
   return value && value.__is_ref ? value.value : value;
+}
+
+function PlatformOptionView(id, platforms, label) {
+  return View({ class: "inline-flex items-center", style: { gap: "6px" } }, [
+    Img({ class: "block flex-none object-fit-contain", style: { width: "18px", height: "18px" },
+      src: combine({ id: typeof id === "string" ? ref(id) : id, platforms },
+        values => discovery_platform_icon_url(values.id, values.platforms)),
+      attributes: { alt: "", "aria-hidden": "true", width: "18", height: "18" } }),
+    label,
+  ]);
 }
 
 function format_time(value) {
@@ -321,6 +331,8 @@ function SourceFormView({ store: vm$ }) {
               value: vm$.state.draft_source_type,
               options: vm$.state.platform_options,
               attributes: { n: "discovery-source-type-select", "aria-label": "平台" },
+              render_option: ({ value, label }) => PlatformOptionView(value, vm$.state.platforms, label),
+              render_value: ({ label }) => PlatformOptionView(vm$.state.draft_source_type, vm$.state.platforms, label),
               onChange(event) {
                 vm$.methods.set_draft("source_type", event.target.value);
               },
@@ -427,6 +439,8 @@ function FilterFormView({ store }) {
           value: vm$.state.filter_platform,
           options: vm$.state.filter_platform_options,
           attributes: { n: "discovery-source-filter-platform-select", "aria-label": "筛选平台" },
+          render_option: ({ value, label }) => PlatformOptionView(value, vm$.state.platforms, label),
+          render_value: ({ label }) => PlatformOptionView(vm$.state.filter_platform, vm$.state.platforms, label),
           onChange(event) {
             vm$.methods.set_filter("platform", event.target.value);
           },
@@ -517,7 +531,7 @@ function SourceCardView({ store, source }) {
                   Img({ class: "box-border block flex-none object-fit-contain", style: {
                     "width": "16px",
                     "height": "16px"
-                  }, src: "/platform-icons/" + discovery_platform_icon(source.source_type) + ".svg",
+                  }, src: computed(vm$.state.platforms, platforms => discovery_platform_icon_url(source.source_type, platforms)),
                     attributes: { n: "discovery-source-card-type-icon", alt: "", "aria-hidden": "true", width: "16", height: "16" } }),
                   computed(vm$.state.platforms, platforms => discovery_platform_label(source.source_type, platforms)),
                 ],

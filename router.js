@@ -4,7 +4,8 @@ export function create_worker({ api, admin, discovery }) {
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
       const path = url.pathname;
-      env = { ...env, FINDRSS_HOSTNAME: env.FINDRSS_HOSTNAME || url.origin };
+      env = { ...env, FINDRSS_HOSTNAME: String(env.FINDRSS_HOSTNAME ?? "").trim()
+        || String(env.FEED_HOSTNAME ?? "").trim() || url.origin };
       const api_fetch = (input, init) => {
         return api.fetch(new Request(input, init), env, ctx);
       };

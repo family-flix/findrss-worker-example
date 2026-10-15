@@ -45,10 +45,7 @@ export function AISettingsModel({ store }) {
         values.find(
           (entry) =>
             entry.preset_id === preset.id && entry.type === preset.type,
-        ) ||
-        (preset.id === "workers_ai"
-          ? values.find((entry) => entry.type === "workers_ai")
-          : null);
+        );
       if (provider) assigned.add(provider.id);
       return {
         id: `preset:${preset.id}`,

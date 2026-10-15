@@ -10,14 +10,14 @@ const root = fileURLToPath(new URL("../", import.meta.url));
  * Worker 侧基座。lite 是自包含的单文件 ESM（158KB，零 import），比核心 UMD 小
  * 3.4 倍，但导出同一套原语（含 `isElement`，SSR 产物内部要用）。
  */
-export const LITE_ESM = join(root, "public/assets/timeless/0.34.2/lite/index.esm.js");
+export const LITE_ESM = join(root, "public/assets/timeless/0.34.2/timeless.lite.esm.js");
 /**
- * `renderToString`。它内部 import 的 `@timeless/timeless` 也必须指到上面那份 lite：
+ * `renderToString`。它内部 import 的 `timeless` 也必须指到上面那份 lite：
  * SSR 与 hydrate 混用两套原语是 hydration 不匹配的典型来源。
  */
-export const SSR_ESM = join(root, "public/assets/timeless/0.34.2/ssr/timeless.ssr.esm.js");
+export const SSR_ESM = join(root, "public/assets/timeless/0.34.2/timeless.ssr.esm.js");
 /** 浏览器侧 shim：re-export `window.Timeless`，核心不进 bundle（DOM 运行时本来就要单独加载）。 */
-export const BROWSER_PLATFORM = join(root, "vendor/timeless/platform_browser.js");
+export const BROWSER_PLATFORM = join(root, "public/assets/timeless/compat.js");
 
 /**
  * @param {{ platform: string, ssr?: boolean }} options
@@ -27,7 +27,6 @@ export function timeless_plugin({ platform, ssr = false }) {
     name: "timeless",
     setup(build) {
       build.onResolve({ filter: /^timeless$/ }, () => ({ path: platform }));
-      build.onResolve({ filter: /^@timeless\/timeless$/ }, () => ({ path: LITE_ESM }));
       if (ssr) {
         build.onResolve({ filter: /^timeless-ssr$/ }, () => ({ path: SSR_ESM }));
       }

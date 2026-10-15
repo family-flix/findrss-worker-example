@@ -272,7 +272,7 @@ test("草稿调试输入仅含路径，提交时固定添加 /debug，展示完�
   assert.match(child_texts(find_node(root, "script-debug-summary")).join(""), /HTTP 200.*已调用设备/);
   const tabs = find_node(root, "script-debug-tabs");
   assert.deepEqual(tabs.props.items.map(({ id, label }) => [id, label]),
-    [["output", "输出"], ["context", "上下文"], ["logs", "日志"]]);
+    [["output", "输出"], ["context", "上下文"], ["logs", "日志"], ["xml", "XML预览"], ["feed", "卡片预览"]]);
   const panels = tabs.props.items.map(item => item.content[0]);
   assert.ok(find_node(panels[0], "script-debug-output-content"));
   assert.equal(find_node(panels[0], "script-debug-request-content"), undefined);
@@ -285,8 +285,88 @@ test("草稿调试输入仅含路径，提交时固定添加 /debug，展示完�
   assert.equal(calls.at(-1).body.request_url, "/debug/sample/copied?q=3", "粘贴调试地址不会重复添加前缀");
 });
 
+test("RSS Debug 格式化 XML 代码并渲染频道和分页列表，响应变化更新解析结果", async t => {
+  const original = fetch_handler;
+  t.after(() => { fetch_handler = original; });
+  let body = JSON.stringify({
+    title: "预览频道", link: "https://example.com/", description: "频道说明", image: "https://example.com/icon.png",
+    items: Array.from({ length: 23 }, (_, index) => ({ title: `文章 ${index + 1}`, link: `/post/${index + 1}`, description: `<p>摘要 ${index + 1}</p>` })),
+  });
+  fetch_handler = async () => Response.json({ status: 200, rss_debug: {
+    phase: "ok", output: body, request: { public_origin: "https://worker.example", pathname: "/debug/test", query: { limit: "23" } },
+  } });
+  const root = build_page();
+  t.after(() => find_node(root, "scripts-content").props.onUnmounted());
+  assert.match(child_texts(find_node(root, "script-feed-empty")).join(""), /运行调试/);
+  assert.equal(find_node(root, "script-debug-xml-content"), undefined);
+  await find_node(root, "script-debug-run-button").props.onClick();
+  const xml = find_node(root, "script-debug-xml-content");
+  assert.equal(xml.props.readOnly, true);
+  assert.equal(xml.props.mode, "application/xml");
+  assert.match(xml.props.value.value, /<rss [\s\S]*\n\s+<channel>/);
+  assert.match(xml.props.value.value, /https:\/\/worker.example\/rss\/test\?limit=23/);
+  assert.equal(child_texts(find_node(root, "script-feed-channel-title")).join(""), "预览频道");
+  assert.equal(find_node(root, "script-feed-icon").props.src.value, "https://example.com/icon.png");
+  assert.equal(walk(root).filter(node => node.props?.attributes?.n === "script-feed-item").length, 20);
+  assert.equal(find_node(root, "script-feed-item-title").props.href, "https://example.com/post/1");
+  assert.equal(child_texts(find_node(root, "script-feed-item-summary")).join(""), "摘要 1");
+  assert.equal(child_texts(find_node(root, "script-feed-count")).join(""), "RSS · 23 条内容");
+  const feed_panel = find_node(root, "script-debug-tabs").props.items.find(item => item.id === "feed").content[0];
+  find_node(feed_panel, "script-feed-pagination-next").props.onClick();
+  assert.equal(child_texts(find_node(feed_panel, "script-feed-item-title")).join(""), "文章 21");
+  assert.equal(walk(feed_panel).filter(node => node.props?.attributes?.n === "script-feed-item").length, 3);
+
+  body = '<rss version="2.0"><channel><title>更新频道</title><item><title>更新文章</title></item></channel></rss>';
+  await find_node(root, "script-debug-run-button").props.onClick();
+  assert.equal(child_texts(find_node(root, "script-feed-channel-title")).join(""), "更新频道");
+  assert.equal(child_texts(find_node(root, "script-feed-item-title")).join(""), "更新文章");
+  assert.match(find_node(root, "script-debug-xml-content").props.value.value, /更新文章/);
+  body = "<rss><channel></rss>";
+  await find_node(root, "script-debug-run-button").props.onClick();
+  assert.equal(find_node(root, "script-feed-channel"), undefined);
+  assert.match(child_texts(find_node(root, "script-feed-error")).join(""), /XML/);
+});
+
+test("草稿图片预览使用 Debug 会话，相同输出再次调试也更新图标和封面入口", async t => {
+  const original = fetch_handler;
+  t.after(() => { fetch_handler = original; });
+  const origin = "https://feeds.example";
+  const icon = origin + "/img/draft?url=https%3A%2F%2Fcdn.example%2Ficon.png";
+  const cover = origin + "/img/draft?url=https%3A%2F%2Fcdn.example%2Fcover.png";
+  const output = JSON.stringify({ title: "草稿", link: "https://example.com/", image: icon,
+    items: [{ title: "文章", link: "https://example.com/1", image: cover }] });
+  let id = "11111111-1111-4111-8111-111111111111";
+  fetch_handler = async () => Response.json({ status: 200, rss_debug: { phase: "ok", output,
+    request: { public_origin: origin, pathname: "/debug/draft" }, preview_assets: {
+      endpoint: "/admin/api/scripts/preview-assets/" + id, public_origin: origin, paths: ["/img/draft"],
+    } } });
+  const root = build_page();
+  t.after(() => find_node(root, "scripts-content").props.onUnmounted());
+  for (const next of [id, "22222222-2222-4222-8222-222222222222"]) {
+    id = next;
+    await find_node(root, "script-debug-run-button").props.onClick();
+    const endpoint = "/admin/api/scripts/preview-assets/" + id;
+    assert.equal(find_node(root, "script-feed-icon").props.src.value, endpoint + "?url=" + encodeURIComponent(icon));
+    assert.equal(find_node(root, "script-feed-item-image").props.src, endpoint + "?url=" + encodeURIComponent(cover));
+    const xml = find_node(root, "script-debug-xml-content").props.value.value;
+    assert.ok(xml.includes(icon));
+    assert.equal(xml.includes(endpoint), false);
+  }
+});
+
+test("预览 Tabs 按正在编辑的草稿 kind 显示，Hot 不显示 XML 和卡片预览", () => {
+  const root = build_page([{ ...script_fixture, id: "hot", kind: "hot" }], false);
+  find_node(root, "script-type-tabs").props.onChange("hot");
+  find_node(root, "script-create-button").props.onClick();
+  assert.deepEqual(find_node(root, "script-debug-tabs").props.items.map(item => item.id), ["output", "context", "logs"]);
+  find_node(root, "script-cancel-button").props.onClick();
+  find_node(root, "script-edit-button").props.onClick();
+  find_node(root, "script-type-tabs").props.onChange("rss");
+  assert.deepEqual(find_node(root, "script-debug-tabs").props.items.map(item => item.id), ["output", "context", "logs"]);
+});
+
 for (const editing of [false, true]) {
-  test(`${editing ? "编辑" : "新增"}起点多路由逐行调试，草稿重新编译保留各自输入并同步路由增删`, async t => {
+  test(`${editing ? "编辑" : "新增"}起点多路由使用一级 Tab，草稿重新编译保留各自输入并同步路由增删`, async t => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const old_fetch = fetch_handler, old_routes = routes_handler;
     t.after(() => { fetch_handler = old_fetch; routes_handler = old_routes; });
@@ -308,25 +388,34 @@ for (const editing of [false, true]) {
     const root = build_page({ ...script_fixture, id: "qidian", script: source, routes }, false);
     t.after(() => find_node(root, "scripts-content").props.onUnmounted());
     const rows = () => walk(root).filter(node => node.props?.attributes?.n === "script-debug-route-row");
+    const tabs = () => find_node(root, "script-debug-route-tabs");
+    const select = path => tabs().props.onChange(path);
     find_node(root, editing ? "script-edit-button" : "script-create-button").props.onClick();
     const code = find_node(root, "script-code-textarea");
     if (!editing) code.props.onInput({ target: { value: source } });
     t.mock.timers.tick(400);
     await new Promise(setImmediate);
-    assert.equal(rows().length, 2);
-    assert.deepEqual(rows().map(row => find_node(row, "script-debug-url").props.value.value),
-      routes.map(route => route.example));
+    assert.equal(rows().length, 1);
+    assert.deepEqual(tabs().props.items.map(item => [item.id, item.label]), routes.map(route => [route.path, route.name]));
+    assert.equal(find_node(root, "script-debug-url").props.value.value, routes[0].example);
     assert.equal(find_node(root, "script-debug-url-field"), undefined);
     for (const row of rows()) assert.deepEqual(row.children.map(node => node.props.attributes.n),
       ["script-debug-url", "script-debug-run-button"]);
-    const input = find_node(rows()[1], "script-debug-url");
+    await find_node(root, "script-debug-run-button").props.onClick();
+    select(routes[1].path);
+    assert.equal(find_node(root, "script-debug-url").props.value.value, routes[1].example);
+    assert.equal(find_node(root, "script-debug-output-content"), undefined);
+    const input = find_node(root, "script-debug-url");
     input.props.onInput({ target: { value: "/qidian/chapter/123/456?full=1" } });
-    await find_node(rows()[0], "script-debug-run-button").props.onClick();
-    await find_node(rows()[1], "script-debug-run-button").props.onClick();
+    await find_node(root, "script-debug-run-button").props.onClick();
     assert.deepEqual(requests.map(body => body.request_url), [
       "/debug/qidian/book/1036526469", "/debug/qidian/chapter/123/456?full=1",
     ]);
     assert.ok(requests.every(body => body.script === source && body.route === (editing ? "qidian" : "")));
+    select(routes[0].path);
+    assert.equal(find_node(root, "script-debug-output-content").props.value.value, "/debug/qidian/book/1036526469");
+    select(routes[1].path);
+    assert.equal(find_node(root, "script-debug-output-content").props.value.value, "/debug/qidian/chapter/123/456?full=1");
     find_node(root, "script-live-debug").props.onChange(true);
     t.mock.timers.tick(800);
     await new Promise(setImmediate);
@@ -337,9 +426,12 @@ for (const editing of [false, true]) {
     code.props.onInput({ target: { value: source } });
     t.mock.timers.tick(400);
     await new Promise(setImmediate);
-    assert.equal(rows().length, 2);
-    assert.deepEqual(rows().map(row => find_node(row, "script-debug-url").props.value.value),
-      ["/qidian/chapter/123/456?full=1", "/qidian/latest"]);
+    assert.equal(rows().length, 1);
+    assert.deepEqual(tabs().props.items.map(item => item.id), routes.map(route => route.path));
+    assert.equal(find_node(root, "script-debug-url").props.value.value, "/qidian/chapter/123/456?full=1");
+    select(routes[1].path);
+    assert.equal(find_node(root, "script-debug-url").props.value.value, "/qidian/latest");
+    select(routes[0].path);
     input.props.onInput({ target: { value: "" } });
     code.props.onInput({ target: { value: source } });
     t.mock.timers.tick(400);
@@ -348,6 +440,127 @@ for (const editing of [false, true]) {
     assert.equal(find_node(rows()[0], "script-debug-run-button").props.disabled.value, true);
   });
 }
+
+test("RSS 和图片代理各自调试并保留输出、上下文与日志，修改源码后两条路由都标记过期", async t => {
+  const old_fetch = fetch_handler;
+  t.after(() => { fetch_handler = old_fetch; });
+  const routes = [
+    { path: "/feed/:id", name: "RSS 订阅", example: "/feed/123" },
+    { path: "/img/draft", name: "图片代理", example: "/img/draft?url=https%3A%2F%2Fcdn.example%2Fcover.png", allowed_hosts: ["cdn.example"] },
+  ];
+  const calls = [];
+  fetch_handler = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push(body);
+    const image = body.request_url.startsWith("/debug/img/");
+    return Response.json({ status: 200, rss_debug: {
+      phase: "ok", elapsed_ms: 1,
+      output: JSON.stringify(image ? { url: "https://cdn.example/cover.png", headers: { Referer: "https://example.com/" } }
+        : { title: "RSS 频道", link: "https://example.com/", items: [] }),
+      request: { pathname: body.request_url }, lines: [{ level: "info", text: image ? "图片日志" : "RSS 日志" }],
+    } });
+  };
+  const root = build_page({ ...script_fixture, id: "multi", routes }, false);
+  t.after(() => find_node(root, "scripts-content").props.onUnmounted());
+  find_node(root, "script-edit-button").props.onClick();
+  find_node(root, "script-live-debug").props.onChange(false);
+  const tabs = () => find_node(root, "script-debug-route-tabs");
+  const select = path => tabs().props.onChange(path);
+  assert.deepEqual(tabs().props.items.map(item => item.label), ["RSS 订阅", "图片代理"]);
+  assert.ok(find_node(tabs().props.items[0].content, "script-debug-tabs"), "结果 Tab 位于路由 Tab 内");
+  await find_node(root, "script-debug-run-button").props.onClick();
+  assert.equal(child_texts(find_node(root, "script-feed-channel-title")).join(""), "RSS 频道");
+  select(routes[1].path);
+  assert.deepEqual(find_node(root, "script-debug-tabs").props.items.map(item => item.id), ["output", "context", "logs"]);
+  assert.equal(find_node(root, "script-debug-output-content"), undefined);
+  await find_node(root, "script-debug-run-button").props.onClick();
+  assert.match(find_node(root, "script-debug-output-content").props.value.value, /cdn.example/);
+  assert.match(child_texts(find_node(root, "script-debug-logs-content")).join(""), /图片日志/);
+  assert.match(child_texts(find_node(root, "script-debug-request-content")).join(""), /img\/draft/);
+  select(routes[0].path);
+  assert.equal(child_texts(find_node(root, "script-feed-channel-title")).join(""), "RSS 频道");
+  assert.match(child_texts(find_node(root, "script-debug-logs-content")).join(""), /RSS 日志/);
+  assert.doesNotMatch(child_texts(find_node(root, "script-debug-request-content")).join(""), /img\/draft/);
+  find_node(root, "script-code-textarea").props.onInput({ target: { value: "修改过的完整源码" } });
+  assert.match(child_texts(find_node(root, "script-debug-summary")).join(""), /等待重新调试/);
+  select(routes[1].path);
+  assert.match(child_texts(find_node(root, "script-debug-summary")).join(""), /等待重新调试/);
+  assert.equal(calls.length, 2, "切换 Tab 不会额外执行请求");
+});
+
+test("切换路由会取消原调试，迟到结果不能覆盖当前路由；删除路由后不会保留其旧结果", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const old_fetch = fetch_handler, old_routes = routes_handler;
+  t.after(() => { fetch_handler = old_fetch; routes_handler = old_routes; });
+  let routes = [
+    { path: "/feed", name: "RSS", example: "/feed" },
+    { path: "/img/test", name: "图片", example: "/img/test?url=x", image_proxy: true },
+  ];
+  const pending = [];
+  routes_handler = async () => Response.json({ routes });
+  fetch_handler = (_url, options) => new Promise(resolve => pending.push({ resolve, signal: options.signal }));
+  const root = build_page({ ...script_fixture, id: "multi", routes }, false);
+  t.after(() => find_node(root, "scripts-content").props.onUnmounted());
+  find_node(root, "script-edit-button").props.onClick();
+  find_node(root, "script-live-debug").props.onChange(false);
+  const tabs = () => find_node(root, "script-debug-route-tabs");
+  const select = path => tabs().props.onChange(path);
+  const first = find_node(root, "script-debug-run-button").props.onClick();
+  select("/img/test");
+  assert.equal(pending[0].signal.aborted, true);
+  assert.equal(find_node(root, "script-debug-run-button").props.disabled.value, undefined);
+  const second = find_node(root, "script-debug-run-button").props.onClick();
+  pending[1].resolve(Response.json({ status: 200, rss_debug: { phase: "ok", output: '"当前图片结果"' } }));
+  await second;
+  pending[0].resolve(Response.json({ status: 502, rss_debug: { error_text: "迟到的 RSS 错误" } }));
+  await first;
+  assert.equal(find_node(root, "script-debug-output-content").props.value.value, "当前图片结果");
+  assert.equal(find_node(root, "script-debug-stack-content"), undefined);
+  select("/feed");
+  assert.equal(find_node(root, "script-debug-output-content"), undefined);
+  const edit = value => find_node(root, "script-code-textarea").props.onInput({ target: { value } });
+  const removed = routes[1];
+  routes = [routes[0]];
+  edit("删除图片路由"); t.mock.timers.tick(400); await new Promise(setImmediate);
+  assert.equal(tabs().props.items.length, 1);
+  routes = [...routes, removed];
+  edit("重新添加图片路由"); t.mock.timers.tick(400); await new Promise(setImmediate);
+  select(removed.path);
+  assert.equal(find_node(root, "script-debug-output-content"), undefined, "重新添加的路由从未调试状态开始");
+});
+
+test("二级 Tab 随 handler 返回的 kind 更新，分别渲染图片、MP4 和音频控件", async t => {
+  const original = fetch_handler;
+  t.after(() => { fetch_handler = original; });
+  let returned;
+  const endpoint = "/admin/api/scripts/preview-assets/11111111-1111-4111-8111-111111111111";
+  fetch_handler = async () => Response.json({ status: 200, rss_debug: { phase: "ok", output: JSON.stringify(returned),
+    preview_assets: { endpoint, media_url: endpoint + "?media=1" } } });
+  const root = build_page();
+  t.after(() => find_node(root, "scripts-content").props.onUnmounted());
+  for (const [kind, node_name] of [["img", "image"], ["video", "video"], ["audio", "audio"]]) {
+    returned = { kind, url: "https://cdn.example/file" };
+    await find_node(root, "script-debug-run-button").props.onClick();
+    assert.deepEqual(find_node(root, "script-debug-tabs").props.items.map(item => [item.id, item.label]),
+      [["output", "输出"], ["context", "上下文"], ["logs", "日志"], ["preview", "预览"]]);
+    const media = find_node(root, "script-debug-media-" + node_name);
+    assert.ok(media, kind);
+    if (kind === "img") assert.equal(media.props.src.value, endpoint + "?media=1");
+    else {
+      assert.equal(media.props.as, kind);
+      assert.equal(media.props.attributes.src.value, endpoint + "?media=1");
+      assert.equal(media.props.attributes.controls, "");
+      assert.equal(media.props.attributes.preload, "metadata");
+      assert.equal(media.props.attributes.autoplay, undefined);
+    }
+    assert.equal(find_node(root, "script-feed-preview"), undefined);
+  }
+  returned = { kind: "rss", title: "RSS", link: "https://example.com/", items: [] };
+  await find_node(root, "script-debug-run-button").props.onClick();
+  assert.deepEqual(find_node(root, "script-debug-tabs").props.items.map(item => item.id), ["output", "context", "logs", "xml", "feed"]);
+  assert.equal(find_node(root, "script-debug-media-preview"), undefined);
+  assert.equal(child_texts(find_node(root, "script-feed-channel-title")).join(""), "RSS");
+});
 
 test("草稿路由编译失败保留输入，迟到的元数据不会覆盖新草稿或重新打开的表单", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });

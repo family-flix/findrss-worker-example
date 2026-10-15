@@ -10,9 +10,7 @@
       "/",
       "/index.html",
       "/admin",
-      "/admin/auth/*",
-      "/admin/api",
-      "/admin/api/*",
+      "/admin/*",
       "/api/*",
       "/discovery/*",
       "/health",
@@ -30,14 +28,14 @@
     ]
   },
   "alias": {
-    "timeless": "./public/assets/timeless/0.34.2/lite/index.esm.js",
-    "timeless-ssr": "./public/assets/timeless/0.34.2/ssr/timeless.ssr.esm.js",
-    "@timeless/timeless": "./public/assets/timeless/0.34.2/lite/index.esm.js"
+    "timeless": "./public/assets/timeless/0.34.2/timeless.lite.esm.js",
+    "timeless-ssr": "./public/assets/timeless/0.34.2/timeless.ssr.esm.js"
   },
   "compatibility_date": "2026-05-03",
   // 留空时按请求 origin 展开订阅源模板；可通过 FINDRSS_HOSTNAME 指定固定域名。
   "vars": {
-    "FINDRSS_HOSTNAME": ""
+    "FINDRSS_HOSTNAME": "",
+    "FEED_HOSTNAME": ""
   },
   // 脚本执行日志的结构化 console 输出（emit_script_log）需要 Workers Logs 才能查询。
   "observability": {

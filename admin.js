@@ -6,6 +6,7 @@ import { json_response } from "./server/lib/http.js";
  * @typedef {Object} Env
  * @property {Fetcher} ASSETS
  * @property {string} [ADMIN_PASSWORD]
+ * @property {string} [ADMIN_DEV_IMPORT_MAP_HASH]
  */
 
 const admin_username = "admin";
@@ -200,7 +201,16 @@ async function proxy_admin_api(request, env, api_fetch) {
   return api_fetch(new Request(request, { headers }));
 }
 
-const secure_response = (response) => secure_site_response(response, "admin");
+function secure_response(response, env) {
+  const secured = secure_site_response(response, "admin");
+  const hash = env.ADMIN_DEV_IMPORT_MAP_HASH;
+  if (secured.status !== 101 && typeof hash === "string" && /^[A-Za-z0-9+/]{43}=$/.test(hash)) {
+    secured.headers.set("Content-Security-Policy", secured.headers.get("Content-Security-Policy")
+      .replace("script-src 'self'", `script-src 'self' 'sha256-${hash}'`));
+    secured.headers.set("Cache-Control", "no-store");
+  }
+  return secured;
+}
 
 export async function handle_admin_request(request, env, api_fetch) {
   const pathname = new URL(request.url).pathname;
@@ -218,24 +228,19 @@ export async function handle_admin_request(request, env, api_fetch) {
     response = json_response({ error: "not found" }, 404);
   } else {
     const url = new URL(request.url);
-    if (
-      [
-        "/admin/",
-        "/admin/overview",
-        "/admin/tokens",
-        "/admin/devices",
-        "/admin/messages",
-        "/admin/users",
-        "/admin/activity",
-        "/admin/discovery",
-        "/admin/scripts",
-        "/admin/cookies",
-        "/admin/redemptions",
-      ].includes(pathname)
-    )
-      url.pathname = "/admin/index.html";
     if (pathname === "/admin/login") url.pathname = "/admin/login.html";
     response = await env.ASSETS.fetch(new Request(url, request));
+    if (
+      response.status === 404 &&
+      ["GET", "HEAD"].includes(request.method) &&
+      pathname.startsWith("/admin/") &&
+      pathname !== "/admin/auth" && !pathname.startsWith("/admin/auth/") &&
+      pathname !== "/admin/login" &&
+      !pathname.split("/").some(segment => segment.includes("."))
+    ) {
+      url.pathname = "/admin/index.html";
+      response = await env.ASSETS.fetch(new Request(url, request));
+    }
   }
-  return secure_response(response);
+  return secure_response(response, env);
 }

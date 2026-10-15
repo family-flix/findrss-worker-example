@@ -7,9 +7,9 @@
 
 本目录保存管理后台模块，所有页面位于同一个 Worker 的 `/admin/`。
 
-业务源码按 `pages/`、`components/` 拆分；每个页面使用 `pages/xx.js`（View）与 `pages/xx.model.js`（Model）配对，模型维护状态、请求、校验和业务行为，视图只渲染并调用模型方法。`store.js` 集中声明路由、生成导航菜单并实现认证初始化、会话检查、登录、退出和鉴权请求，`app.js` 是浏览器入口，测试在 `__tests__/`。根构建从 `public/` 复制公共资源，`scripts/build_admin_ui.js` 从本目录构建后台文件，直接写入同一个临时资源目录；不再单独复制或构建 `admin/dist/`。两站共享品牌与 manifest 基础配置。后台 `style.css` 只声明单属性原子类；具体尺寸在页面的 `style` 中维护，响应式原子类通过显式传入的 CSS 变量调整同一个属性。组件与页面统一使用原子类；焦点、禁用和 ARIA 状态使用单节点原子变体，禁止业务类和父子选择器。共用组件的内部布局通过 `bodyProps`、`headerProps`、`listProps` 等参数传入；CodeMirror 通过 `wrapperStyle` 设置尺寸。
+业务源码按 `pages/`、`components/` 拆分；每个页面使用 `pages/xx.js`（View）与 `pages/xx.model.js`（Model）配对，模型维护状态、请求、校验和业务行为，视图只渲染并调用模型方法。`store.js` 集中声明路由、生成导航菜单并实现认证初始化、会话检查、登录、退出和鉴权请求，`app.js` 是浏览器入口，测试在 `__tests__/`。根构建从 `public/` 复制公共资源，生产构建由 `scripts/build_admin_ui.js` 打包后台文件，开发模式由 `scripts/admin_dev.js` 准备 ES modules，两者直接写入同一个临时资源目录；不再单独复制或构建 `admin/dist/`。两站共享品牌与 manifest 基础配置。后台 `style.css` 只声明单属性原子类；具体尺寸在页面的 `style` 中维护，响应式原子类通过显式传入的 CSS 变量调整同一个属性。组件与页面统一使用原子类；焦点、禁用和 ARIA 状态使用单节点原子变体，禁止业务类和父子选择器。共用组件的内部布局通过 `bodyProps`、`headerProps`、`listProps` 等参数传入；CodeMirror 通过 `wrapperStyle` 设置尺寸。
 
-管理界面直接复用 `components/frui/` 的按钮、表单控件、Card 和 PageHeader，组件源码、主题 token 和 SVG 图标注册表全部保存在本目录；`style.css` 保存单属性原子类，`components/frui/tokens.css` 提供主题变量，构建后输出为 `frui.css`。`admin/components/ui.js` 只接入宿主和兼容后台的事件形状，不引入阅读器账号或业务状态；`scripts/build_admin_ui.js` 用 esbuild 打包本目录源码，根构建从 `public/assets/timeless/0.34.2/` 提供共用的 Timeless Core/DOM ，依赖由统一项目安装。修改组件后重新构建 admin 即可同步，产物不依赖运行时访问阅读器站点。
+管理界面直接复用 `components/frui/` 的按钮、表单控件、Card 和 PageHeader，组件源码、主题 token 和 SVG 图标注册表全部保存在本目录；`style.css` 保存单属性原子类，`components/frui/tokens.css` 提供主题变量，输出为 `frui.css`。`admin/components/ui.js` 只接入宿主和兼容后台的事件形状，不引入阅读器账号或业务状态。`npm run dev` 启动时仅预打包 npm 依赖，通过 import map 和原生 ES modules 加载后台源码；开发入口确保共享 UI 就绪后加载页面，源码保存后原样同步到静态资源目录，刷新页面即可生效。开发资源禁用缓存，import map 仅通过开发专用 CSP 哈希放行；监听会随开发服务退出而关闭。`npm run build` / 部署仍由 `scripts/build_admin_ui.js` 使用 esbuild 打包源码。两种模式共用 `public/assets/timeless/0.34.2/` 的 Timeless Core/DOM，依赖由统一项目安装，产物不依赖运行时访问阅读器站点。
 
 ## 请求结构
 
@@ -40,7 +40,7 @@ Browser
 
 “Token”子页面（`/admin/tokens`）调用 `/admin/api/access-tokens`，创建、立即过期和移除用户凭证。Token 可以留空自动生成，也可以手动指定；用途或使用人可选填，还可成对填写 email + password 作为 Reader 的第二种登录方式。用户 Token 明文只在创建响应中出现一次并仅保存 SHA-256 摘要；密码使用随机盐和 PBKDF2-SHA-256 保存。
 
-“设备管理 → Device Token”通过 `/admin/api/device-tokens` 管理多个设备接入凭证，支持名称、备注、有效期、最近使用时间和撤销。列表默认脱敏，管理员点击「查看明文」时才通过独立的 `POST /admin/api/device-tokens/:id/reveal` 接口获取解密结果，30 秒自动隐藏；撤销删除密文并断开关联连接。旧 `DEVICE_TOKEN` 自动导入，部署时不再必填。设备 Token 与用户 Token 分开保存；设备 Token 的加密副本依赖部署的 `ADMIN_PASSWORD`，轮换后台密码后应创建新设备 Token 替换原凭证。
+“设置 → Device Token”和“设备管理 → Device Token”共用管理界面，通过 `/admin/api/device-tokens` 管理多个设备接入凭证，支持名称、备注、有效期、最近使用时间和撤销。创建成功后自动获取明文并在弹窗展示，支持复制；关闭弹窗或离开设置页清除弹窗明文。列表默认脱敏，管理员点击「查看明文」时才通过独立的 `POST /admin/api/device-tokens/:id/reveal` 接口获取解密结果，30 秒自动隐藏；撤销删除密文并断开关联连接。旧 `DEVICE_TOKEN` 自动导入，部署时不再必填。设备 Token 与用户 Token 分开保存；设备 Token 的加密副本依赖部署的 `ADMIN_PASSWORD`，轮换后台密码后应创建新设备 Token 替换原凭证。
 
 `/admin/overview` 每 5 秒读取 `/admin/api/overview` 的 `statistics` 快照：脚本、订阅源、Cookie 数量，去重后的有效路由声明、平台和标签数量，以及每个订阅源的累计调用次数与总次数。数量包含停用项；平台沿用目录规则，包含默认「网站」，标签包含旧分类对应的标签。快照只读元数据，不回传脚本正文或 Cookie 值。
 
@@ -55,5 +55,19 @@ Browser
 后台测试集中在 `admin/__tests__/`，由项目根目录的 `npm test` 统一运行。原子样式检查递归覆盖本目录下的页面、组件与图标；主题变量和编辑器依赖 CSS 单独构建。组件通过 `atomic_classes` 合并默认原子类与调用方覆盖，同一属性保留最后一个类。
 
 脚本管理页面使用 `pages/script.js`、`pages/script.model.js` 和 `pages/script.default.js`，统一承载 RSS、热榜等脚本类型；页面地址为 `/admin/scripts`。
+
+Debug 以路由作为一级 Tab，每条路由独立保留调试地址、输出、上下文和日志，切换时取消尚未完成的请求。二级 Tab 根据 handler 实际返回值的 `kind` 更新：`rss` 提供「XML 预览 / 卡片预览」，`img`、`video`、`audio` 提供「预览」，分别渲染图片、MP4 视频和音频播放器；各类型均保留「输出 / 上下文 / 日志」。修改源码或版本会把各条路由的旧结果标记为待重新调试，实时调试跟随当前选中的路由。
+
+Debug 的卡片预览支持同一草稿内尚未发布的图片代理路由（需声明 `allowed_hosts`）。成功调试后，图标和封面通过管理员专用的短期预览入口读取，使用本次 Debug 的源码和 Cookie 授权；XML 与原始输出保留正式地址。预览不会发布脚本或写入公开图片缓存。草稿快照在当前 DO 内最多保留 16 份、有效期 15 分钟；过期、被淘汰或服务重启后，重新运行 Debug 即可。
+
+媒体 handler 返回 `{ kind: "img" | "video" | "audio", url: "https://…", headers?: { Referer: "https://…" } }`，也可用 `Result.Ok(...)` 包装。公开直链可省略 `allowed_hosts`，浏览器直接读取；需要代理或自定义请求头时，在路由声明 `allowed_hosts`，Debug 使用受管理员会话保护的本次返回值快照，视频和音频支持 Range、HEAD 和流式读取。媒体返回值的 `kind` 与模块级 `export const kind = "rss" | "hot"` 的脚本分类不同。
+
+“设置”进入 `/admin/settings`，可配置大模型厂商、API Key、模型与参数，并测试连接、保存或恢复默认。设置页和 XiaoxunAgent 的“大模型设置”共用 `pages/settings.ai.component.js` 编辑器与 `components/ai_settings.js` 状态逻辑，读写同一个 `/admin/api/scripts/agent/settings` 接口，连接测试使用 `/admin/api/scripts/agent/test`。读取失败时提供重试，加载完成前不显示编辑表单；离开设置页丢弃未保存草稿和临时密钥，返回时重新读取最新配置。
+
+`/admin/*` 先交给 Worker 处理；GET / HEAD 页面路径在静态资源不存在时回退 `/admin/index.html`，由前端路由决定页面。API、认证路径、静态文件与写请求不走页面回退。SPA 入口使用 `/admin/` 下的绝对资源地址，直接访问嵌套路由或带尾斜杠的路径也能正确加载脚本和样式。
+
+厂商仅支持 OpenAI 兼容接口，已移除 Workers AI 绑定模式；旧配置中的 Workers AI 不再显示或参与对话选择。厂商 SVG logo 从 `findrss/xiaoxunrss/public/provider-logos/` 同步到本项目，彩色图标使用 `Img`，单色图标使用随主题变色的 CSS 遮罩。
+
+创建脚本时可把 RSSHub 的 GitHub 源码链接交给 XiaoxunAgent，例如 `https://github.com/DIYgod/RSSHub/blob/master/lib/routes/005/index.tsx`，并要求转换。助手通过 `fetch_rsshub_route_js` 读取真实源码，按需继续读取依赖，分析参数、列表、详情与时间逻辑，再转换为 FindRSS QuickJS 支持的 JavaScript，编译校验后更新当前草稿。填写实际调试链接后可继续运行 Debug；保存与发布由管理员操作。抓取仅支持 `DIYgod/RSSHub` 仓库 `lib/` 下的 JS/TS/TSX/JSON 源码，单文件最多 64KB，返回依赖候选链接，不执行上游源码。
 
 登录页使用 Timeless `Form` 和 `Img` 原语，通过 `onSubmit` 提交，不使用 `View({ as })`。内置 0.34.2 核心与 DOM 运行时同步自本地 Timeless 构建。脚本编辑已移除 Mock 上下文、模板、抽屉与模拟测试，只保留真实请求调试。

@@ -2,27 +2,6 @@
 // Provider presets used by the admin model settings.
 const catalog = [
   {
-    id: "workers_ai",
-    name: "Workers AI",
-    type: "workers_ai",
-    base_url: "",
-    api_key_secret_name: "",
-    docs_url: "https://developers.cloudflare.com/workers-ai/models/",
-    note: "使用部署自带的 AI 绑定，无需 API 密钥。",
-    models: [
-      {
-        id: "gpt-oss-120b",
-        name: "GPT OSS 120B",
-        model: "@cf/openai/gpt-oss-120b",
-      },
-      {
-        id: "gpt-oss-20b",
-        name: "GPT OSS 20B",
-        model: "@cf/openai/gpt-oss-20b",
-      },
-    ],
-  },
-  {
     id: "openai",
     name: "OpenAI",
     type: "openai_compat",
@@ -241,10 +220,7 @@ export function add_ai_preset(providers, preset_id, limit = 16) {
     providers.find(
       (provider) =>
         provider.preset_id === preset_id && provider.type === added.type,
-    ) ||
-    (preset_id === "workers_ai"
-      ? providers.find((provider) => provider.type === "workers_ai")
-      : null);
+    );
   if (!existing) {
     if (
       providers.length >= limit ||
@@ -271,24 +247,10 @@ export function add_ai_preset(providers, preset_id, limit = 16) {
 
 // Populate missing built-ins for new and upgraded accounts; retain explicit user overrides.
 export function ensure_ai_presets(providers) {
-  let result = providers;
+  let result = providers.filter(provider => provider.type === "openai_compat");
   for (const preset of AI_PROVIDER_PRESETS) {
-    const exists =
-      result.some(
-        (provider) =>
-          provider.preset_id === preset.id && provider.type === preset.type,
-      ) ||
-      (preset.id === "workers_ai" &&
-        result.some((provider) => provider.type === "workers_ai"));
-    if (
-      !exists ||
-      (preset.id === "workers_ai" &&
-        result.some(
-          (provider) => provider.type === "workers_ai" && !provider.preset_id,
-        ))
-    ) {
-      result = add_ai_preset(result, preset.id);
-    }
+    const exists = result.some(provider => provider.preset_id === preset.id && provider.type === preset.type);
+    if (!exists) result = add_ai_preset(result, preset.id);
   }
   return result;
 }

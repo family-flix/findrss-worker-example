@@ -3009,6 +3009,39 @@ function DeviceTokensView(model) {
       attributes: { n: "device-token-management" },
     },
     [
+      Show({
+        when: computed(model.created, value => Boolean(value.token)),
+        ok: () => Dialog({
+          open: true,
+          title: "Device Token 已创建",
+          description: "复制此 Token 用于设备连接。关闭弹窗后，也可在列表中再次查看明文。",
+          attributes: { n: "device-token-created-dialog", "aria-label": "Device Token 已创建" },
+          onClose: model.close_created,
+          footer: [
+            Timeless.CopyButton({
+              label: "复制设备 Token",
+              attributes: { n: "copy-created-device-token-button" },
+              onCopy: model.copy_created,
+              onError: model.copy_error,
+            }),
+            Button({
+              attributes: { n: "close-created-device-token-button" },
+              onClick: model.close_created,
+            }, ["关闭"]),
+          ],
+        }, [
+          View({ class: "box-border text-muted break-anywhere", attributes: { n: "device-token-created-name" } }, [
+            computed(model.created, value => value.name),
+          ]),
+          View({ as: "code", class: "box-border block break-anywhere padding-space-3 bg-surface-raised rounded-card", attributes: { n: "device-token-created-value" } }, [
+            computed(model.created, value => value.token),
+          ]),
+          Show({
+            when: computed(model.error, Boolean),
+            ok: () => View({ class: "box-border text-danger", attributes: { n: "device-token-created-error", role: "alert" } }, [model.error]),
+          }),
+        ]),
+      }),
       View(
         {
           class:
@@ -3502,4 +3535,4 @@ function TokensPage() {
   return DashboardApplicationView("tokens", true);
 }
 
-export { OverviewPage, DevicesPage, TokensPage };
+export { OverviewPage, DevicesPage, TokensPage, DeviceTokensView };

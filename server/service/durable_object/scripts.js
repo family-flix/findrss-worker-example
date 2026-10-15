@@ -14,6 +14,9 @@ import { RssRouteSelectionModel } from "../../domain/rss_route_selection.js";
 import { SourceAddressModel } from "../../domain/source_address.js";
 import { ScriptCookiePermissionsModel } from "../../domain/script_cookie_permissions.js";
 import { ScriptCookieAccess } from "../../infra/script_cookie_access.js";
+import { ScriptPreviewAssets } from "../../infra/script_preview_assets.js";
+import { image_proxy_descriptor } from "../../lib/image_proxy.js";
+import { script_output } from "../../lib/script_output.js";
 import { sha256_hex } from "../../lib/crypto.js";
 import { decrypt_cookie_push } from "../../infra/cookie_push.js";
 import { LogThrottle } from "../../infra/log_throttle.js";
@@ -85,6 +88,7 @@ export class ServiceScript {
     this.message_listeners = new Set();
     this.public_registered = new Set();
     this.public_refreshing = null;
+    this.preview_assets = new ScriptPreviewAssets();
     /** 失败日志闸门：同一路由 + 相位 + query 在一个窗口内只记一行。 */
     this.failure_log_throttle = new LogThrottle(
       SCRIPT_FAILURE_LOG_WINDOW_MS,
@@ -94,6 +98,16 @@ export class ServiceScript {
   record_log(record) {
     if (!record_script_log(this.repo, record) || record.status !== "error") return;
     for (const send of this.message_listeners) send({ type: "messages.changed" });
+  }
+
+  resolve_public_origin(request) {
+    if (this.public_origin) return this.public_origin;
+    try {
+      const url = new URL(request.headers.get("X-Feed-Public-URL") || request.url);
+      if (["http:", "https:"].includes(url.protocol) && !url.username && !url.password
+        && url.hostname !== "internal") return url.origin;
+    } catch {}
+    return "";
   }
 
   delete_read_messages(url) {
@@ -336,7 +350,7 @@ export class ServiceScript {
     const script_id = crypto.randomUUID();
     if (grant_id) this.repo.rss_cookie_grants.bind(grant_id, script_id);
     const now = Date.now();
-    this.repo.scripts.insert({
+    this.save_script(() => this.repo.scripts.insert({
       route: script_id,
       title: ScriptModel.truncate_name(metadata.name),
       path,
@@ -345,7 +359,7 @@ export class ServiceScript {
       enabled: body.enabled === false ? 0 : 1,
       created_at: now,
       updated_at: now,
-    });
+    }), metadata, now, status === "published");
     this.invalidate_routes();
     const row = this.repo.scripts.find(script_id);
     await this.app.discovery?.publish_catalog();
@@ -434,19 +448,30 @@ export class ServiceScript {
     if (!current || current.script !== existing.script || current.metadata_json !== existing.metadata_json || current.enabled !== existing.enabled) {
       throw do_error("脚本已更新，请重新打开后发布或保存", 409);
     }
-    this.repo.scripts.update({
+    const now = Date.now();
+    this.save_script(() => this.repo.scripts.update({
       route: script_id,
       title: ScriptModel.truncate_name(metadata.name),
       path,
       metadata_json: JSON.stringify(metadata),
       script,
       enabled: body.enabled === undefined ? Number(existing.enabled) : body.enabled === true ? 1 : 0,
-      updated_at: Date.now(),
-    });
+      updated_at: now,
+    }), metadata, now, status === "published" && (body.status === "published" || script !== existing.script
+      || metadata.published_version !== previous_metadata.published_version));
     this.invalidate_routes();
     const row = this.repo.scripts.find(script_id);
     await this.app.discovery?.publish_catalog();
     return { script: ScriptModel.fromRow(row).toValue() }
+  }
+
+  save_script(write, metadata, now, collect) {
+    const save = () => {
+      write();
+      if (collect) this.repo.platforms?.collect(metadata, now);
+    };
+    if (this.ports.transaction) this.ports.transaction(save);
+    else save();
   }
 
   assert_route_paths(metadata, script_id = "") {
@@ -554,7 +579,8 @@ export class ServiceScript {
     if (!parsed.ok) throw do_error(parsed.error.message, parsed.error.status);
     const compiled = await compile_script_module(parsed.model.script);
     if (compiled.error || !compiled.metadata) throw do_error("脚本校验失败：" + compiled.error, 400);
-    return { routes: compiled.metadata.routes.map(({ path, name, example }) => ({ path, name, example })) };
+    return { routes: compiled.metadata.routes.map(({ path, name, example, allowed_hosts }) => ({ path, name, example,
+      ...(allowed_hosts?.length ? { image_proxy: true } : {}) })) };
   }
 
   async debug_script(request) {
@@ -587,7 +613,7 @@ export class ServiceScript {
       debug.error_text = "脚本校验失败：" + compiled.error;
       return finish(400, debug.error_text);
     }
-    const selected = draft.resolve(compiled.metadata.routes, this.public_origin);
+    const selected = draft.resolve(compiled.metadata.routes, this.resolve_public_origin(request));
     if (!selected.ok) {
       debug.phase = "metadata";
       debug.error_text = selected.error.message;
@@ -617,6 +643,12 @@ export class ServiceScript {
       const result = await execute_script(draft.script, metadata, invoke_impl, selected.context, [], "", cookie_access);
       Object.assign(debug, { phase: "ok", output: result.output, lines: result.lines,
         cookie_accesses: result.cookie_accesses || [], upstream_requests: result.upstream_requests || [] });
+      const returned = JSON.parse(result.output);
+      const rendered = script_output(metadata, returned);
+      debug.preview_assets = this.preview_assets.create({ script: draft.script,
+        metadata: { ...compiled.metadata, version }, script_id: draft.route, grant_id,
+        media: rendered.descriptor ? { route: metadata, descriptor: rendered.descriptor, kind: rendered.kind || "img" } : null,
+        public_origin: selected.context.public_origin });
       return finish(200);
     } catch (failure) {
       cookie_access?.assert_grant();
@@ -627,6 +659,49 @@ export class ServiceScript {
       const status = invoke_failure instanceof ScriptInvokeError
         ? (invoke_failure.status === 504 ? 503 : invoke_failure.status) : failure.problem?.status || 502;
       return finish(status, fields.message);
+    }
+  }
+
+  async preview_script_asset(request, id) {
+    const snapshot = this.preview_assets.get(id);
+    if (!snapshot) throw do_error("媒体预览已过期，请重新运行 Debug", 410);
+    if (new URL(request.url).searchParams.get("media") === "1") {
+      if (!snapshot.media) throw do_error("本次 Debug 没有媒体输出", 404);
+      const access = await this.cookie_access(snapshot.script, snapshot.metadata, snapshot.script_id, snapshot.grant_id, true);
+      access?.assert_grant();
+      return snapshot.media;
+    }
+    let target;
+    try {
+      const value = new URL(request.url).searchParams.get("url");
+      if (!value || value.length > 8192) throw new Error();
+      target = new URL(value);
+      if (target.origin !== snapshot.public_origin || target.username || target.password) throw new Error();
+    } catch { throw do_error("资源地址与本次草稿预览不匹配", 400); }
+    const selected = snapshot.metadata.routes.map(metadata => ({ metadata,
+      match: RssRoutePatternModel.fromValue(metadata.path)?.match(target.pathname) }))
+      .filter(entry => entry.match).sort((left, right) => right.match.score - left.match.score)[0];
+    if (!selected?.metadata.allowed_hosts?.length) throw do_error("草稿中没有匹配的媒体代理路由", 404);
+    target.searchParams.delete("token");
+    const metadata = { ...selected.metadata, debug_request: true };
+    const cookie_access = await this.cookie_access(snapshot.script, snapshot.metadata,
+      snapshot.script_id, snapshot.grant_id, true);
+    try {
+      const result = await execute_script(snapshot.script, metadata,
+        spec => this.script_invoke("", spec, "", ""), {
+          method: "GET", pathname: target.pathname, params: selected.match.params,
+          query: Object.fromEntries(target.searchParams), public_origin: snapshot.public_origin,
+        }, [], "", cookie_access);
+      const returned = JSON.parse(result.output);
+      return { route: metadata, descriptor: image_proxy_descriptor(metadata, returned),
+        ...(["img", "video", "audio"].includes(returned.kind) ? { kind: returned.kind } : {}) };
+    } catch (error) {
+      cookie_access?.assert_grant();
+      const fields = script_failure_fields(error);
+      this.record_log({ route: snapshot.script_id, path: metadata.path, source: "test",
+        status: "error", phase: fields.phase, level: "error", message: fields.message,
+        error_text: fields.error_text, lines: fields.lines });
+      throw do_error("预览媒体执行失败：" + fields.message, 502);
     }
   }
 
@@ -711,7 +786,7 @@ export class ServiceScript {
         {
           method: "GET",
           pathname: example_url.pathname,
-          public_origin: this.public_origin,
+          public_origin: this.resolve_public_origin(request),
           params: path_match.params,
           query,
         },
@@ -914,7 +989,7 @@ export class ServiceScript {
     }
     const cookie_access = await this.cookie_access(String(selected.row.script), metadata, String(selected.row.route), metadata.cookie_grant_id || "");
     const request_context = {
-      public_origin: this.public_origin,
+      public_origin: this.resolve_public_origin(request),
       method: "GET",
       pathname: format === "raw" ? route_pathname : "/" + (debug_request ? "debug" : format) + route_pathname,
       params: selected.path_match.params,

@@ -23,8 +23,8 @@ export function ScriptAgentSettingsModel(state = {}) {
   const providers = Object.freeze((state.providers || []).map(freeze_provider));
   return Object.freeze({ base_url, model, api_key, has_api_key, providers,
     toValue: () => ({ base_url, model, has_api_key,
-      configured: providers.length ? providers.some(p => p.enabled && (p.type === "workers_ai" ? state.workers_ai_available : p.api_key_configured) && p.models.some(m => m.enabled && m.model)) : Boolean(base_url && model && has_api_key),
-      providers: providers.map(copy_provider), workers_ai_available: Boolean(state.workers_ai_available) }),
+      configured: providers.length ? providers.some(p => p.enabled && p.api_key_configured && p.models.some(m => m.enabled && m.model)) : Boolean(base_url && model && has_api_key),
+      providers: providers.map(copy_provider) }),
   });
 }
 ScriptAgentSettingsModel.of = ScriptAgentSettingsModel;
@@ -36,7 +36,7 @@ ScriptAgentSettingsModel.fromBody = body => {
   for (const raw of body.providers) {
     if (!raw || !identifier(raw.id) || seen.has(raw.id)) return fail("厂商标识无效或重复");
     seen.add(raw.id);
-    if (!["openai_compat", "workers_ai"].includes(raw.type)) return fail("不支持的模型厂商类型");
+    if (raw.type !== "openai_compat") return fail("不支持的模型厂商类型");
     const base_url = typeof raw.base_url === "string" ? raw.base_url.trim() : "";
     if (base_url && !safe_endpoint(base_url)) return fail("接口地址必须是公开 HTTP(S) 地址，不能包含 query 或 fragment");
     if (raw.api_key_secret_name && !/^READER_AI_[A-Z0-9_]{1,64}$/.test(raw.api_key_secret_name)) return fail("无效的模型环境密钥名称");
@@ -109,4 +109,6 @@ ScriptAgentRunRequestModel.TOOLS = Object.freeze([
     type: "object", properties: { script: { type: "string", description: "完整 ES 模块代码，导出 route 或 routes" }, revision: { type: "integer", description: "最近读取的草稿版本" } }, required: ["script", "revision"], additionalProperties: false } },
   { name: "debug_script_draft", description: "按工作区实际链接运行当前草稿，读取输出、日志、上游请求与错误。会使用真实抓取和在线设备。", parameters: {
     type: "object", properties: { revision: { type: "integer", description: "当前草稿版本" } }, required: ["revision"], additionalProperties: false } },
+  { name: "fetch_rsshub_route_js", description: "读取 DIYgod/RSSHub 路由及依赖源码，分析并转换为 FindRSS JavaScript。接受 GitHub blob 或 raw 的 JS/TS/TSX/JSON 文件链接，返回源码与依赖候选链接；不执行源码。", parameters: {
+    type: "object", properties: { url: { type: "string", description: "例如 https://github.com/DIYgod/RSSHub/blob/master/lib/routes/005/index.tsx" } }, required: ["url"], additionalProperties: false } },
 ]);

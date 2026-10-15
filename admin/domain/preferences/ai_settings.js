@@ -4,9 +4,7 @@ import { ai_provider_preset } from "./ai_presets.js";
 //
 // 纯模块，可在 node --test 下直接覆盖。
 //
-// 两个 provider：
-//   - `workers_ai`：走 `env.AI` binding（`infra/ai/workers_ai.js`），不需要密钥；
-//   - `openai_compat`：走用户给的 base_url + Bearer 密钥（`infra/ai/openai_compat.js`）。
+// `openai_compat`：走用户给的 base_url + Bearer 密钥。
 //
 // **安全硬点**：领域设置不接收密钥真值；账号 API Key 由 service 加密保存。
 // 部署凭证仍只存 `api_key_secret_name`（secret 的名字），真值在
@@ -17,14 +15,14 @@ import { ai_provider_preset } from "./ai_presets.js";
 const READER_AI_SECRET_PREFIX = "READER_AI_";
 
 /** 支持的 provider。第一项是默认。 */
-export const AI_PROVIDERS = Object.freeze(["workers_ai", "openai_compat"]);
+export const AI_PROVIDERS = Object.freeze(["openai_compat"]);
 
-/** workers_ai 的默认模型。选它是因为 function calling 支持相对稳。 */
-export const READER_AI_DEFAULT_MODEL = "@cf/openai/gpt-oss-120b";
+/** 与 OpenAI 厂商预设保持一致。 */
+export const READER_AI_DEFAULT_MODEL = ai_provider_preset("openai").models[0].model;
 
 /** provider 名的字符集与长度（与标识符同口径，便于日志/错误里安全回显）。 */
 const provider_name_pattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
-/** 模型名的字符集：Workers AI 的 `@cf/vendor/model` 与 OpenAI 的 `vendor/model-v2` 都覆盖。 */
+/** 兼容厂商模型名与带 vendor 前缀的模型 ID。 */
 const model_pattern = /^[@A-Za-z0-9][A-Za-z0-9@._:/+-]{0,127}$/;
 
 /**
@@ -204,7 +202,7 @@ function legacy_catalog(legacy) {
     providers: [
       {
         id: "default",
-        name: legacy.provider === "workers_ai" ? "Workers AI" : "OpenAI 兼容",
+        name: "OpenAI 兼容",
         type: legacy.provider,
         enabled: true,
         base_url: legacy.base_url,
@@ -249,7 +247,7 @@ export function normalize_ai_settings(raw, legacy_translation) {
   const legacy = { ...normalize_legacy_ai_settings(raw), ...dialogue_model_preference(raw) };
   if (!raw || !Array.isArray(raw.providers))
     return { ...legacy, ...legacy_catalog(legacy) };
-  const providers = unique_entries(raw.providers, 16, (entry, id) => ({
+  const providers = unique_entries(raw.providers.filter(entry => entry && AI_PROVIDERS.includes(entry.type)), 16, (entry, id) => ({
     id,
     ...(ai_provider_preset(entry.preset_id)
       ? { preset_id: entry.preset_id }

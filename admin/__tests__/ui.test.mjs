@@ -8,6 +8,8 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import { AdminAgentModel, AdminAgentView } from "../components/admin_agent.js";
 import { ScriptAgentModel, ScriptAgentPanelView } from "../components/script_agent.js";
+import { AISettingsStore } from "../components/ai_settings.js";
+import { AI_PROVIDER_PRESETS } from "../domain/preferences/ai_presets.js";
 import { PaginationModel, PaginationView } from "../components/pagination.js";
 import * as platform_helpers from "../components/discovery_platform.js";
 import { RssRoutePatternModel } from "../../server/domain/rss_route.js";
@@ -71,7 +73,7 @@ test("登录页只显示密码输入框，提交密码后跳转管理后台", as
 
 test("设备 Token 管理使用共享组件，创建、查看、复制、隐藏、撤销均由 Model 驱动", async () => {
   ui.DOM = {};
-  context.document = { querySelector: () => null };
+  context.document = { querySelector: () => null, addEventListener() {}, removeEventListener() {} };
   context.FindRSSAdminShell = {};
   context.FindRSSAdminPages = {};
   const requests = [], copies = [], timers = new Map();
@@ -84,7 +86,7 @@ test("设备 Token 管理使用共享组件，创建、查看、复制、隐藏�
     requests.push({ url, method: options.method, body: options.body && JSON.parse(options.body) });
     if (url.endsWith("/reveal")) return Response.json({ token: "frd_test-plaintext" });
     if (url.endsWith("/revoke")) tokens = [{ ...token, status: "revoked" }];
-    else if (options.method === "POST") tokens = [token];
+    else if (options.method === "POST") { tokens = [token]; return Response.json({ device_token: token }); }
     return Response.json({ device_tokens: tokens });
   } };
   vm.runInContext("(() => {\n" + page_source("dashboard.js") +
@@ -97,6 +99,16 @@ test("设备 Token 管理使用共享组件，创建、查看、复制、隐藏�
   assert.deepEqual(requests.find(request => request.method === "POST").body, { name: "笔记本", note: "调试", expires_in_seconds: 2592000 });
   const view = context.device_tokens_view(model);
   try {
+    assert.ok(find(view, "device-token-created-dialog"));
+    assert.equal(find(view, "device-token-created-value").children[0].state.value, "frd_test-plaintext");
+    assert.equal(model.revealed.value[token.id], undefined);
+    await find(view, "copy-created-device-token-button").events.onClick();
+    await new Promise(setImmediate);
+    assert.deepEqual(copies, ["frd_test-plaintext"]);
+    find(view, "close-created-device-token-button").events.onClick();
+    assert.equal(find(view, "device-token-created-dialog"), null);
+    assert.equal(model.created.value.token, "");
+    copies.length = 0;
     assert.ok(find(view, "device-token-name-input"));
     assert.ok(find(view, "device-token-expiry-select"));
     assert.equal(find(view, "copy-device-token-button").state.attributes.disabled, true);
@@ -133,6 +145,39 @@ test("关闭设备 Token 管理后，迟到的明文响应不会重新显示", a
   model.dispose();
 });
 
+test("创建设备 Token 期间离开页面，迟到的创建或明文响应不会打开弹窗", async t => {
+  for (const stage of ["create", "reveal"]) {
+    await t.test(stage, async () => {
+      let complete;
+      const requests = [];
+      context.FindRSSAdminAuth.fetch = async (url, options) => {
+        requests.push(url);
+        if (url.endsWith("/reveal")) {
+          return new Promise(resolve => { complete = () => resolve(Response.json({ token: "late-created-plaintext" })); });
+        }
+        if (options.method === "POST") {
+          const value = { device_token: { id: "late-token", name: "迟到的设备" } };
+          if (stage === "create") return new Promise(resolve => { complete = () => resolve(Response.json(value)); });
+          return Response.json(value);
+        }
+        return Response.json({ device_tokens: [] });
+      };
+      vm.runInContext("(() => {\n" + page_source("dashboard.js") +
+        "\nglobalThis.device_tokens_model = DeviceTokensModel; })();", context);
+      const model = context.device_tokens_model(async () => true);
+      await model.toggle();
+      const pending = model.create();
+      await new Promise(setImmediate);
+      model.dispose();
+      complete();
+      await pending;
+      assert.equal(model.created.value.token, "");
+      assert.deepEqual(Object.keys(model.revealed.value), []);
+      if (stage === "create") assert.equal(requests.some(url => url.endsWith("/reveal")), false);
+    });
+  }
+});
+
 test("后台使用真实阅读器组件，操作按钮带 SVG 并响应禁用状态", () => {
   assert.equal(context.vm, context.Timeless.vm);
   assert.equal(context.kit, context.Timeless.kit);
@@ -147,6 +192,31 @@ test("后台使用真实阅读器组件，操作按钮带 SVG 并响应禁用状
   disabled.set(true);
   assert.equal(button.state.attributes.disabled, true);
   button.onUnmounted();
+});
+
+test("厂商 logo 使用真实图片或主题遮罩，厂商列表和旧草稿不再包含 Workers AI", () => {
+  const store = AISettingsStore({ ui, settings: ui.ref({ providers: [
+    { id: "old-workers", type: "workers_ai", name: "Workers AI", models: [] },
+  ] }), request_json: async () => ({}) });
+  const editor = ui.AIPreferencesView({ store });
+  try {
+    assert.equal(AI_PROVIDER_PRESETS.some(provider => provider.type === "workers_ai"), false);
+    assert.equal(store.state.settings_draft.value.ai_providers.some(provider => provider.type === "workers_ai"), false);
+    assert.equal(find(editor, "settings-ai-nav-preset:workers_ai"), null);
+    for (const provider of AI_PROVIDER_PRESETS) {
+      const logo = ui.AIProviderLogoModel(provider).toValue();
+      assert.ok(logo.src, provider.id);
+      assert.ok(readFileSync(new URL("../../public" + logo.src, import.meta.url), "utf8").includes("<svg"));
+      const card = find(editor, "settings-ai-nav-preset:" + provider.id);
+      assert.ok(card, provider.id);
+      if (logo.monochrome) assert.ok(find(card, "ai-provider-logo-mask"), provider.id);
+      else {
+        const image = find(card, "ai-provider-logo-image");
+        assert.equal(image.t, "img", provider.id);
+        assert.equal(image.state.src, logo.src, provider.id);
+      }
+    }
+  } finally { editor.onUnmounted(); store.destroy(); }
 });
 
 test("真实 Select 回调保持后台事件形状，Checkbox 点击回传 checked", () => {
@@ -221,10 +291,11 @@ test("SVG 状态图标随 Model 更新", () => {
 test("所有 HTML 入口先加载共享 UI 与 CSS，再加载页面；旧 Timeless 版本不残留", () => {
   for (const name of ["index", "login"]) {
     const html = readFileSync(new URL("../" + name + ".html", import.meta.url), "utf8");
-    assert.match(html, /href="\.\/frui\.css"/);
+    const prefix = name === "login" ? "./" : "/admin/";
+    assert.ok(html.includes(`href="${prefix}frui.css"`));
     assert.match(html, /assets\/timeless\/0\.34\.2\//);
-    assert.ok(html.indexOf('src="./ui.js"') > html.indexOf("timeless.dom.umd.min.js"));
-    assert.ok(html.indexOf('src="./ui.js"') < html.indexOf(name === "login" ? 'src="./login.js"' : 'src="./app.js"'));
+    assert.ok(html.indexOf(`src="${prefix}ui.js"`) > html.indexOf("timeless.dom.umd.min.js"));
+    assert.ok(html.indexOf(`src="${prefix}ui.js"`) < html.indexOf(`src="${prefix}${name === "login" ? "login" : "app"}.js"`));
   }
 });
 
@@ -478,6 +549,75 @@ test("脚本模型设置使用原厂商/模型页；临时密钥用于连接测�
     assert.deepEqual(requests.at(-1).body.ai_keys, {});
     assert.doesNotMatch(JSON.stringify(agent.state.settings.value), /draft-key|discarded-key/);
   } finally { panel.onUnmounted(); agent.destroy(); }
+});
+
+test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相同的厂商模型编辑器", async () => {
+  context.AISettingsStore = AISettingsStore;
+  context.FindRSSAdminShell = { Page: (props, children) => ui.View({ attributes: { n: "settings-test-page" } }, children) };
+  const requests = [];
+  let tokens = [];
+  const token = { id: "settings-token", name: "设置页设备", note: "", token_hint: "frd_…1234", status: "active", created_at: 1, expires_at: null, last_used_at: null };
+  let fail_read = true;
+  const provider = { id: "custom", name: "Custom", type: "openai_compat", enabled: true,
+    base_url: "https://models.example/v1", api_key_secret_name: "",
+    models: [{ id: "m", name: "Model", model: "m", enabled: true, options: {} }] };
+  context.FindRSSAdminAuth = { fetch: async (url, options) => {
+    requests.push({ url, method: options.method || "GET", body: options.body && JSON.parse(options.body) });
+    if (url.startsWith("/admin/api/device-tokens")) {
+      if (url.endsWith("/reveal")) return Response.json({ token: "settings-plaintext" });
+      if (options.method === "POST") { tokens = [token]; return Response.json({ device_token: token }); }
+      return Response.json({ device_tokens: tokens });
+    }
+    return fail_read ? Response.json({ error: "读取失败" }, { status: 500 }) : Response.json({ providers: [provider], configured: true });
+  } };
+  vm.runInContext("(() => {\n" + page_source("dashboard.js") +
+    "\nglobalThis.DeviceTokensModel = DeviceTokensModel; globalThis.DeviceTokensView = DeviceTokensView; })();", context);
+  vm.runInContext("(() => {\n" + page_source("settings.js") + "\nglobalThis.settings_test_page = SettingsPage; })();", context);
+  const route_handlers = {};
+  const root = context.settings_test_page({ view: {
+    onShow(callback) { route_handlers.show = callback; return () => { delete route_handlers.show; }; },
+    onBeforeHide(callback) { route_handlers.hide = callback; return () => { delete route_handlers.hide; }; },
+  } });
+  try {
+    find(root, "settings-content").onMounted();
+    await new Promise(setImmediate);
+    assert.ok(find(root, "settings-load-error"));
+    assert.equal(find(root, "settings-save-button"), null);
+    assert.ok(find(root, "device-token-management"));
+    find(root, "device-token-name-input").events.onInput({ target: { value: token.name } });
+    await find(root, "create-device-token-button").events.onClick();
+    await new Promise(setImmediate);
+    assert.ok(find(root, "device-token-created-dialog"));
+    assert.equal(find(root, "device-token-created-value").children[0].state.value, "settings-plaintext");
+    assert.deepEqual(requests.find(request => request.url === "/admin/api/device-tokens" && request.method === "POST").body,
+      { name: token.name, note: "", expires_in_seconds: 2592000 });
+    const token_value = find(root, "device-token-value").children[0];
+    let displayed_token = token_value.state.value;
+    token_value.$elm = { setText(value) { displayed_token = value; } };
+    await find(root, "preview-device-token-button").events.onClick();
+    await new Promise(setImmediate);
+    assert.equal(displayed_token, "settings-plaintext");
+    fail_read = false;
+    await find(root, "settings-retry-button").events.onClick();
+    await new Promise(setImmediate);
+    assert.ok(find(root, "settings-ai-provider-search"));
+    assert.ok(find(root, "settings-ai-nav-custom:custom"));
+    assert.ok(find(root, "settings-save-button"));
+    await find(root, "settings-save-button").events.onClick();
+    await new Promise(setImmediate);
+    assert.equal(requests.at(-1).url, "/admin/api/scripts/agent/settings");
+    assert.equal(requests.at(-1).method, "PUT");
+    route_handlers.hide();
+    assert.equal(find(root, "settings-ai-form"), null);
+    assert.equal(find(root, "device-token-created-dialog"), null);
+    assert.equal(displayed_token, token.token_hint);
+    const token_reads = requests.filter(request => request.url === "/admin/api/device-tokens" && request.method === "GET").length;
+    await route_handlers.show();
+    assert.equal(requests.at(-1).method, "GET");
+    assert.equal(requests.filter(request => request.url === "/admin/api/device-tokens" && request.method === "GET").length, token_reads + 1);
+    assert.ok(find(root, "settings-ai-form"));
+  } finally { find(root, "settings-content").onUnmounted(); root.onUnmounted(); }
+  assert.deepEqual(route_handlers, {});
 });
 
 

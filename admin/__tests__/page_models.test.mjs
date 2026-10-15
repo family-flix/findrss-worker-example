@@ -4,7 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 import { page_source } from "./page_source.mjs";
 
-const pages = ["dashboard", "discovery", "script", "cookies", "redemptions", "users", "activity", "messages", "login"];
+const pages = ["dashboard", "discovery", "script", "cookies", "redemptions", "users", "activity", "messages", "login", "settings"];
 
 test("每个后台页面都有独立模型，视图不再定义页面模型，模型不创建视图节点", () => {
   for (const name of pages) {

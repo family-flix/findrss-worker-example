@@ -39,7 +39,7 @@ test("ScriptModel 优先取 metadata_json，缺失字段回退到 row 上的列"
       path: "/wxmp/:biz",
       name: "公众号",
       url: "https://example.com",
-      platform: "website",
+      platform: { name: "网页", icon: "" },
       maintainers: ["a", "1"],
       example: "biz",
       parameters: { biz: "Mzkx" },

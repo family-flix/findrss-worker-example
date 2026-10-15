@@ -2,10 +2,11 @@ import { build } from "esbuild";
 import { cpSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { build_stage } from "./build_paths.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const source_dir = resolve(root, "admin");
-const out_dir = resolve(root, "dist/assets.tmp/admin");
+const out_dir = resolve(build_stage, "admin");
 mkdirSync(out_dir, { recursive: true });
 for (const name of ["index.html", "login.html", "style.css"]) {
   cpSync(resolve(source_dir, name), resolve(out_dir, name));

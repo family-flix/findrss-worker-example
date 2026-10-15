@@ -1,5 +1,6 @@
 import { ScriptAgentModel } from "../components/script_agent.js";
 import { PaginationModel } from "../components/pagination.js";
+import { script_platform } from "../components/discovery_platform.js";
 
 import { DEFAULT_RSS_SCRIPT, DEFAULT_HOT_SCRIPT } from "./script.default.js";
 
@@ -76,7 +77,7 @@ function normalize_script(raw) {
     path: String(raw.path || ""),
     name: String(raw.name || ""),
     url: String(raw.url || ""),
-    platform: String(raw.platform || "website"),
+    platform: script_platform(raw.platform),
     website_url,
     maintainers: Array.isArray(raw.maintainers)
       ? raw.maintainers.map((value) =>
@@ -196,6 +197,7 @@ function ScriptViewModel() {
   let debug_timer = null;
   let debug_armed = false;
   let debug_controller = null;
+  const route_debug_states = new Map();
 
   const draft_enabled_ = ref(true);
   const draft_debug_ = ref(false);
@@ -224,6 +226,7 @@ function ScriptViewModel() {
     query: query_,
     filter_status: filter_status_,
     script_type: script_type_,
+    draft_type: draft_type_,
     draft_script: draft_script_,
     draft_version: draft_version_,
 
@@ -380,6 +383,7 @@ function ScriptViewModel() {
   }
 
   function reset_debug() {
+    route_debug_states.clear();
     routes_generation++;
     if (routes_timer !== null) clearTimeout(routes_timer);
     routes_timer = null;
@@ -402,21 +406,72 @@ function ScriptViewModel() {
     return path.trim() ? "/debug" + path.trim() : "";
   }
 
+  function save_route_debug_state() {
+    const path = debug_route_path_.value;
+    if (debug_routes_.value.some(row => row.path === path)) {
+      route_debug_states.set(path, { result: debug_result_.value, armed: debug_armed });
+    }
+  }
+
+  function mark_debug_results_stale() {
+    save_route_debug_state();
+    for (const entry of route_debug_states.values()) {
+      entry.result = { ...entry.result, stale: Boolean(entry.result.rss_debug) };
+    }
+  }
+
+  function select_debug_route(path) {
+    const route = debug_routes_.value.find(row => row.path === path);
+    if (!route || path === debug_route_path_.value) return;
+    save_route_debug_state();
+    debug_generation++;
+    if (debug_timer !== null) clearTimeout(debug_timer);
+    debug_timer = null;
+    debug_controller?.abort();
+    debug_controller = null;
+    debugging_.set(false);
+    const previous = route_debug_states.get(path);
+    debug_armed = previous?.armed || false;
+    debug_route_path_.set(path);
+    debug_url_.set(debug_request_url(route.url));
+    debug_result_.as(previous?.result || { status: 0, rss_debug: null, error: "", stale: false });
+    draft_revision++;
+    if (agent?.state.busy.value) agent.methods.cancel("调试路由已切换，已停止当前 AI 对话");
+    if (debug_result_.value.stale) schedule_debug();
+  }
+
   function update_debug_routes(routes) {
+    save_route_debug_state();
     const previous = debug_routes_.value;
     const rows = routes
       .filter((entry) => entry.path)
       .map((entry) => ({
         path: entry.path,
         name: entry.name || entry.path,
+        image_proxy: entry.image_proxy === true || Boolean(entry.allowed_hosts?.length),
         url:
           previous.find((row) => row.path === entry.path)?.url ??
           (entry.example || entry.path),
       }));
     debug_routes_.set(rows);
+    for (const path of route_debug_states.keys()) {
+      if (!rows.some(row => row.path === path)) route_debug_states.delete(path);
+    }
     const selected =
       rows.find((row) => row.path === debug_route_path_.value) || rows[0];
-    debug_route_path_.set(selected?.path || "");
+    if (selected && selected.path !== debug_route_path_.value) {
+      select_debug_route(selected.path);
+      return;
+    }
+    if (!selected) {
+      debug_generation++;
+      debug_controller?.abort();
+      debug_controller = null;
+      debugging_.set(false);
+      debug_armed = false;
+      debug_route_path_.set("");
+      debug_result_.as({ status: 0, rss_debug: null, error: "", stale: false });
+    }
     const request_url = debug_request_url(selected?.url || "");
     const changed = debug_url_.value !== request_url;
     debug_url_.set(request_url);
@@ -504,10 +559,12 @@ function ScriptViewModel() {
         if (agent?.state.busy.value)
           agent.methods.cancel("你已手动修改代码，已停止 AI 更新");
         if (name === "script") schedule_debug_routes();
+        mark_debug_results_stale();
         schedule_debug();
       }
     },
     set_debug_url(value, path = debug_route_path_.value) {
+      if (path !== debug_route_path_.value) select_debug_route(path);
       const route_url = String(value)
         .trim()
         .replace(/^\/debug(?=\/|[?#]|$)/, "");
@@ -523,6 +580,7 @@ function ScriptViewModel() {
         agent.methods.cancel("调试链接已修改，已停止当前 AI 对话");
       schedule_debug();
     },
+    select_debug_route,
     set_live_debug(value) {
       live_debug_.set(value === true);
       if (value === true) schedule_debug();
@@ -543,10 +601,7 @@ function ScriptViewModel() {
       if (path !== undefined) {
         const row = debug_routes_.value.find((row) => row.path === path);
         if (!row) return;
-        const request_url = debug_request_url(row.url);
-        if (debug_url_.value !== request_url) draft_revision++;
-        debug_route_path_.set(path);
-        debug_url_.set(request_url);
+        select_debug_route(path);
       }
       if (debug_timer !== null) clearTimeout(debug_timer);
       debug_timer = null;
@@ -964,6 +1019,7 @@ function ScriptViewModel() {
       draft_script_.set(event.script);
       draft_revision = event.revision;
       schedule_debug_routes();
+      mark_debug_results_stale();
       schedule_debug();
       return true;
     },

@@ -7,6 +7,7 @@ export const ADMIN_AGENT_PAGES = Object.freeze({
   discovery: { title: "订阅源管理", task: "查询、新增、编辑、删除订阅源，调整标签、平台、排序、启用状态及 token 访问要求" },
   scripts: { title: "脚本管理", task: "了解 脚本与返回格式；进入脚本编辑器后使用三栏中的脚本助手实时编辑代码和 Debug" },
   cookies: { title: "Cookie 管理", task: "了解抓取 Cookie 的配置；当前助手不能读取或修改 Cookie 密钥" },
+  settings: { title: "设置", task: "了解大模型厂商、连接测试与模型参数配置；当前助手不能读取或修改 API Key" },
   redemptions: { title: "兑换卡管理", task: "了解积分兑换活动；当前助手不能创建、删除活动或读取兑换码" },
 });
 

@@ -7,6 +7,8 @@ import { error_response, json_response } from "../../lib/http.js";
 import { valid_identifier } from "../../lib/identifiers.js";
 import { DiscoverySourceModel } from "../../domain/discovery_source.js";
 import { discovery_feed_defaults, discovery_feed_preview, fetch_discovery_feed, fetch_discovery_avatar } from "../../infra/feed_fetch.js";
+import { public_script_route } from "./script_route.js";
+import { FINDRSS_LOGO_PNG } from "../../lib/brand.js";
 
 export async function admin_discovery_preview(env, request) {
   let body;
@@ -17,6 +19,11 @@ export async function admin_discovery_preview(env, request) {
   } catch { return error_response("invalid JSON", 400); }
   const origin = feed_hostname_origin(env);
   const address = String(body?.feed_url ?? "").trim();
+  const is_template = address.startsWith(SourceAddressModel.HOST_TOKEN);
+  const template_error = "模板订阅源地址必须以 {{hostname}}/rss/ 或 {{hostname}}/atom/ 开头";
+  if (is_template && !/^\{\{hostname\}\}\/(rss|atom)\//.test(address)) {
+    return error_response(template_error, 400);
+  }
   const internal_preview = body?.include_feed === true && /^\/(rss|atom)\//.test(address);
   const script_id = body?.include_feed === true ? String(body.script_id || "") : "";
   if (script_id && !valid_identifier(script_id)) return error_response("脚本 ID 无效", 400);
@@ -27,6 +34,7 @@ export async function admin_discovery_preview(env, request) {
     target = new URL(feed_url);
   } catch { return error_response("订阅源地址无效或未配置 FINDRSS_HOSTNAME", 400); }
   const route = /^\/(rss|atom)(\/.*)$/.exec(target.pathname);
+  if (is_template && !route) return error_response(template_error, 400);
   let xml;
   if (route && (internal_preview || origin && target.origin === new URL(origin).origin)) {
     const internal = new URL("https://internal/_admin/feed/" + route[1] + route[2]);
@@ -53,7 +61,14 @@ export async function admin_discovery_preview(env, request) {
     let avatar = null;
     let avatar_error = "";
     if (defaults.avatar_url) {
-      try { avatar = await fetch_discovery_avatar(defaults.avatar_url); }
+      try {
+        avatar = await fetch_discovery_avatar(defaults.avatar_url, {
+          local_origin: new URL(origin || request.url).origin,
+          fetch_local: (url, options) => new URL(url).pathname === "/findrss-logo.png"
+            ? Promise.resolve(new Response(FINDRSS_LOGO_PNG, { headers: { "Content-Type": "image/png" } }))
+            : public_script_route(env, new Request(url, options)),
+        });
+      }
       catch (error) { avatar_error = error.message; }
     }
     return json_response({ feed_url, defaults, avatar, avatar_error });
@@ -69,7 +84,8 @@ export async function admin_discovery_preview(env, request) {
  * @returns {string}
  */
 export function feed_hostname_origin(env) {
-  const configured = String(env.FINDRSS_HOSTNAME ?? "").trim().replace(/\/+$/, "");
+  const configured = (String(env.FINDRSS_HOSTNAME ?? "").trim()
+    || String(env.FEED_HOSTNAME ?? "").trim()).replace(/\/+$/, "");
   if (configured === "") return "";
   return /^https?:\/\//i.test(configured) ? configured : "https://" + configured;
 }
@@ -121,13 +137,17 @@ export async function public_discovery_sources(env, request) {
   const source_url = new URL(request.url);
   const internal_url = new URL("https://internal/_public/discovery/sources");
   internal_url.search = source_url.search;
-  const response = await object.fetch(new Request(internal_url, request));
+  const forwarded = new Request(internal_url, request);
+  forwarded.headers.set("X-Feed-Public-URL", feed_hostname_origin(env) || source_url.origin);
+  const response = await object.fetch(forwarded);
   // 公开目录也要替换模板，但不回传存储原文——那是管理端的编辑态字段。
   return resolve_discovery_source_feed_urls(response, feed_hostname_origin(env), false);
 }
 
 export async function public_discovery_catalog(env) {
-  return env.API.getByName(API_OBJECT_NAME).fetch("https://internal/_public/discovery/catalog");
+  return env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal/_public/discovery/catalog", {
+    headers: { "X-Feed-Public-URL": feed_hostname_origin(env) },
+  }));
 }
 
 /**
@@ -139,7 +159,9 @@ export async function public_discovery_catalog(env) {
  */
 export async function public_discovery_source(env, source_id) {
   const object = env.API.getByName(API_OBJECT_NAME);
-  const response = await object.fetch("https://internal/_public/discovery/sources/" + source_id);
+  const response = await object.fetch(new Request("https://internal/_public/discovery/sources/" + source_id, {
+    headers: { "X-Feed-Public-URL": feed_hostname_origin(env) },
+  }));
   return resolve_discovery_source_feed_urls(response, feed_hostname_origin(env), false);
 }
 

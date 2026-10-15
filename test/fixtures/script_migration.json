@@ -21,9 +21,9 @@
     ]
   },
   {
-    "file": "bilibili_user_dynamic",
+    "file": "bilibili",
     "params": {
-      "uid": "123"
+      "userid": "123"
     },
     "responses": [
       {
@@ -37,9 +37,10 @@
     ]
   },
   {
-    "file": "bilibili_user_video",
+    "file": "bilibili",
+    "route_index": 1,
     "params": {
-      "uid": "650898515"
+      "userid": "650898515"
     },
     "responses": [
       {
@@ -358,10 +359,10 @@
     ]
   },
   {
-    "file": "zhihu_user",
+    "file": "zhihu",
     "route_index": 1,
     "params": {
-      "user_id": "zhihu"
+      "user": "zhihu"
     },
     "responses": [
       {
@@ -374,9 +375,9 @@
     ]
   },
   {
-    "file": "zhihu_user_activities",
+    "file": "zhihu",
     "params": {
-      "id": "80-81-1-25-44"
+      "user": "80-81-1-25-44"
     },
     "responses": [
       {

@@ -3,6 +3,7 @@ import {
 } from "./frui/atomic.js";
 const {
   View,
+  Img,
   Show,
   computed
 } = Timeless;
@@ -41,8 +42,8 @@ function AIProviderLogo({
             "--ai-provider-logo-url": computed(value, value => `url("${value.src}")`)
           },
         }),
-        else: () => View({
-          as: "img",
+        else: () => Img({
+          src: computed(value, value => value.src),
           class: "display-block inline-size-100-percent block-size-100-percent object-fit-contain",
           attributes: {
             n: "ai-provider-logo-image",

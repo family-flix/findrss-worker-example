@@ -40,28 +40,18 @@ export function PaginationView(ui, { model, name, label }) {
     disabled: read(state => state.loading || disabled(state)),
     onClick() { return model.set_page(target(model.state.value)); },
   }, [text]);
-  return View({ class: "box-border flex flex-wrap items-center justify-between text-muted tabular-nums", style: {
+  return View({ class: "box-border flex flex-wrap-nowrap min-w-0 overflow-x-auto items-center justify-between text-muted tabular-nums", style: {
     "gap": ".75rem",
     "margin-top": "1rem",
     "padding-block": ".75rem",
     "border-top": "1px solid var(--frui-color-border-soft)",
     "font-size": ".75rem"
   }, attributes: { n: name, role: "navigation", "aria-label": label } }, [
-    View({class: "box-border",  attributes: { n: name + "-summary", "aria-live": "polite" } }, [
+    View({class: "box-border flex-none whitespace-nowrap",  attributes: { n: name + "-summary", "aria-live": "polite" } }, [
       read(state => "共 " + state.total + " 条 · 显示 " + state.first + "–" + state.last),
     ]),
-    View({ class: "box-border flex flex-wrap items-center", style: {
+    View({ class: "box-border flex flex-none flex-wrap-nowrap items-center", style: {
       "gap": ".5rem"
-    }, attributes: { n: name + "-size-control" } }, [
-      View({class: "box-border",  attributes: { n: name + "-size-label" } }, ["每页"]),
-      Select({class: "box-border",  value: computed(model.page_size, String), options: [10, 20, 50].map(size => ({ value: String(size), label: size + " 条" })),
-        disabled: read(state => state.loading),
-        attributes: { n: name + "-size", "aria-label": label + "每页条数" },
-        onChange(event) { return model.set_page_size(event.target.value); } }),
-    ]),
-    View({ class: "box-border flex flex-wrap items-center max-760-flex-basis", style: {
-      "gap": ".5rem",
-      "--max-760-flex-basis": "100%"
     }, attributes: { n: name + "-pages" } }, [
       button("first", "首页", () => 0, state => state.page === 0),
       button("prev", "上一页", state => state.page - 1, state => state.page === 0),
@@ -70,6 +60,15 @@ export function PaginationView(ui, { model, name, label }) {
       ]),
       button("next", "下一页", state => state.page + 1, state => state.page === state.pages - 1),
       button("last", "末页", state => state.pages - 1, state => state.page === state.pages - 1),
+    ]),
+    View({ class: "box-border flex flex-none flex-wrap-nowrap items-center whitespace-nowrap", style: {
+      "gap": ".5rem"
+    }, attributes: { n: name + "-size-control" } }, [
+      View({class: "box-border flex-none whitespace-nowrap",  attributes: { n: name + "-size-label" } }, ["每页"]),
+      Select({class: "box-border", style: { width: "5rem", "min-width": "5rem" }, value: computed(model.page_size, String), options: [10, 20, 50].map(size => ({ value: String(size), label: size + " 条" })),
+        disabled: read(state => state.loading),
+        attributes: { n: name + "-size", "aria-label": label + "每页条数" },
+        onChange(event) { return model.set_page_size(event.target.value); } }),
     ]),
   ]);
 }

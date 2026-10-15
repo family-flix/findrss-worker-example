@@ -48,7 +48,7 @@ npm run deploy
 - `public/` 只保存公共资源：品牌、平台图标和通用样式。前台业务源码在 `discover/`，后台业务源码在 `admin/`；HTML、业务 JavaScript、业务样式与页面 manifest 均不放入 `public/`。
 - 前台仅保留首页，路由声明、首页模型、全部视图和浏览器挂载集中在 `discover/index.js`，Model 与 View 在文件内分别维护。后台用 `admin/store.js` 集中声明路由。后台 `pages/` 按 `xx.js`（视图）与 `xx.model.js`（状态、请求及业务行为）配对，`components/` 保存共用视图；菜单从路由声明生成。
 - `scripts/` 集中保存统一构建、前后台 bundle 构建、Timeless 插件及 RSS 示例同步工具；npm 命令从这里启动。
-- `vendor/` 保存共享依赖；`public/brand/` 保存唯一品牌源文件。
+- `public/assets/` 保存共享依赖和 Timeless 浏览器适配模块；`public/brand/` 保存唯一品牌源文件。
 
 `scripts/build.js` 复制 `public/` 的公共资源，前后台脚本分别从 `discover/`、`admin/` 构建业务文件并写入同一临时输出，全部成功后原子切换为 `dist/assets/`；主 Worker 由 Wrangler 直接打包，不预生成 Go 嵌入用的服务端 bundle。前台静态文件在资源根路径，后台静态文件在 `/admin/`，依赖在 `/assets/`，品牌在 `/brand/`；旧图片地址保留构建别名，兼容已发布 R2 首页和 manifest。前台引用 `/base.css`；后台 `admin/style.css` 只维护单属性原子类，具体尺寸在页面 `style` 中声明，组件内部样式通过参数传入；后台 manifest 从同一份 `discover/site.webmanifest` 生成，只覆盖展示名称。
 
@@ -64,7 +64,7 @@ npm run deploy
 
 添加订阅源时，自动读取的头像和手动上传的头像都会在保存时持久化到 `API_STORAGE` R2 桶（`discovery/avatars/` 前缀），展示使用本站 `/api/avatar/<id>?v=...` 地址，不依赖上游图片链接。替换、移除头像或删除源会清理旧对象；清理失败记录日志，不回滚已提交的操作。旧 SQLite 头像继续可读，重新上传后改存 R2；没有 R2 绑定的环境沿用 SQLite。上游拒绝下载时可手动上传头像。
 
-`FINDRSS_HOSTNAME` 是订阅地址中 `{{hostname}}` 的实际 origin。留空时使用当前请求的 origin；生产应配置为自己的公开域名。
+`FINDRSS_HOSTNAME` 是订阅地址中 `{{hostname}}` 的实际 origin。留空时使用当前请求的 origin，可同时通过 workers.dev 域名和自定义域名访问；需要固定订阅域名时再配置此变量。Worker 会将访问 origin 传递给 Durable Object，手动刷新快照使用本次请求的 origin，发现页定时快照刷新使用持久化保存的最近一次访问 origin。
 
 `/admin/scripts` 的新增与编辑表单使用全屏三栏：左侧代码，中间对话，右侧调试。Debug 为每条路由显示一行路径输入框和「运行调试」按钮，默认填入该路由的 example，可编辑路径及 query；`/debug` 是固定前缀，不出现在输入框中，调试和脚本助手提交请求时统一添加。修改草稿后通过管理员端点 `POST /admin/api/scripts/routes` 编译读取路由元数据，不调用 handler，已有路由保留各自输入。点击对应按钮按地址匹配当前草稿的路由和 params/query；⌘/Ctrl + Enter 与实时调试使用当前选中的路由。首次运行后，「实时调试」会在停止编辑 800ms 后重新执行；执行期间的修改只补跑最后一份草稿。`POST /admin/api/scripts/debug` 仅允许管理员访问，使用真实抓取与授权 Cookie，不保存草稿、不读写公开响应缓存，返回与 `/debug` 相同的上下文、上游请求、日志、完整输出和错误堆栈。链接主机不作为抓取目标，query 中的 token 不传入脚本。原「Mock 测试」仍走独立的 `/scripts/test`；表单不再显示 Mock 路由序号；「保存后开放 /debug」只控制保存后公开路由的 Debug 配置。
 
@@ -87,7 +87,9 @@ Cloudflare Worker 改名会创建新的 DO 命名空间：已有生产数据需�
 `/admin/discovery` 的全局助手可查询、新增、编辑和删除订阅源，使用现有 `ServiceDiscovery` 校验、重复地址限制、模板保存和头像清理。编辑/删除必须先读取真实记录，写入点检查读取后记录是否变更，冲突时要求重新读取；只修改用户指定字段，不覆盖缺省字段。成功操作经 `resource_changed` 事件刷新列表，保留其它未保存表单；删除正在编辑的源会关闭该表单。当前筛选、选中源和未保存表单通过页面适配器注入；其它页面不提供订阅源写工具，不允许模型伪造跨页面操作。
 ## 脚本平台与维护者
 
-路由可声明 `platform: "知乎"`（也可写 `"zhihu"` 或自定义平台名称）。默认平台为“网页”；保存脚本后，平台自动进入 `/admin/discovery` 的表单、筛选器和首页筛选，不需要先添加订阅源。多路由脚本可逐条指定平台；已有订阅源的平台继续保留，新增自有源按匹配的脚本路由预填平台。
+平台使用 `{ name, icon }`，`icon` 支持完整 SVG 源码、无凭据的 HTTP(S) 图片地址或站内图片路径，可为空。默认值为 `{ name: "网页", icon: "" }`，兼容旧字符串。可 `export const platform = { name, icon }` 供全部路由共用，或通过 `route.platform` 逐条覆盖。示例脚本已直接内嵌 `public/platform-icons/` 中对应的 SVG，无需额外导入图标文件。
+
+正式版本通过版本号、路由及 Cookie 授权校验后，脚本与平台在同一数据库事务中保存。平台按名称去重，同名新图标更新旧图标；草稿和调试不注册平台。`platforms` 表为订阅广场、后台平台筛选 Select 和订阅源表单提供统一列表，不需要先添加订阅源。升级时回填已发布脚本，草稿不参与；删除脚本或退回草稿不会清除已经收集的平台。已有订阅源的平台继续保留，新增自有源按匹配的已发布脚本路由预填平台。
 
 `maintainers` 支持多个 `{ nickname, url, avatar }` 对象，后台展示昵称、头像和个人链接。`nickname` 必填，`url`、`avatar` 可留空，非空时必须是无用户名密码的 HTTP(S) 地址；旧字符串数组继续支持。
 
@@ -95,7 +97,7 @@ Cloudflare Worker 改名会创建新的 DO 命名空间：已有生产数据需�
 export const route = {
   name: "知乎用户作品",
   path: "/zhihu/people/:id/:kind?",
-  platform: "知乎",
+  platform: { name: "知乎", icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>' },
   maintainers: [
     { nickname: "findrss", url: "https://example.com/", avatar: "https://example.com/avatar.png" },
     { nickname: "另一位维护者", url: "", avatar: "" },

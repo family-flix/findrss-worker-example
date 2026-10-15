@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { discovery_feed_defaults, discovery_feed_preview, fetch_discovery_avatar } from "../server/infra/feed_fetch.js";
 import { admin_discovery_preview } from "../server/service/worker/discovery.js";
+import { FINDRSS_LOGO_PNG } from "../server/lib/brand.js";
 
 test("RSS 和 Atom 读取 feed 元数据，不把文章分类当源标签", () => {
   const rss = discovery_feed_defaults(`<rss version="2.0"><channel><title>科技日报</title><link>https://example.com/</link><description>介绍</description><image><url>https://example.com/icon.png</url></image><category>technology</category><item><title>文章</title><category>article-only</category></item></channel></rss>`, "https://example.com/feed");
@@ -41,6 +42,92 @@ test("模板使用 FINDRSS_HOSTNAME，管理员预览走内部专用路由，外
   assert.equal(data.feed, undefined);
   assert.equal((await admin_discovery_preview(env, request("http://127.0.0.1:2022/private"))).status, 502);
   await assert.rejects(fetch_discovery_avatar("http://127.0.0.1/avatar"), /被拒绝/);
+});
+
+test("添加微博订阅时，同源头像走内部图片代理并保留上游 Referer", async t => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const avatar_url = "https://tvax3.sinaimg.cn/crop.0.0.1080.1080.1024/avatar.jpg";
+  const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]);
+  const upstream = [];
+  globalThis.fetch = async (url, options) => {
+    upstream.push(url);
+    assert.equal(url, avatar_url);
+    assert.equal(options.headers.referer, "https://weibo.com/");
+    assert.equal(options.headers.cookie, undefined);
+    assert.equal(options.headers.authorization, undefined);
+    return new Response(png, { headers: { "Content-Type": "image/png" } });
+  };
+  for (const origin of ["http://127.0.0.1:8787", "https://feeds.example"]) {
+    const calls = [];
+    const proxy_url = origin + "/img/weibo?url=" + encodeURIComponent(avatar_url);
+    const env = { FINDRSS_HOSTNAME: origin, API: { getByName: () => ({ fetch(request) {
+      const url = new URL(request.url);
+      calls.push(url.pathname);
+      if (url.pathname === "/_admin/feed/rss/weibo/123") {
+        return new Response(`<rss><channel><title>微博用户</title><image><url>${proxy_url}</url></image></channel></rss>`);
+      }
+      assert.equal(url.pathname, "/_public/feed/raw/img/weibo");
+      assert.equal(url.searchParams.get("url"), avatar_url);
+      assert.equal(request.headers.get("Cookie"), null);
+      assert.equal(request.headers.get("Authorization"), null);
+      assert.equal(request.headers.get("X-Api-Access-Token-ID"), "");
+      return Response.json({ raw: { url: avatar_url, headers: { Referer: "https://weibo.com/" } },
+        route: { allowed_hosts: ["tvax3.sinaimg.cn"] }, version: "1", headers: { "Cache-Control": "public, max-age=120" } });
+    } }) } };
+    const response = await admin_discovery_preview(env, new Request(origin + "/admin/api/discovery/preview", {
+      method: "POST", headers: { Cookie: "admin_session=private", Authorization: "Bearer private" },
+      body: JSON.stringify({ feed_url: "{{hostname}}/rss/weibo/123" }),
+    }));
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    assert.equal(data.avatar_error, "");
+    assert.equal(data.defaults.avatar_url, proxy_url);
+    assert.equal(data.avatar.content_type, "image/png");
+    assert.deepEqual(Buffer.from(data.avatar.data, "base64"), Buffer.from(png));
+    assert.deepEqual(calls, ["/_admin/feed/rss/weibo/123", "/_public/feed/raw/img/weibo"]);
+  }
+  assert.equal(upstream.length, 2);
+});
+
+test("本地默认头像直接读取品牌图片，不请求回环网络", async t => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = async () => assert.fail("默认头像不应发起网络请求");
+  const origin = "http://127.0.0.1:8787";
+  const env = { FINDRSS_HOSTNAME: origin, API: { getByName: () => ({ fetch: () => new Response(
+    `<rss><channel><title>微博</title><image><url>${origin}/findrss-logo.png</url></image></channel></rss>`,
+  ) }) } };
+  const response = await admin_discovery_preview(env, new Request(origin + "/admin/api/discovery/preview", {
+    method: "POST", body: JSON.stringify({ feed_url: "{{hostname}}/rss/weibo/123" }),
+  }));
+  const data = await response.json();
+  assert.equal(data.avatar_error, "");
+  assert.deepEqual(Buffer.from(data.avatar.data, "base64"), Buffer.from(FINDRSS_LOGO_PNG));
+});
+
+test("同源头像读取不放开其他私网地址、凭证地址或重定向目标", async () => {
+  const options = { local_origin: "http://127.0.0.1:8787", fetch_local: async () =>
+    new Response(null, { status: 302, headers: { Location: "http://192.168.1.1/private" } }) };
+  for (const url of ["http://127.0.0.1:2022/avatar", "http://192.168.1.1/avatar",
+    "http://user:password@127.0.0.1:8787/img/weibo", "http://127.0.0.1:8787/img/weibo"]) {
+    await assert.rejects(fetch_discovery_avatar(url, options), /头像地址被拒绝/);
+  }
+});
+
+test("模板预览仅接受 RSS/Atom 路径，错误地址不触发抓取", async () => {
+  const env = { FINDRSS_HOSTNAME: "http://127.0.0.1:8787", API: {
+    getByName() { assert.fail("无效模板不应读取订阅源"); },
+  } };
+  for (const feed_url of ["{{hostname}}", "{{hostname}}/feed.xml", "{{hostname}}/admin",
+    "{{hostname}}/rss-other/test", "{{hostname}}/atom.xml", "{{hostname}}.example.com/rss/test",
+    "{{hostname}}/rss/../../admin", "{{hostname}}/atom/%2e%2e/feed.xml"]) {
+    const response = await admin_discovery_preview(env, new Request("https://admin/admin/api/discovery/preview", {
+      method: "POST", body: JSON.stringify({ feed_url }),
+    }));
+    assert.equal(response.status, 400, feed_url);
+    assert.equal((await response.json()).error, "模板订阅源地址必须以 {{hostname}}/rss/ 或 {{hostname}}/atom/ 开头");
+  }
 });
 
 test("脚本预览不依赖公开域名配置，透传参数并解析真实 RSS/Atom；失败不当成成功", async () => {

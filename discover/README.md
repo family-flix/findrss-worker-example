@@ -34,7 +34,7 @@ site.webmanifest       前台 manifest，兼作后台生成基础
 
 共享纯逻辑在 `../server/lib/discovery_feeds.js` 和 `discovery_sources.js`。SSR 外壳在 `../server/infra/discovery_home.js`；R2 静态发布和 HTTP 读取共用首页渲染器。`../scripts/timeless_plugin.js` 用于服务端、浏览器和测试构建。
 
-前后台共用 `/brand/*` 资源，广场内嵌其使用的图标和 `/base.css`，Timeless 运行时统一保存在 `../public/assets/timeless/0.34.2/`，浏览器构建适配模块位于 `../vendor/timeless/platform_browser.js`。广场、后台与 SSR 使用配套的 Timeless 0.34.2；DOM 产物包含 hydration 的 DOM 游标、嵌套占位节点和空/相邻文本修复，Core、DOM、lite 与 SSR 必须同批同步，并同时验证 SSR/hydrate。旧 R2 首页返回时自动升级运行时脚本引用，首页边缘缓存键包含运行时版本。
+前后台共用 `/brand/*` 资源，广场内嵌其使用的图标和 `/base.css`，Timeless 运行时统一保存在 `../public/assets/timeless/0.34.2/`，浏览器构建适配模块位于 `../public/assets/timeless/compat.js`。广场、后台与 SSR 使用配套的 Timeless 0.34.2；DOM 产物包含 hydration 的 DOM 游标、嵌套占位节点和空/相邻文本修复，Core、DOM、lite 与 SSR 必须同批同步，并同时验证 SSR/hydrate。旧 R2 首页返回时自动升级运行时脚本引用，首页边缘缓存键包含运行时版本。
 
 首页通过同一套 SSR 渲染器生成内容，并将 `style.css` 与其依赖的 `public/base.css` 合并到 `<style data-n="discovery-stylesheet">` 中；返回的 HTML 自带样式和首屏内容，不依赖外部 CSS 或浏览器 JavaScript 才能显示首屏。响应 CSP 使用该内嵌样式的 SHA-256 哈希，不开放 `unsafe-inline`。已有 R2 首页在读取时替换为当前版本的内嵌样式；边缘缓存键包含样式哈希，样式升级不会命中旧样式页面。`/style.css` 和 `/base.css` 仍保留供兼容访问。
 
@@ -46,6 +46,8 @@ Logo 与平台 SVG 通过 `icons.js` 转为 data URL。订阅源头像只在目�
 ## 部署
 
 在项目根目录使用 `npm run dev`；构建、测试和部署均由统一 Worker 完成。
+
+开发启动顺序为：先启动本地 API Worker，等待就绪，再构建前端和 Discover SSR。SSR 的 `DISCOVERY_API_ORIGIN` 自动指向刚启动的本地实例；构建后保持该实例运行，Ctrl+C 时一起关闭。首次运行不需要预先构建静态资源。
 
 `npm run build` 会请求公开目录接口 `/discovery/catalog`，再用 Timeless SSR 生成 `dist/assets/index.html`，产物包含真实目录、首屏文章和内嵌 CSS。默认从本地 `http://127.0.0.1:8787` 读取数据（支持 `FINDRSS_WORKER_PORT`）；API 未运行时临时启动使用同一 `.wrangler/state` 的本地 Worker，目录读取完成后关闭，不需要提前启动服务。
 
@@ -67,7 +69,7 @@ DISCOVERY_API_ORIGIN=https://your-worker.example FINDRSS_HOSTNAME=https://feeds.
 
 ## 平台和标签筛选
 
-平台沿用 `source_type` 字段，列表与名称以目录接口的 `platforms: [{ id, label }]` 为准；一次选择一个平台。前台默认网页在 `store.js` 声明，名称在 `index.js`、SVG 图标映射在 `icons.js`；后台继续使用 `components/discovery_platform.js`，两端不引用服务端平台模块。接口加载成功后完整替换默认列表，保留接口返回的名称、顺序和空列表；后台加载脚本只用于地址提示与平台推断，不改写选项。标签可多选，多个标签须同时满足，搜索词与平台、标签一起生效。
+平台沿用 `source_type` 字段，列表以目录接口的 `platforms: [{ id, label, icon }]` 为准；一次选择一个平台。脚本使用 `platform: { name, icon }`，正式发布后收集到数据库 `platforms` 表，订阅广场与后台平台 Select 共用此列表。SVG 源码以图片 data URL 渲染，不直接插入 DOM。接口加载成功后完整替换默认列表，保留接口返回的名称、图标、顺序和空列表；后台加载脚本只用于地址提示与平台推断，不改写选项。标签可多选，多个标签须同时满足，搜索词与平台、标签一起生效。
 
 首页在 header 下方单独一行搜索，输入后延迟搜索，回车立即搜索。完整目录维持 API 的稳定排序，浏览器 Model 按关键词、平台和标签过滤，再按每页 20 个源切片；搜索匹配标题、介绍、网站、订阅地址和标签。翻页保留搜索和筛选，条件变化回到第一页。底部提供首页、上一页、下一页和末页。现有 `/api/sources` 的 SQL 筛选、分页字段和限制继续保留供兼容调用，首页不再使用它。
 
@@ -78,7 +80,7 @@ DISCOVERY_API_ORIGIN=https://your-worker.example FINDRSS_HOSTNAME=https://feeds.
 后台不再要求分类。保留旧 `category` 存储与 API 参数兼容；旧的科技、开发、商业、科学、设计、生活分类在读取时并入标签，后台编辑保存时转为显式标签。
 
 
-平台筛选和目录行使用 `public/platform-icons/` 下的同源 SVG。社媒图标取自 `wx_channels_download/frontend/public/platform-icons.svg` 的同名 symbol，保留原路径和品牌色；网站与全部使用广场已有的线形图标。资产已纳入仓库，部署不依赖另一个项目。
+平台筛选和目录行优先使用正式脚本提交的 `platform.icon`；示例脚本已直接内嵌 `public/platform-icons/` 的对应 SVG。旧数据或未提供图标时保留内置图标回退。社媒图标保留原路径和品牌色；网站与全部使用广场已有的线形图标。
 
 `qidian.svg` 与 `fanqienovel.svg` 分别参考[起点 favicon](https://qdfepccdn.qidian.com/www.qidian.com/favicon/qd_icon.ico) 和[番茄小说 favicon](https://p1-tt.byteimg.com/origin/novel-static/a3621391ca2e537045168afda6722ee9) 绘制为纯矢量路径，供项目 README 的网站分组使用。
 

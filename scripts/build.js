@@ -5,13 +5,15 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SITE_CSP, SITE_HEADERS } from "../server/lib/site_security.js";
+import { admin_dev_import_map_hash } from "./admin_dev.js";
+import { admin_dev, build_assets, build_stage } from "./build_paths.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const stage = join(root, "dist/assets.tmp");
+const stage = build_stage;
 rmSync(stage, { recursive: true, force: true });
 mkdirSync(stage, { recursive: true });
 cpSync(join(root, "public"), stage, { recursive: true });
-execFileSync(process.execPath, [join(root, "scripts/build_admin_ui.js")], { cwd: root, stdio: "inherit" });
+execFileSync(process.execPath, [join(root, admin_dev ? "scripts/admin_dev.js" : "scripts/build_admin_ui.js")], { cwd: root, stdio: "inherit" });
 execFileSync(process.execPath, [join(root, "scripts/build_discover.js")], { cwd: root, stdio: "inherit" });
 const manifest = JSON.parse(readFileSync(join(stage, "site.webmanifest"), "utf8"));
 writeFileSync(join(stage, "admin/site.webmanifest"), JSON.stringify({ ...manifest,
@@ -28,8 +30,14 @@ const style_hash = createHash("sha256").update(styles).digest("base64");
 for (const path of ["/", "/index.html", "/account", "/account.html"]) {
   static_headers.push(path, `  Content-Security-Policy: ${SITE_CSP.discovery.replace("style-src 'self'", `style-src 'self' 'sha256-${style_hash}'`)}`);
 }
-static_headers.push("/admin/*", `  Content-Security-Policy: ${SITE_CSP.admin}`);
+const admin_csp = admin_dev
+  ? SITE_CSP.admin.replace("script-src 'self'", `script-src 'self' 'sha256-${admin_dev_import_map_hash}'`)
+  : SITE_CSP.admin;
+static_headers.push("/admin/*", `  Content-Security-Policy: ${admin_csp}`);
+if (admin_dev) {
+  static_headers.push("  Cache-Control: no-store", "/server/*", "  Cache-Control: no-store");
+}
 writeFileSync(join(stage, "_headers"), static_headers.join("\n") + "\n");
-rmSync(join(root, "dist/assets"), { recursive: true, force: true });
-renameSync(stage, join(root, "dist/assets"));
+rmSync(build_assets, { recursive: true, force: true });
+renameSync(stage, build_assets);
 console.log("FindRSS frontend assets built; Wrangler bundles index.js and QuickJS WASM");

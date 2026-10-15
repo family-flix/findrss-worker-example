@@ -59,6 +59,7 @@ function infer_source_type(feed_url, scripts) {
   const match = /^\/(?:rss|atom)(\/.*)$/.exec(pathname);
   if (!match) return "website";
   const route = scripts
+    .filter(script => script.status !== "draft")
     .flatMap((script) => script.routes || [script])
     .find((entry) =>
       RssRoutePatternModel.fromValue(entry.path)?.match(match[1]),
@@ -220,7 +221,7 @@ function DiscoveryAdminViewModel() {
         );
         platforms_.set(
           Array.isArray(payload.platforms)
-            ? payload.platforms.map(({ id, label }) => ({ id, label }))
+            ? payload.platforms.map(({ id, name, label, icon }) => ({ id, label: name || label, ...(icon === undefined ? {} : { icon }) }))
             : discovery_platforms(),
         );
       }
@@ -553,6 +554,12 @@ function DiscoveryAdminViewModel() {
     async preview_feed() {
       const address = draft_feed_url_.value.trim();
       if (saving_.value || previewing_.value || !address) return;
+      if (is_template_feed_url(address) &&
+        (!/^\{\{hostname\}\}\/(rss|atom)\//.test(address) || !is_managed_rss_url(address))) {
+        form_message_.set("");
+        form_error_.set("模板订阅源地址必须以 {{hostname}}/rss/ 或 {{hostname}}/atom/ 开头");
+        return;
+      }
       const generation = ++preview_generation;
       const fields = {
         title: draft_title_,

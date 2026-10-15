@@ -13,6 +13,7 @@ import { rss_response_text } from "./rss_response_text.js";
 // （含编译校验）经 run_in_sandbox_queue 的泳道池调度。
 import { newQuickJSAsyncWASMModuleFromVariant, newVariant } from "quickjs-emscripten-core";
 import RELEASE_ASYNCIFY from "@jitl/quickjs-wasmfile-release-asyncify";
+import { script_platform } from "../lib/discovery_platform.js";
 import {
   DEVICE_LOG_LEVELS,
   MAX_DEVICE_LOG_MESSAGE_LENGTH,
@@ -101,6 +102,7 @@ ${script_metadata_source(script_type(script))}`,
       metadata.permissions = ScriptCookiePermissionsModel(metadata.permissions).toValue();
       const paths = new Set();
       for (const entry of metadata.routes) {
+        entry.platform = script_platform(entry.platform, { strict: true });
         for (const maintainer of entry.maintainers) {
           if (typeof maintainer === "string") continue;
           for (const key of ["url", "avatar"]) {
@@ -120,6 +122,7 @@ ${script_metadata_source(script_type(script))}`,
         validate_script_route_path(entry);
         if (entry.allowed_hosts !== undefined) validate_image_proxy_route(entry);
       }
+      metadata.platform = { ...metadata.routes[0].platform };
       return { error: "", metadata };
     } finally {
       // dispose 前必须清空 pending jobs；残留的 Promise 回调会触发

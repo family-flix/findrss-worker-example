@@ -1,6 +1,6 @@
 import { buildSync } from "esbuild";
 import { fileURLToPath } from "node:url";
-import { BROWSER_PLATFORM, LITE_ESM } from "../../scripts/timeless_plugin.js";
+import { BROWSER_PLATFORM } from "../../scripts/timeless_plugin.js";
 
 // 同构首页按浏览器平台打包后交给 VM，组件仍可用轻量替身检查。
 export const home_source = buildSync({
@@ -8,7 +8,7 @@ export const home_source = buildSync({
     resolveDir: fileURLToPath(new URL("../", import.meta.url)), loader: "js" },
   bundle: true, write: false, format: "iife", globalName: "DiscoveryHome",
   loader: { ".svg": "text" },
-  alias: { timeless: BROWSER_PLATFORM, "@timeless/timeless": LITE_ESM },
+  alias: { timeless: BROWSER_PLATFORM },
 }).outputFiles[0].text +
   "\nconst { DiscoveryViewModel, FeedArticlesView, FeedCopyButtonView, LazyAvatar, LazyImgModel } = DiscoveryHome;";
 

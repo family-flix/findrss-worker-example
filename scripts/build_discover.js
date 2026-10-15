@@ -6,9 +6,10 @@ import { fileURLToPath } from "node:url";
 import { BROWSER_PLATFORM, LITE_ESM, timeless_plugin } from "./timeless_plugin.js";
 import { load_build_catalog } from "./discovery_catalog.js";
 import { gzip_html } from "../server/infra/discovery_compression.js";
+import { build_stage } from "./build_paths.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const tmp_dir = join(root, "dist/assets.tmp");
+const tmp_dir = build_stage;
 for (const name of ["index.html", "style.css", "site.webmanifest"]) {
   cpSync(join(root, "discover", name), join(tmp_dir, name));
 }

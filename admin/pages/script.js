@@ -1,4 +1,7 @@
 import { ScriptDebugOutputModel } from "../components/script_output.js";
+import { ScriptFeedPreviewModel, ScriptFeedPreviewView } from "../components/script_feed.js";
+import { ScriptDebugPreviewModel } from "../domain/script_preview.js";
+import { ScriptMediaPreviewView } from "../components/script_media.js";
 import { ScriptAgentPanelView } from "../components/script_agent.js";
 import { PaginationView } from "../components/pagination.js";
 import { discovery_platform_label } from "../components/discovery_platform.js";
@@ -288,11 +291,38 @@ function ScriptCookieConsentView({ store: vm$ }) {
   );
 }
 
-function ScriptDebugResultView({ store: vm$ }) {
+function ScriptDebugResultView({ store: vm$, route }) {
+  const preview = computed(vm$.state.debug_result, result => ScriptDebugPreviewModel(result.rss_debug,
+    vm$.state.draft_type.value === "rss" && !route?.image_proxy ? "rss" : ""));
+  return For({ each: computed(preview, value => [{ key: value.kind, kind: value.kind }]), key: "key",
+    render(value) { return ScriptDebugResultContentView({ store: vm$, kind: source_value(value).kind, preview }); } });
+}
+
+function ScriptDebugResultContentView({ store: vm$, kind, preview }) {
   const read = (map) => computed(vm$.state.debug_result, map);
   const output = read((result) =>
     ScriptDebugOutputModel(result.rss_debug?.output),
   );
+  const is_rss = kind === "rss";
+  let preview_cache;
+  const feed_preview = combine({ output, result: vm$.state.debug_result }, ({ output, result }) => {
+    const debug = result.rss_debug;
+    let self_url = "";
+    if (debug?.request?.public_origin) {
+      const url = new URL(String(debug.request.pathname || "/").replace(/^\/debug(?=\/)/, "/rss"), debug.request.public_origin);
+      url.search = new URLSearchParams(Object.entries(debug.request.query || {}).sort()).toString();
+      self_url = url.href;
+    }
+    const source = typeof debug?.output === "string" ? output.source : "";
+    const assets = debug?.preview_assets;
+    if (preview_cache?.source !== source || preview_cache?.self_url !== self_url || preview_cache?.assets !== assets) {
+      preview_cache = { source, self_url, assets, value: ScriptFeedPreviewModel(source, self_url, assets) };
+    }
+    return preview_cache.value;
+  });
+  const xml_output = computed(feed_preview, result => ScriptDebugOutputModel(JSON.stringify({
+    body: result.xml, content_type: "application/xml",
+  })));
   const block = (name, title, value) =>
     View(
       {
@@ -344,6 +374,9 @@ function ScriptDebugResultView({ store: vm$ }) {
             output: "调试输出",
             context: "调试上下文",
             logs: "调试日志",
+            xml: "XML 预览",
+            feed: "卡片预览",
+            preview: "媒体预览",
           }[name],
         },
       },
@@ -566,10 +599,111 @@ function ScriptDebugResultView({ store: vm$ }) {
               ];
             },
           },
+          ...(is_rss ? [
+            {
+              id: "xml", label: "XML预览", panel_id: "script-debug-xml-panel",
+              get content() {
+                return [panel("xml", [Show({
+                  when: computed(feed_preview, result => !result.empty),
+                  ok: () => CodeEditor({
+                    rootStyle: { "min-width": "0", width: "100%" },
+                    wrapperStyle: { height: "clamp(240px, 55dvh, 800px)" },
+                    value: computed(xml_output, result => result.formatted),
+                    mode: "application/xml", readOnly: true,
+                    attributes: { n: "script-debug-xml-content", "aria-label": "XML 响应预览", readonly: "", spellcheck: "false" },
+                  }),
+                  fail: () => View({ class: "box-border text-muted", attributes: { role: "status" } }, ["运行调试后查看 XML 响应"]),
+                })])];
+              },
+            },
+            {
+              id: "feed", label: "卡片预览", panel_id: "script-debug-feed-panel",
+              get content() {
+                return [panel("feed", [ScriptFeedPreviewView(Timeless, { preview: feed_preview })])];
+              },
+            },
+          ] : []),
+          ...(["img", "video", "audio"].includes(kind) ? [{
+            id: "preview", label: "预览", panel_id: "script-debug-preview-panel",
+            get content() { return [panel("preview", [ScriptMediaPreviewView(Timeless, { preview })])]; },
+          }] : []),
         ],
       }),
     ],
   );
+}
+
+function ScriptDebugRouteView({ store: vm$, route, panel_id }) {
+  const url = computed(vm$.state.debug_routes, rows => rows.find(row => row.path === route.path)?.url || "");
+  return View({
+    class: "box-border flex-1 min-h-0 flex flex-col overflow-hidden",
+    attributes: { n: "script-debug-route-panel", id: panel_id },
+  }, [
+    View({
+      class: "box-border flex-none grid gap-space-2 p-space-5",
+      style: { "border-bottom": "1px solid var(--frui-color-border-soft)" },
+      attributes: { n: "script-debug-toolbar" },
+    }, [
+      View({ class: "box-border text-muted text-sm break-anywhere", attributes: { n: "script-debug-route-path" } }, [route.path]),
+      View({
+        class: "box-border grid items-center gap-space-2",
+        style: { "grid-template-columns": "minmax(0, 1fr) auto" },
+        attributes: { n: "script-debug-route-row", role: "group", "aria-label": route.name },
+      }, [
+        Input({ value: url, disabled: vm$.state.saving, placeholder: route.path,
+          attributes: { n: "script-debug-url", "aria-label": route.name + "调试地址", spellcheck: "false" },
+          onInput: event => vm$.methods.set_debug_url(event.target.value, route.path),
+        }),
+        Button({ icon: Icon("play", 16),
+          attributes: { n: "script-debug-run-button", "aria-label": "运行调试：" + route.name,
+            title: "运行当前草稿（⌘/Ctrl + Enter）" },
+          disabled: combine({ saving: vm$.state.saving, debugging: vm$.state.debugging,
+            script: vm$.state.draft_script, url, agent_busy: vm$.agent.state.busy },
+          deps => deps.saving || deps.debugging || deps.agent_busy || !deps.script.trim() || !deps.url.trim() || undefined),
+          onClick: () => vm$.methods.debug_script(route.path),
+        }, [computed(vm$.state.debugging, running => running ? "调试中…" : "运行调试")]),
+      ]),
+      View({ class: "box-border text-link text-sm", attributes: { n: "script-debug-progress", role: "status" } }, [
+        computed(vm$.state.debugging, running => running ? "正在执行当前草稿，可继续编辑…" : ""),
+      ]),
+    ]),
+    ScriptDebugResultView({ store: vm$, route }),
+  ]);
+}
+
+function ScriptDebugRoutesView({ store: vm$ }) {
+  // 路由列表变化时重建 Tab，编辑地址只更新对应输入，不重建编辑器。
+  const groups = computed(vm$.state.debug_routes, routes => [{
+    key: JSON.stringify(routes.map(({ path, name, image_proxy }) => [path, name, image_proxy])), routes,
+  }]);
+  return View({
+    class: "box-border flex flex-col min-w-0 min-h-0 overflow-hidden max-1100-grid-column max-1100-height max-1100-border-top max-760-min-height",
+    style: { "--max-1100-grid-column": "1 / -1", "--max-1100-height": "70dvh",
+      "--max-1100-border-top": "1px solid var(--frui-color-border-soft)", "--max-760-min-height": "50dvh" },
+    attributes: { n: "script-debug-pane" },
+  }, [
+    View({ class: "box-border text-danger whitespace-pre-wrap break-anywhere",
+      attributes: { n: "script-debug-routes-error", role: "alert" } }, [vm$.state.debug_routes_error]),
+    For({ each: groups, key: "key", render(group_value) {
+      const group = source_value(group_value);
+      return Tabs({
+        value: computed(vm$.state.debug_route_path, path => path), onChange: vm$.methods.select_debug_route,
+        class: "box-border flex-1 min-h-0 flex flex-col gap-0",
+        listProps: { class: "box-border flex-none", style: { padding: "0 var(--frui-space-5)" } },
+        panelProps: { class: "box-border flex-1 min-h-0 flex overflow-hidden" },
+        attributes: { n: "script-debug-route-tabs", "aria-label": "调试路由" },
+        items: group.routes.map((route, index) => ({
+          id: route.path, label: route.name, panel_id: "script-debug-route-panel-" + index,
+          attributes: { id: "script-debug-route-tab-" + index, title: route.path },
+          get content() {
+            return [Show({ when: computed(vm$.state.debug_route_path, path => path === route.path),
+              ok: () => ScriptDebugRouteView({ store: vm$, route, panel_id: "script-debug-route-panel-" + index }),
+            })];
+          },
+        })),
+      });
+    } }),
+  ]);
 }
 
 function ScriptFormView({ store: vm$ }) {
@@ -887,154 +1021,7 @@ function ScriptFormView({ store: vm$ }) {
             ],
           ),
           ScriptAgentPanelView({ ui: Timeless, agent: vm$.agent }),
-          View(
-            {
-              class:
-                "box-border flex flex-col min-w-0 min-h-0 overflow-hidden max-1100-grid-column max-1100-height max-1100-border-top max-760-min-height",
-              style: {
-                "--max-1100-grid-column": "1 / -1",
-                "--max-1100-height": "70dvh",
-                "--max-1100-border-top":
-                  "1px solid var(--frui-color-border-soft)",
-                "--max-760-min-height": "50dvh",
-              },
-              attributes: { n: "script-debug-pane" },
-            },
-            [
-              View(
-                {
-                  class: "box-border flex-none grid gap-space-2 p-space-5",
-                  style: {
-                    "border-bottom": "1px solid var(--frui-color-border-soft)",
-                  },
-                  attributes: { n: "script-debug-toolbar" },
-                },
-                [
-                  View(
-                    {
-                      class: "box-border grid gap-space-2",
-                      attributes: { n: "script-debug-routes" },
-                    },
-                    [
-                      For({
-                        key: "path",
-                        each: vm$.state.debug_routes,
-                        render(route_value_) {
-                          const route = source_value(route_value_);
-                          const url = computed(
-                            vm$.state.debug_routes,
-                            (rows) =>
-                              rows.find((row) => row.path === route.path)
-                                ?.url || "",
-                          );
-                          return View(
-                            {
-                              class: "box-border grid items-center gap-space-2",
-                              style: {
-                                "grid-template-columns": "minmax(0, 1fr) auto",
-                              },
-                              attributes: {
-                                n: "script-debug-route-row",
-                                role: "group",
-                                "aria-label": route.name,
-                                title: route.path,
-                              },
-                            },
-                            [
-                              Input({
-                                class: "box-border",
-                                value: url,
-                                disabled: vm$.state.saving,
-                                placeholder: route.path,
-                                attributes: {
-                                  n: "script-debug-url",
-                                  "aria-label": route.name + "调试地址",
-                                  spellcheck: "false",
-                                },
-                                onInput(event) {
-                                  vm$.methods.set_debug_url(
-                                    event.target.value,
-                                    route.path,
-                                  );
-                                },
-                              }),
-                              Button(
-                                {
-                                  class: "box-border",
-                                  attributes: {
-                                    n: "script-debug-run-button",
-                                    "aria-label": "运行调试：" + route.name,
-                                    title: "运行当前草稿（⌘/Ctrl + Enter）",
-                                  },
-                                  disabled: combine(
-                                    {
-                                      busy,
-                                      debugging: vm$.state.debugging,
-                                      script: vm$.state.draft_script,
-                                      url,
-                                      agent_busy: vm$.agent.state.busy,
-                                    },
-                                    (deps) =>
-                                      deps.busy ||
-                                      deps.debugging ||
-                                      deps.agent_busy ||
-                                      !deps.script.trim() ||
-                                      !deps.url.trim() ||
-                                      undefined,
-                                  ),
-                                  icon: Icon("play", 16),
-                                  onClick: () =>
-                                    vm$.methods.debug_script(route.path),
-                                },
-                                [
-                                  combine(
-                                    {
-                                      running: vm$.state.debugging,
-                                      path: vm$.state.debug_route_path,
-                                    },
-                                    (deps) =>
-                                      deps.running && deps.path === route.path
-                                        ? "调试中…"
-                                        : "运行调试",
-                                  ),
-                                ],
-                              ),
-                            ],
-                          );
-                        },
-                      }),
-                    ],
-                  ),
-                  View(
-                    {
-                      class:
-                        "box-border text-danger whitespace-pre-wrap break-anywhere",
-                      attributes: {
-                        n: "script-debug-routes-error",
-                        role: "alert",
-                      },
-                    },
-                    [vm$.state.debug_routes_error],
-                  ),
-                  View(
-                    {
-                      class: "box-border col-span-full text-link text-sm",
-                      attributes: {
-                        n: "script-debug-progress",
-                        role: "status",
-                      },
-                    },
-                    [
-                      computed(vm$.state.debugging, (running) =>
-                        running ? "正在执行当前草稿，可继续编辑…" : "",
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              ScriptDebugResultView({ store: vm$ }),
-            ],
-          ),
+          ScriptDebugRoutesView({ store: vm$ }),
         ],
       ),
     ],

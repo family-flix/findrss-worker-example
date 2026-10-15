@@ -14,7 +14,7 @@ import { public_http_url } from "../lib/proxy_url.js";
 import { SourceAddressModel } from "./source_address.js";
 
 const DISCOVERY_SOURCE_TYPES = new Set(Object.keys(DISCOVERY_PLATFORM_LABELS));
-const MAX_DISCOVERY_AVATAR_BYTES = 256 * 1024;
+const MAX_DISCOVERY_AVATAR_BYTES = 5 * 1024 * 1024;
 /** 登记 / 修改请求体上限。 */
 const MAX_BODY_BYTES = 16 * 1024;
 

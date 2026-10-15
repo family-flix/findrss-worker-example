@@ -6,7 +6,7 @@
   "main": "index.js",
   "scripts": {
     "build": "node scripts/build.js",
-    "dev": "npm run build && wrangler dev --local --port 8787",
+    "dev": "node scripts/dev.js",
     "deploy": "npm run build && wrangler deploy",
     "dry-run": "npm run build && wrangler deploy --dry-run",
     "test": "node --test test/*.test.js admin/__tests__/*.test.mjs && node --test discover/test/*.test.js"

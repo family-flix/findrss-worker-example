@@ -13,7 +13,7 @@ function modal_model(fetch) {
     FindRSSAdminShell: {}, FindRSSAdminPages: {}, FindRSSAdminAuth: { fetch },
   } });
   vm.runInContext(page_source("discovery.js") + "\nglobalThis.model = DiscoveryAdminViewModel();", context);
-  assert.deepEqual(JSON.parse(JSON.stringify(context.model.state.platforms.value)), [{ id: "website", label: "网页" }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.model.state.platforms.value)), [{ id: "website", label: "网页", icon: "" }]);
   return context.model;
 }
 
@@ -102,13 +102,17 @@ test("JSON 文件读取填入文本，限制类型大小，关闭后丢弃迟到
 });
 
 test("后台列表与表单读取脚本平台注册，自定义路由推断平台且手动选择保留", async () => {
-  const scripts = [{ kind: "rss", platform: "独立平台", path: "/different/:id", routes: [{ path: "/different/:id", platform: "独立平台" }] }];
+  const icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M1 2h3v4H1z"/></svg>';
+  const platform = { name: "独立平台", icon };
+  const scripts = [{ kind: "rss", platform, path: "/different/:id", routes: [{ path: "/different/:id", platform }] }];
   const model = modal_model(async url => Response.json(url.endsWith("/preview") ? { feed_url: "https://example.com/rss/different/123",
     defaults: { title: "预览", website: "", description: "", tags: [], source_type: "website" } } : url.includes("scripts") ? { scripts } : {
-    sources: [], platforms: [{ id: "website", label: "网页" }, { id: "独立平台", label: "独立平台" }],
+    sources: [], platforms: [{ id: "website", label: "网页" }, { id: "独立平台", label: "独立平台", icon }],
   }));
   await model.methods.refresh_list();
   assert.deepEqual(Array.from(model.state.platforms.value, platform => platform.id), ["website", "独立平台"]);
+  assert.equal(model.state.platforms.value[1].icon, icon);
+  assert.equal(platform_helpers.discovery_platform_icon_url("独立平台", model.state.platforms.value), "data:image/svg+xml," + encodeURIComponent(icon));
   model.methods.create_source();
   await new Promise(setImmediate);
   model.methods.set_draft("feed_url", "{{hostname}}/rss/different/123");
@@ -422,6 +426,31 @@ test("新增源回填默认值，异步旧地址不覆盖新草稿，头像随�
   const saved = calls.find((call) => call.options.method === 'POST' && call.url.endsWith('/sources'));
   assert.equal(JSON.parse(saved.options.body).feed_url, '{{hostname}}/rss/second');
   assert.ok(calls.some((call) => call.url.endsWith('/new/avatar') && call.options.method === 'PUT'));
+});
+
+test("读取信息时拦截非 RSS/Atom 模板地址，修正后及外部地址仍可读取", async () => {
+  const calls = [];
+  const model = modal_model(async (_url, options) => {
+    const { feed_url } = JSON.parse(options.body);
+    calls.push(feed_url);
+    return Response.json({ feed_url, defaults: { title: "源", tags: [] } });
+  });
+  for (const address of ["{{hostname}}", "{{hostname}}/feed.xml", "{{hostname}}/admin",
+    "{{hostname}}/rss-other/test", "{{hostname}}/atom.xml", "{{hostname}}.example.com/rss/test",
+    "{{hostname}}/rss/../../admin", "{{hostname}}/atom/%2e%2e/feed.xml"]) {
+    model.methods.set_draft("feed_url", address);
+    await model.methods.preview_feed();
+    assert.equal(model.state.form_error.value, "模板订阅源地址必须以 {{hostname}}/rss/ 或 {{hostname}}/atom/ 开头");
+    assert.equal(model.state.form_message.value, "");
+    assert.equal(model.state.previewing.value, false);
+  }
+  assert.deepEqual(calls, []);
+  for (const address of ["{{hostname}}/rss/demo?offset=1", "{{hostname}}/atom/demo", "https://example.com/feed.xml"]) {
+    model.methods.set_draft("feed_url", address);
+    await model.methods.preview_feed();
+    assert.equal(model.state.form_error.value, "");
+    assert.equal(calls.at(-1), address);
+  }
 });
 
 test("读取订阅源信息失败时展示具体错误描述，清除读取中提示且允许重试", async () => {

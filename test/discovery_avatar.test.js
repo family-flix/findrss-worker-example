@@ -143,7 +143,7 @@ test("R2 读取失败与对象缺失分别回 502/404", async () => {
 
 test("头像仍校验源存在、非空、大小及图片魔数", async () => {
   const { service, bucket } = fixture();
-  for (const [bytes, status] of [[new Uint8Array(), 413], [new Uint8Array(256 * 1024 + 1), 413],
+  for (const [bytes, status] of [[new Uint8Array(), 413], [new Uint8Array(5 * 1024 * 1024 + 1), 413],
     [new TextEncoder().encode("<svg></svg>"), 415]]) {
     await assert.rejects(service.put_discovery_avatar(upload(bytes), "src-1"), { status });
   }

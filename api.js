@@ -21,6 +21,7 @@ import {
   admin_redemption_campaign_request,
   admin_reset_device,
   admin_script_request,
+  admin_script_asset_request,
   admin_task_status,
   admin_user_request,
 } from "./server/service/worker/do_proxy.js";
@@ -307,6 +308,10 @@ export default {
         request.method === "POST"
       ) {
         return admin_script_request(env, request, "/debug");
+      }
+      const preview_asset_match = url.pathname.match(/^\/admin\/api\/scripts\/preview-assets\/([a-f0-9-]{36})$/);
+      if (preview_asset_match && ["GET", "HEAD"].includes(request.method)) {
+        return admin_script_asset_request(env, request, preview_asset_match[1]);
       }
       if (
         url.pathname === "/admin/api/scripts/routes" &&

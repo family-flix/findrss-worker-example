@@ -6,6 +6,7 @@ import { bearer_token, error_response, json_response } from "../../lib/http.js";
 import { valid_identifier } from "../../lib/identifiers.js";
 import { feed_hostname_origin, resolve_discovery_source_feed_urls } from "./discovery.js";
 import { reader_identity } from "./session.js";
+import { script_media_response } from "./media_proxy.js";
 
 /**
  * @param {Env} env
@@ -73,7 +74,9 @@ export async function admin_discovery_source_request(env, request, path = "") {
   const source_url = new URL(request.url);
   const internal_url = new URL("https://internal/_admin/discovery/sources" + path);
   internal_url.search = source_url.search;
-  const response = await object.fetch(new Request(internal_url, request));
+  const forwarded = new Request(internal_url, request);
+  forwarded.headers.set("X-Feed-Public-URL", feed_hostname_origin(env) || source_url.origin);
+  const response = await object.fetch(forwarded);
   return resolve_discovery_source_feed_urls(response, feed_hostname_origin(env), true);
 }
 
@@ -94,7 +97,18 @@ export async function admin_script_request(env, request, path = "") {
   const source_url = new URL(request.url);
   const internal_url = new URL("https://internal/_admin/scripts" + path);
   internal_url.search = source_url.search;
-  return object.fetch(new Request(internal_url, request));
+  const forwarded = new Request(internal_url, request);
+  // DO 的 env 不会继承路由层按访问地址补全的变量，显式传递脚本使用的公开地址。
+  forwarded.headers.set("X-Feed-Public-URL", feed_hostname_origin(env) || source_url.origin);
+  return object.fetch(forwarded);
+}
+
+export async function admin_script_asset_request(env, request, id) {
+  const response = await admin_script_request(env, request, "/preview-assets/" + id);
+  if (!response.ok) return response;
+  const { route, descriptor, kind } = await response.json();
+  return script_media_response(request, { route, descriptor, kind, version: "",
+    headers: { "Cache-Control": "no-store" } });
 }
 
 export async function admin_cookie_request(env, request, path = "/update") {

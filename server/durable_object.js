@@ -16,9 +16,7 @@ import { DeviceSocketHub } from "../socket_hub.js";
 import { CallModel } from "./domain/call.js";
 import { RssRouteCache } from "./infra/rss_cache.js";
 import { create_api_object_store } from "./infra/object_store.js";
-import { fetch_discovery_document } from './infra/feed_fetch.js';
-import { discovery_snapshot_articles } from './infra/discovery_snapshot.js';
-import { SourceAddressModel } from './domain/source_address.js';
+import { load_discovery_snapshot } from './infra/discovery_snapshot.js';
 import { ScriptModel } from './domain/script.js';
 import {
   MAINTENANCE_MILLISECONDS,
@@ -43,6 +41,7 @@ import { RepositoryRedemption } from "./repository/redemption.js";
 import { RepositoryRssCookieGrant } from "./repository/rss_cookie_grant.js";
 import { RepositoryRssCookie } from "./repository/rss_cookie.js";
 import { RepositoryScript } from "./repository/script.js";
+import { RepositoryPlatform } from "./repository/platform.js";
 import { RepositoryScriptLog } from "./repository/script_log.js";
 import { RepositoryRssRouteCache } from "./repository/rss_route_cache.js";
 import { RepositoryUser } from "./repository/user.js";
@@ -341,6 +340,7 @@ export const route = {
       rss_cookie_grants: new RepositoryRssCookieGrant({ sql: this.ctx.storage.sql }),
       rss_cookies: new RepositoryRssCookie({ sql: this.ctx.storage.sql }),
       scripts: new RepositoryScript({ sql: this.ctx.storage.sql }),
+      platforms: new RepositoryPlatform({ sql: this.ctx.storage.sql }),
       script_logs: new RepositoryScriptLog({ sql: this.ctx.storage.sql }),
       rss_route_cache: new RepositoryRssRouteCache({ sql: this.ctx.storage.sql, storage: this.ctx.storage }),
       users: new RepositoryUser({ sql: this.ctx.storage.sql }),
@@ -352,7 +352,9 @@ export const route = {
      * `infra/` import `repository/`，所以持久化只能由组合根注进去），而
      * `RepositoryRssRouteCache` 的方法名**就是** store 接口，直接注入即可。
      */
+    this.ctx.storage.transactionSync(() => this.repo.platforms.import_published(this.repo.scripts.list()));
     const ports = {
+      transaction: callback => this.ctx.storage.transactionSync(callback),
       sockets: new DeviceSocketHub(ctx),
       schedule_alarm: () => this.schedule_alarm(),
       route_cache: new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, RSS_ROUTE_CACHE_MAX_ENTRIES, {
@@ -395,30 +397,14 @@ export const route = {
     });
     this.app.users = new ServiceUser({ repo: this.repo, storage: this.ctx.storage });
     this.app.discovery = new ServiceDiscovery({
+      public_origin: feed_hostname_origin(env),
       statistics: this.app.statistics,
       repo: this.repo, route_cache: ports.route_cache, storage: this.ctx.storage,
       object_store: create_api_object_store(env),
       schedule_alarm: ports.schedule_alarm,
       render_catalog: catalog => render_embedded_home(catalog, DISCOVERY_CATALOG_ORIGIN),
-      load_snapshot: async (source) => {
-        const origin = feed_hostname_origin(env);
-        const feed_url = SourceAddressModel.resolve_feed_url(source.feed_url, origin);
-        const address = SourceAddressModel(source.feed_url);
-        const target = new URL(feed_url);
-        let xml;
-        if (address.is_route() && (source.feed_url.includes("{{hostname}}") || origin && target.origin === new URL(origin).origin)) {
-          const internal = new URL('https://internal/' + (source.require_token ? '_admin' : '_public') + '/feed/' + address.format + address.route_pathname);
-          internal.search = target.search;
-          const result = await this.app.scripts.serve_rss_route(address.format, address.route_pathname,
-            new Request(internal, { headers: { 'X-Feed-Public-URL': feed_url } }), { refresh: true });
-          xml = result.body;
-        } else {
-          const result = await fetch_discovery_document(feed_url);
-          if (result.error || result.http_status !== 200) throw new Error(result.error || "订阅源读取失败");
-          xml = result.xml;
-        }
-        return source.require_token ? [] : discovery_snapshot_articles(xml, feed_url);
-      },
+      load_snapshot: (source, origin) => load_discovery_snapshot(source, origin,
+        (...args) => this.app.scripts.serve_rss_route(...args)),
     });
     this.app.scripts = new ServiceScript({
       repo: this.repo,
@@ -431,7 +417,6 @@ export const route = {
     this.app.script_agent = new ServiceScriptAgent({
       repo: this.repo.script_agent,
       credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || ""),
-      ai_binding: env.AI,
       admin_ports: {
         source_types: () => this.app.discovery.platforms().map(platform => platform.id),
         context: async page => {
@@ -469,6 +454,10 @@ export const route = {
    * @returns {Promise<Response>}
    */
   async fetch(request) {
+    // 只记忆目录入口由 Worker 覆写的访问地址，不采用其他接口透传的请求头。
+    if (/^\/_(admin|public)\/discovery\//.test(new URL(request.url).pathname)) {
+      await this.app.discovery.remember_public_origin(request.headers.get("X-Feed-Public-URL"));
+    }
     if (!this.discovery_alarm_started) {
       this.discovery_alarm_started = true;
       this.ctx.waitUntil(this.schedule_alarm());

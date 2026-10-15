@@ -74,22 +74,10 @@ function LoginView() {
           ),
           View(
             {
-              class: "box-border text-muted",
-              style: {
-                margin: "10px 0 24px",
-                "font-size": "13px",
-                "line-height": "1.65",
-              },
-              attributes: { n: "admin-login-description" },
-            },
-            ["输入管理员密码以继续访问管理后台。"],
-          ),
-          View(
-            {
               class: "box-border grid text-muted",
               style: {
                 gap: "7px",
-                "margin-top": "15px",
+                "margin-top": "68px",
                 "font-size": "12px",
               },
               attributes: { n: "admin-login-password-field" },
@@ -99,6 +87,7 @@ function LoginView() {
                 class: "box-border",
                 value: vm$.state.password,
                 name: "password",
+                placeholder: "",
                 attributes: {
                   n: "admin-login-password-input",
                   id: "admin-login-password",
@@ -140,6 +129,7 @@ function LoginView() {
                 padding: "12px 16px",
               },
               variant: "primary",
+              icon: false,
               disabled: computed(
                 vm$.state.loading,
                 (loading) => loading || undefined,

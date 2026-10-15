@@ -62,11 +62,50 @@ test("直接访问 Token 页面返回后台 SPA 入口", async () => {
   let asset_path;
   env.ASSETS.fetch = async request => {
     asset_path = new URL(request.url).pathname;
-    return new Response("admin app");
+    return new Response("admin app", { status: asset_path === "/admin/index.html" ? 200 : 404 });
   };
   const response = await admin_worker.fetch(new Request("http://127.0.0.1/admin/tokens"), env);
   assert.equal(response.status, 200);
   assert.equal(asset_path, "/admin/index.html");
+});
+
+test("后台前端路由在资源不存在时回退 SPA，保留查询参数并支持 HEAD 与嵌套路由", async () => {
+  const { env } = create_env();
+  for (const method of ["GET", "HEAD"]) {
+    for (const path of ["/admin/", "/admin/settings", "/admin/settings/", "/admin/settings/models", "/admin/future-page"]) {
+      const assets = [];
+      env.ASSETS.fetch = async request => {
+        assets.push({ url: new URL(request.url), method: request.method });
+        return new Response(method === "HEAD" ? null : "admin app", {
+          status: new URL(request.url).pathname === "/admin/index.html" ? 200 : 404,
+          headers: { "Content-Type": "text/html" },
+        });
+      };
+      const response = await admin_worker.fetch(new Request("http://127.0.0.1" + path + "?tab=models", { method }), env);
+      assert.equal(response.status, 200, method + " " + path);
+      assert.equal(assets.at(-1).url.pathname, "/admin/index.html");
+      assert.equal(assets.at(-1).url.search, "?tab=models");
+      assert.equal(assets.at(-1).method, method);
+    }
+  }
+});
+
+test("已有静态资源、缺失静态资源、认证路径和写请求不回退 SPA", async () => {
+  const { env } = create_env();
+  for (const [path, method, status] of [
+    ["/admin/app.js", "GET", 200], ["/admin/missing.js", "GET", 404],
+    ["/admin/pages/missing.js", "GET", 404], ["/admin/missing.html", "GET", 404],
+    ["/admin/auth/missing", "GET", 404], ["/admin/auth", "GET", 404],
+    ["/admin/settings", "POST", 404],
+  ]) {
+    const paths = [];
+    env.ASSETS.fetch = async request => {
+      paths.push(new URL(request.url).pathname);
+      return new Response("asset", { status });
+    };
+    assert.equal((await admin_worker.fetch(new Request("http://127.0.0.1" + path, { method }), env)).status, status);
+    assert.deepEqual(paths, [path]);
+  }
 });
 
 test("WebSocket 升级请求返回 404 而不是落入静态资源处理", async () => {

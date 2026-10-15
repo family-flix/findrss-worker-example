@@ -61,7 +61,7 @@ function Button(props = {}, children = []) {
   const name = props.attributes?.n || "";
   const action = action_icons.find(([action]) => name.split("-").includes(action));
   const variant = props.variant || (action?.[0] === "delete" || action?.[0] === "remove" ? "danger" : "default");
-  return ReaderButton({ ...props, variant, icon: props.icon ?? (action ? Icon(action[1], 16) : undefined) }, children);
+  return ReaderButton({ ...props, variant, icon: props.icon === false ? undefined : props.icon ?? (action ? Icon(action[1], 16) : undefined) }, children);
 }
 
 // 保留后台原有事件形状；业务状态和提交仍由各页 Model 维护。

@@ -1416,6 +1416,7 @@ function DeviceTokensModel(confirm_action) {
     error = ref("");
   const draft = refobj({ name: "", note: "", expires_in_seconds: "2592000" });
   const revealed = refobj({});
+  const created = refobj({ name: "", token: "" });
   const timers = new Map();
   let disclosure_generation = 0;
   async function request(path = "", method = "GET", body) {
@@ -1460,6 +1461,10 @@ function DeviceTokensModel(confirm_action) {
     for (const timer of timers.values()) clearTimeout(timer);
     timers.clear();
     revealed.as({});
+    close_created();
+  }
+  function close_created() {
+    created.as({ name: "", token: "" });
   }
   return {
     open,
@@ -1468,6 +1473,11 @@ function DeviceTokensModel(confirm_action) {
     error,
     draft,
     revealed,
+    created,
+    close_created,
+    copy_created() {
+      return navigator.clipboard.writeText(created.value.token);
+    },
     set_draft(field, value) {
       draft.as({ ...draft.value, [field]: value });
     },
@@ -1479,7 +1489,8 @@ function DeviceTokensModel(confirm_action) {
     refresh: () => run(load),
     create: () =>
       run(async () => {
-        await request("", "POST", {
+        const generation = disclosure_generation;
+        const result = await request("", "POST", {
           ...draft.value,
           expires_in_seconds:
             draft.value.expires_in_seconds === ""
@@ -1487,7 +1498,16 @@ function DeviceTokensModel(confirm_action) {
               : Number(draft.value.expires_in_seconds),
         });
         draft.as({ ...draft.value, name: "", note: "" });
-        await load();
+        try {
+          if (open.value && generation === disclosure_generation) {
+            const value = await request("/" + result.device_token.id + "/reveal", "POST");
+            if (open.value && generation === disclosure_generation) {
+              created.as({ name: result.device_token.name, token: value.token });
+            }
+          }
+        } finally {
+          await load();
+        }
       }),
     reveal(id) {
       if (revealed.value[id]) {

@@ -79,6 +79,18 @@ test("预生成首页默认只有网页，脚本声明的平台在没有订阅�
   assert.doesNotMatch(html, /<img[^>]*src="\/(platform-icons|brand)\//);
 });
 
+test("发布平台的 SVG 在筛选和目录行使用图片 data URL，保留源码且不注入标记", () => {
+  const icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M1 2h3v4H1z"/></svg>';
+  const data = { sources: [{ id: "custom", title: "自定义源", feed_url: "https://example.com/feed", source_type: "自定义平台" }],
+    tags: [], platforms: [{ id: "自定义平台", label: "自定义平台", icon }] };
+  const html = render_home_document(data, DISCOVERY_CATALOG_ORIGIN);
+  const encoded = "data:image/svg+xml," + encodeURIComponent(icon);
+  assert.ok(html.includes('src="' + encoded + '"'));
+  assert.equal(html.split('src="' + encoded + '"').length - 1, 2, "筛选与源标注使用同一个数据库图标");
+  assert.equal(bootstrap_data(html).platforms[0].icon, icon);
+  assert.equal(html.includes(icon), false, "SVG 不作为 DOM 标记插入");
+});
+
 test("预生成首屏与完整目录，链接有效，bootstrap 转义 script 结束标签", () => {
   const malicious = { ...catalog, tags: ['</script><img src=x onerror="bad()">'] };
   const html = render_home_document(malicious, DISCOVERY_CATALOG_ORIGIN);

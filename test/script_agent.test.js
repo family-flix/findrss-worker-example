@@ -7,6 +7,8 @@ import { create_openai_compat_provider } from "../server/infra/script_agent_prov
 import { to_chat_messages } from "../server/lib/script_agent_protocol.js";
 import { SCRIPT_AGENT_FEED_KNOWLEDGE } from "../server/lib/script_agent_feed_knowledge.js";
 import { SCRIPT_AGENT_RUNTIME_KNOWLEDGE } from "../server/lib/script_agent_runtime_knowledge.js";
+import { SCRIPT_AGENT_RSSHUB_KNOWLEDGE } from "../server/lib/script_agent_rsshub_knowledge.js";
+import { fetch_rsshub_route_js } from "../server/infra/rsshub_route.js";
 register("./support/quickjs_wasm_hook.js", import.meta.url);
 const { XiaoxunScriptAgent, ServiceScriptAgent } = await import("../server/service/durable_object/script_agent.js");
 const { route } = await import("../durable_object_router.js");
@@ -49,7 +51,7 @@ test("Agent 读取草稿、校验修改并实时发送代码，然后用同一�
     assert.equal(messages[0].role, "system");
     assert.ok(messages[0].content.includes(SCRIPT_AGENT_FEED_KNOWLEDGE), "每一轮模型调用均收到 channel/item JSON→XML 知识");
     assert.ok(messages[0].content.includes(SCRIPT_AGENT_RUNTIME_KNOWLEDGE), "每一轮模型调用均收到工具模块、Result、基类和 Cookie 知识");
-    assert.deepEqual(options.tools.map(tool => tool.name), ["get_script_draft", "edit_script_draft", "debug_script_draft"]);
+    assert.deepEqual(options.tools.map(tool => tool.name), ["get_script_draft", "edit_script_draft", "debug_script_draft", "fetch_rsshub_route_js"]);
     return [tool("get_script_draft"), tool("edit_script_draft", { script: source("after"), revision: 2 }),
       tool("debug_script_draft", { revision: 3 }), answer("已修改并验证")][round++];
   } }, debug_draft: async value => { debug_inputs.push(value); return { ok: true, status: 200, rss_debug: { phase: "ok", output: "{}", lines: [] } }; } });
@@ -63,6 +65,70 @@ test("Agent 读取草稿、校验修改并实时发送代码，然后用同一�
   const wire = to_chat_messages(seen[3]);
   assert.ok(wire.some(message => message.role === "assistant" && typeof message.tool_calls[0].function.arguments === "string"));
   assert.ok(wire.some(message => message.role === "tool" && message.tool_call_id));
+});
+
+test("Agent 读取 RSSHub 源码提供给模型，转换后经真实编译更新草稿并调试", async () => {
+  const url = "https://github.com/DIYgod/RSSHub/blob/master/lib/routes/005/index.tsx";
+  const upstream_source = "export const route: Route = { path: '/:category?', handler: () => <p>资讯</p> };";
+  const converted = `export const route = { path: '/005/:category?', name: '资讯', example: '/005/zx',
+    handler(ctx) { return Result.Ok({ title: '资讯', link: 'https://005.tv/', items: [] }); } };`;
+  const events = [];
+  let round = 0, fetched = 0;
+  const controller = new AbortController();
+  const agent = new XiaoxunScriptAgent({
+    fetch_rsshub: (args, { signal }) => {
+      assert.equal(signal, controller.signal);
+      return fetch_rsshub_route_js(args, { signal, fetch_impl: async requested => {
+        fetched++; assert.equal(requested, url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/"));
+        return new Response(upstream_source);
+      } });
+    },
+    provider: { async complete(messages, options) {
+      assert.ok(messages[0].content.includes(SCRIPT_AGENT_RSSHUB_KNOWLEDGE));
+      assert.ok(options.tools.some(tool => tool.name === "fetch_rsshub_route_js"));
+      if (round === 1) {
+        const result = JSON.parse(messages.at(-1).content);
+        assert.equal(result.source, upstream_source);
+        assert.equal(result.path, "lib/routes/005/index.tsx");
+      }
+      return [tool("fetch_rsshub_route_js", { url }), tool("get_script_draft"),
+        tool("edit_script_draft", { script: converted, revision: 2 }),
+        tool("debug_script_draft", { revision: 3 }), answer("已转换并更新草稿")][round++];
+    } },
+    debug_draft: async value => {
+      assert.equal(value.script, converted);
+      return { ok: true, status: 200, rss_debug: { output: "{}", lines: [] } };
+    },
+  });
+  await agent.run(input(), event => events.push(event), controller.signal);
+  assert.equal(fetched, 1);
+  assert.deepEqual(events.filter(event => event.type === "tool_end").map(event => event.ok), [true, true, true, true]);
+  assert.equal(events.find(event => event.type === "draft").script, converted);
+  assert.equal(events.find(event => event.type === "debug").revision, 3);
+});
+
+test("RSSHub 抓取失败回传模型，取消后不发送迟到的工具结果", async () => {
+  let round = 0;
+  const events = [];
+  const agent = new XiaoxunScriptAgent({ fetch_rsshub: async () => { throw new Error("RSSHub HTTP 404"); },
+    provider: { async complete(messages) {
+      if (!round++) return tool("fetch_rsshub_route_js", { url: "missing" });
+      assert.match(JSON.parse(messages.at(-1).content).error, /404/);
+      return answer("源码不存在");
+    } },
+  });
+  await agent.run(input(), event => events.push(event));
+  assert.equal(events.find(event => event.type === "tool_end").ok, false);
+  assert.equal(events.some(event => event.type === "draft"), false);
+  let finish;
+  const controller = new AbortController(), cancelled_events = [];
+  const cancelled = new XiaoxunScriptAgent({ fetch_rsshub: () => new Promise(resolve => { finish = resolve; }),
+    provider: { complete: async () => tool("fetch_rsshub_route_js", { url: "source" }) },
+  });
+  const pending = cancelled.run(input(), event => cancelled_events.push(event), controller.signal);
+  await Promise.resolve(); controller.abort(new Error("停止抓取")); finish({ source: "late" });
+  await assert.rejects(pending, /停止抓取/);
+  assert.equal(cancelled_events.some(event => event.type === "tool_end"), false);
 });
 
 test("过期版本、非法脚本、未注册工具和缺失调试链接返回工具错误，不修改代码", async () => {
@@ -214,19 +280,18 @@ test("每轮对话使用准确选中的厂商、模型与参数；不可用选�
   await assert.rejects(service.run({ ...input(), provider_id: "two", model_id: "other" }, () => {}), /不可用/);
 });
 
-test("升级单模型配置时保留凭证，Workers AI 使用注入绑定与相同工具协议", async () => {
+test("升级单模型配置时保留凭证，移除 Workers AI 后拒绝该厂商并过滤旧配置", async () => {
   const credentials = create_script_agent_credentials("admin");
   let stored = { base_url: "https://legacy.example/v1", model: "legacy-model", encrypted_api_key: await credentials.encrypt("legacy-key") };
-  const requests = [];
-  const service = new ServiceScriptAgent({ credentials, repo: { get: () => stored, put: row => { stored = row; } }, ai_binding: { async run(model, body) {
-    requests.push({ model, body }); return { response: "OK" };
-  } } });
+  const service = new ServiceScriptAgent({ credentials, repo: { get: () => stored, put: row => { stored = row; } } });
   const upgraded = service.settings().providers;
   assert.equal(upgraded[0].models[0].model, "legacy-model");
   const cloud = { id: "workers", name: "Workers AI", type: "workers_ai", enabled: true, base_url: "", models: [{ id: "cf", name: "Cloud", model: "@cf/test/model", enabled: true, options: {} }] };
-  await service.save_settings({ providers: [...upgraded, cloud] });
+  await assert.rejects(service.save_settings({ providers: [...upgraded, cloud] }), /不支持的模型厂商类型/);
+  await assert.rejects(service.test_connection({ provider: cloud, model_id: "cf" }), /不支持的模型厂商类型/);
+  await service.save_settings({ providers: upgraded });
   assert.equal(await credentials.decrypt(JSON.parse(stored.encrypted_keys_json).default), "legacy-key");
-  await service.run({ ...input(), provider_id: "workers", model_id: "cf" }, () => {});
-  assert.equal(requests[0].model, "@cf/test/model");
-  assert.equal(requests[0].body.tools[0].function.name, "get_script_draft");
+  stored.config_json = JSON.stringify({ providers: [...upgraded, cloud] });
+  assert.deepEqual(service.settings().providers.map(provider => provider.id), ["default"]);
+  await assert.rejects(service.run({ ...input(), provider_id: "workers", model_id: "cf" }, () => {}), /不可用/);
 });

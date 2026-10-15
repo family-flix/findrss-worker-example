@@ -270,7 +270,7 @@ const __metadata = __entries.map((entry, route_index) => {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
     throw new Error("route 必须是对象");
   }
-  entry = { url: "", platform: "website", maintainers: [], example: entry.path, parameters: {}, description: "", ...entry };
+  entry = { url: "", platform: typeof platform === "undefined" ? { name: "网页", icon: "" } : platform, maintainers: [], example: entry.path, parameters: {}, description: "", ...entry };
   if (typeof entry.path !== "string" || entry.path === "") {
     throw new Error("route.path 必须是非空字符串");
   }
@@ -278,9 +278,6 @@ const __metadata = __entries.map((entry, route_index) => {
     throw new Error("route.name 必须是非空字符串");
   }
   if (typeof entry.url !== "string") { throw new Error("route.url 必须是字符串"); }
-  if (typeof entry.platform !== "string" || !entry.platform.trim() || entry.platform.trim() === "all" || entry.platform.length > 64 || /[\\u0000-\\u001f\\u007f]/.test(entry.platform)) {
-    throw new Error("route.platform 必须是 1–64 字符的平台名称或标识");
-  }
   if (!Array.isArray(entry.maintainers)) {
     throw new Error("route.maintainers 必须是字符串或维护者对象数组");
   }
@@ -317,7 +314,7 @@ const __metadata = __entries.map((entry, route_index) => {
     path: entry.path,
     name: entry.name,
     url: entry.url,
-    platform: entry.platform.trim(),
+    platform: entry.platform,
     maintainers: entry.maintainers,
     example: entry.example,
     parameters: entry.parameters,

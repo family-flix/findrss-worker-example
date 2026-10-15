@@ -24,9 +24,9 @@ test("路由接受多位维护者对象、旧字符串和平台元数据；非�
   const compile = metadata => compile_script_module(`export const route = { path: "/metadata", name: "元数据", handler() {}, ...${JSON.stringify(metadata)} };`);
   const compiled = await compile({ platform: "知乎", maintainers });
   assert.equal(compiled.error, "");
-  assert.equal(compiled.metadata.platform, "知乎");
+  assert.deepEqual(compiled.metadata.platform, { name: "知乎", icon: "" });
   assert.deepEqual(compiled.metadata.maintainers, maintainers);
-  assert.equal((await compile({})).metadata.platform, "website");
+  assert.deepEqual((await compile({})).metadata.platform, { name: "网页", icon: "" });
   for (const metadata of [{ platform: [] }, { platform: "" }, { platform: "all" }, { platform: "bad\nname" }, { platform: "a".repeat(65) },
     { maintainers: [{}] }, { maintainers: [{ nickname: "" }] }, { maintainers: [{ nickname: "甲", avatar: "javascript:alert(1)" }] },
     { maintainers: [{ nickname: "甲", url: "https://user:password@example.com/" }] }, { maintainers: [null] }]) {
@@ -59,10 +59,10 @@ test("脚本新增、修改平台和删除均重新发布首页目录", async ()
   let published = 0;
   service.app.discovery = { async publish_catalog() { published++; } };
   const created = await service.create_script(edit({ script: `export const route = { ...${feed("/platform")}, platform: "知乎" };`, version: "1.0.0" }));
-  assert.equal(created.data.script.platform, "zhihu");
+  assert.deepEqual(created.data.script.platform, { name: "知乎", icon: "" });
   assert.equal(published, 1);
   const updated = await service.update_script(edit({ script: `export const route = { ...${feed("/platform")}, platform: "独立平台" };`, version: "1.0.1" }), created.data.script.id);
-  assert.equal(updated.script.platform, "独立平台");
+  assert.deepEqual(updated.script.platform, { name: "独立平台", icon: "" });
   assert.equal(published, 2);
   await service.delete_script(created.data.script.id);
   assert.equal(published, 3);

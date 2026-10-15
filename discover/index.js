@@ -17,6 +17,7 @@ import {
   safe_avatar_url,
 } from "../server/lib/discovery_sources.js";
 import { logo_url, platform_icons } from "./icons.js";
+import { platform_icon_url } from "../server/lib/discovery_platform.js";
 import { LazyAvatar, LazyImg } from "./lazy_img.js";
 
 export const routes_configure = {
@@ -255,7 +256,7 @@ export function DiscoveryViewModel(catalog = null) {
   function apply_catalog(page = 0) {
     platforms_.set(
       Array.isArray(catalog.platforms)
-        ? catalog.platforms.map(({ id, label }) => ({ id, label }))
+        ? catalog.platforms.map(({ id, name, label, icon }) => ({ id, label: name || label, ...(icon === undefined ? {} : { icon }) }))
         : default_platforms,
     );
     if (
@@ -465,6 +466,11 @@ function discovery_platform_label(id, platforms = []) {
 
 function discovery_platform_icon(id) {
   return Object.hasOwn(DISCOVERY_PLATFORM_LABELS, id) ? id : "website";
+}
+
+function discovery_platform_icon_url(id, platforms) {
+  return platform_icon_url(platforms.find(platform => platform.id === id)?.icon)
+    || platform_icons[id ? discovery_platform_icon(id) : "all"];
 }
 
 /** @param {unknown} raw */
@@ -903,7 +909,7 @@ function FeedRowView({ vm$, feed }) {
                 [
                   Img({
                     class: "platform-icon",
-                    src: platform_icons[discovery_platform_icon(feed.source_type)],
+                    src: computed(vm$.state.platforms, platforms => discovery_platform_icon_url(feed.source_type, platforms)),
                     attributes: {
                       n: "feed-platform-icon",
                       alt: "",
@@ -987,7 +993,7 @@ export function PlatformNavigationView({ vm$ }) {
             key: "id",
             each: vm$.state.platform_filters,
             render(platform_value) {
-              const { id, label } = source_value(platform_value);
+              const { id, label, icon } = source_value(platform_value);
               return Button(
                 {
                   class: computed(
@@ -1010,7 +1016,7 @@ export function PlatformNavigationView({ vm$ }) {
                 [
                   Img({
                     class: "platform-icon",
-                    src: platform_icons[id ? discovery_platform_icon(id) : "all"],
+                    src: platform_icon_url(icon) || platform_icons[id ? discovery_platform_icon(id) : "all"],
                     attributes: {
                       n: "platform-filter-icon",
                       alt: "",

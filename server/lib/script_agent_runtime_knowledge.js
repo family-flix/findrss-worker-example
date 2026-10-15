@@ -82,12 +82,13 @@ map_results(array,mapper) → Result<Array> 和 replace_results(text,pattern,map
 选择器只支持标签、ID、class、属性存在/等于/前缀/后缀、后代和直接子节点；属性值不支持空白，不支持完整 DOM/CSS 或严格 XML 校验。parseJSON(text,reviver?) 同全局函数。
 
 三、RSS 源与热榜
+handler(ctx) 的返回值可声明 kind：rss 提供 XML 与卡片预览；img、video、audio 返回 {kind,url,headers?}，分别预览图片、MP4、音频，均可用 Result.Ok 包装。url 必须是无凭据 HTTP(S) 绝对地址。纯公开直链可不声明 allowed_hosts；需要代理或 Referer 等请求头时，路由声明 allowed_hosts=[明确的公网 HTTPS 域名]，禁止 Cookie/Authorization。Debug 使用管理员专用草稿快照，视频/音频支持 Range/HEAD 流式播放；不能把预览地址保存到脚本输出中。这里的返回值 kind 与模块级 kind=rss|hot 的脚本分类不同。
 class WechatChannelsRSS extends RSSScript {} 实现 async fetch(ctx) 返回 Result<feed>，route.handler 返回实例 run(ctx)。RSSScript 校验标题、来源链接、items 的稳定 ID/标题/原文链接，归一化时间、按真实 published 倒序并按 ID 去重。无发布时间的条目在末尾，不用采集时间补齐；热度与置顶不参与 RSS 排序。基类透传条目 description/content/image/images/live_photos/media_group/type/author/enclosure/categories/extra，保留源 id/extra 和真实 updated；多图、视频和动态照片可经 run(ctx) 输出。
 class BaiduHotRank extends HotRankScript {} 的 fetch(ctx) 返回 Result<{title,link,entries}>。entry 必须有稳定 id/title/link；非置顶 rank 是上游正整数或未知 null，置顶 pinned=true 且 rank=null；heat={value:非负数字或null,unit:非空字符串,text:字符串}。不能从列表下标推断排名或伪造热度。
 HotRankScript.run(ctx) 返回 {kind:'hot_rank',observed_at,entries,...} 的 Result；置顶在前；其余排名全部已知时按 rank 升序，有未知 rank 时保留上游次序，不按热度重新排。observed_at 是采集时间，不是 published。此输出没有 items，只能普通路由或 Debug 查看，不能直接走 /rss、/atom 生成 RSS 源。
 模块可 export const kind="hot" 或 "rss"，兼容旧 script_type；未声明时按顶部 /** HOT */ 或 /** RSS */，再按基类推断。迁移前无标记的 NewsNow 和 Instagram 示例兼容归为 hot，其余旧普通脚本默认为 rss。列表接口支持 ?kind=hot|rss。/admin/scripts 的标题是 Hot/RSS Tabs，Tab 内筛选、数量和列表按 kind 只展示当前类型，新增使用对应类型的默认脚本。迁移示例分别在 examples/hot（53 个）与 examples/rss（17 个），严格按原文件顶部 /** RSS */ 分类，不自动导入管理后台。route.path 不包含 /rss、/atom、/debug 前缀。新增脚本可存 draft，发布为 published 且 enabled 才生效；回退 draft 后不参与正式路由。脚本助手只能修改未保存草稿和 Debug，不能自行保存/发布/回退，全局助手不能声称修改脚本。
 
-route.platform 是平台名称或标识字符串（如“知乎”或“zhihu”），缺省为“网页”。保存脚本后平台自动出现在订阅源管理与首页筛选；支持自定义名称与多路由各自的平台。route.maintainers 支持多个 {nickname,url,avatar} 对象，也兼容字符串数组；nickname 必填，url/avatar 可空，非空必须是无凭据 HTTP(S) 地址。
+platform 使用 { name: '知乎', icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">...</svg>' }，icon 可以直接包含完整 SVG 源码，也支持无凭据的 HTTP(S) 或站内图片地址，允许为空；缺省为 { name: '网页', icon: '' }。可 export const platform 供全部路由共用，也可在 route.platform 覆盖；兼容旧字符串。正式版本发布成功后才收集平台并写入数据库，按名称去重，同名新图标更新旧图标；保存草稿和调试不注册平台。订阅广场平台列表与后台平台筛选 Select 从同一平台表读取。route.maintainers 支持多个 {nickname,url,avatar} 对象，也兼容字符串数组；nickname 必填，url/avatar 可空，非空必须是无凭据 HTTP(S) 地址。
 
 四、显式 Cookie 权限与日志
 ctx.fetchText 默认匿名，宿主不按 URL 自动注入 Cookie，不能填写 headers.Cookie。模块导出 permissions.cookies=[{id,origin,path_prefix,names,purpose}]：origin 是完整公网 HTTPS origin，无路径；path_prefix 是规范绝对路径；names 明确列出非空 Cookie 名称，不用通配符；purpose 说明读取用途。

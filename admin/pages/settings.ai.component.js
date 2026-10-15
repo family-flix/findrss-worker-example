@@ -616,31 +616,6 @@ function AISettingsEditor({
                         }),
                       ),
                       Show({
-                        when: computed(active, (value) => !value.preset_id),
-                        ok() {
-                          return Select({
-                            value: computed(active, value => value.type),
-                            options: [{
-                              value: "workers_ai",
-                              label: "Workers AI"
-                            }, {
-                              value: "openai_compat",
-                              label: "OpenAI 兼容"
-                            }],
-                            disabled: busy,
-                            attributes: {
-                              n: "settings-ai-provider-type",
-                              "aria-label": "厂商类型"
-                            },
-                            onChange(type) {
-                              return methods.update_provider({
-                                type
-                              });
-                            },
-                          });
-                        },
-                      }),
-                      Show({
                         when: computed(
                           active,
                           (value) => value.type === "openai_compat",
@@ -1031,8 +1006,6 @@ function AISettingsEditor({
                               computed(current, (value) =>
                                 !value.enabled ?
                                 "已停用" :
-                                value.provider?.type === "workers_ai" ?
-                                "Workers AI 绑定" :
                                 value.provider?.api_key_configured ?
                                 "已配置 API Key" :
                                 "待配置 API Key",
