@@ -61,7 +61,7 @@ FindRSS Worker 是一个部署到 Cloudflare Workers 的 自定义脚本运行�
 
 点击上方 **Deploy to Cloudflare**，按引导连接 GitHub / GitLab，选择 Cloudflare 账号，设置 Worker 名称和密钥后部署。Cloudflare 会复制项目、配置 Workers Builds，并按 Wrangler 配置创建所需的 Durable Object 和 R2 资源。[官方部署说明](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
 
-部署时只需将 `ADMIN_PASSWORD` 设置为后台登录密码，无需传入 `DEVICE_TOKEN`。使用项目定义的构建命令 `npm run build` 和部署命令 `npm run deploy`。完成后打开 Worker 域名的 `/admin/`，输入密码登录并创建第一个脚本；需要连接设备时，在「设备管理 → Device Token」创建凭证。
+部署时只需将 `ADMIN_PASSWORD` 设置为后台登录密码，无需传入 `DEVICE_TOKEN`、`FINDRSS_HOSTNAME` 或 `FEED_HOSTNAME`，域名默认使用当前访问地址。使用项目定义的构建命令 `npm run build` 和部署命令 `npm run deploy`。完成后打开 Worker 域名的 `/admin/`，输入密码登录并创建第一个脚本；需要连接设备时，在「设备管理 → Device Token」创建凭证。
 
 按钮指向独立公开仓库 `ltaoo/findrss-worker` 的根目录。请先创建该公开仓库并推送项目代码；仓库根目录应包含安装和构建所需的本地模块与资源。
 
@@ -323,7 +323,7 @@ R2 桶只需创建一次，已有同名桶可跳过。`secret put` 命令会提�
 | `COOKIE_PUSH_UUID` / `COOKIE_PUSH_KEY` | 使用 Cookie 推送时配置 | 接收 Cookie 同步凭据 |
 | `API_STORAGE` | Wrangler 已声明的 R2 绑定 | 存储头像、公开目录和文章快照 |
 
-固定订阅域名时，设置 `wrangler.jsonc` 的 `vars.FINDRSS_HOSTNAME`。本地开发可在项目根目录的 `.env` 或 `.dev.vars` 中设置 `FINDRSS_HOSTNAME=http://127.0.0.1:8787`，修改后重启 `npm run dev`；兼容旧名称 `FEED_HOSTNAME`，同时设置时优先使用 `FINDRSS_HOSTNAME`。存在 `.dev.vars` 时 Wrangler 不读取 `.env`。未配置时，订阅地址和手动快照刷新使用当前访问地址，脚本的 `ctx.public_origin` 也使用该地址生成图片代理等绝对链接；通过 workers.dev 或自定义域名访问均可。发现页的定时快照刷新沿用最近一次访问的域名，该域名会持久化保存。模型厂商与 API Key 可在后台「大模型设置」中配置。
+需要固定订阅域名时，可自行在 `wrangler.jsonc` 中添加 `vars.FINDRSS_HOSTNAME`。本地开发可在项目根目录的 `.env` 或 `.dev.vars` 中设置 `FINDRSS_HOSTNAME=http://127.0.0.1:8787`，修改后重启 `npm run dev`；兼容旧名称 `FEED_HOSTNAME`，同时设置时优先使用 `FINDRSS_HOSTNAME`。存在 `.dev.vars` 时 Wrangler 不读取 `.env`。未配置时，订阅地址和手动快照刷新使用当前访问地址，脚本的 `ctx.public_origin` 也使用该地址生成图片代理等绝对链接；通过 workers.dev 或自定义域名访问均可。发现页的定时快照刷新沿用最近一次访问的域名，该域名会持久化保存。模型厂商与 API Key 可在后台「大模型设置」中配置。
 
 ### 管理 Device Token
 

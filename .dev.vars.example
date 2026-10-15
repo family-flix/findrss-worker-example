@@ -1,5 +1,2 @@
 # 仅用于本地开发；生产部署时请设置独立的随机长密钥。
 ADMIN_PASSWORD=local-admin-token
-# 可选：图片代理和订阅源使用的公开地址，兼容旧名称 FEED_HOSTNAME。
-# 留空时使用当前访问地址；修改 .env / .dev.vars 后需重启 npm run dev。
-FINDRSS_HOSTNAME=
