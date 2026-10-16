@@ -72,6 +72,7 @@ export default {
         return admin_auth_required();
       }
       if (url.pathname === "/admin/api/network-test") return admin_network_test(request, env);
+      if (url.pathname === "/admin/api/network-test/curl") return admin_network_test(request, env, true);
       if (url.pathname === "/admin/api/network-test/cookie-domains") {
         if (request.method !== "GET") return error_response("method not allowed", 405, { Allow: "GET" });
         return admin_network_cookie_domains(env);

@@ -55,7 +55,7 @@ export async function admin_network_cookie_domains(env) {
   } catch (failure) { return error_response(failure.message || "读取 Cookie 域名失败", 502); }
 }
 
-export async function admin_network_test(request, env) {
+export async function admin_network_test(request, env, export_curl = false) {
   if (request.method !== "POST") return error_response("method not allowed", 405, { Allow: "POST" });
   let body;
   try {
@@ -85,6 +85,17 @@ export async function admin_network_test(request, env) {
     if (domains.some(domain => !available.has(domain))) return error_response("已选 Cookie 域名不存在，请刷新域名列表", 400);
     const selected = new Set(domains);
     cookies = cookies.filter(cookie => selected.has(cookie.domain));
+  }
+
+  if (export_curl) {
+    const request_cookie = cookie_header(cookies, url);
+    if (request_cookie) headers.cookie = request_cookie;
+    const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
+    // shortcut: 只复现首个请求；需要比较重定向链时再逐跳生成命令，避免泄露 Cookie 或认证头。
+    const command = ["curl -q --globoff --silent --show-error --include --compressed --max-time " + timeout_ms / 1000,
+      ...Object.entries(headers).map(([name, value]) => "  --header " + quote(value ? `${name}: ${value}` : `${name};`)),
+      "  --url " + quote(url)].join(" \\\n");
+    return json_response({ command });
   }
 
   const started_at = Date.now();

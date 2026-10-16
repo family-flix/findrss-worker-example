@@ -7,10 +7,13 @@ import { API_SCHEMA_SQL } from "../server/repository/schema.js";
 import { RepositoryCookiePushSettings } from "../server/repository/cookie_push_settings.js";
 import { ServiceCookiePushSettings } from "../server/service/durable_object/cookie_push_settings.js";
 import { create_script_agent_credentials } from "../server/infra/script_agent_credentials.js";
+import { handle_admin_request } from "../admin.js";
+import { create_worker } from "../router.js";
 register("./support/quickjs_wasm_hook.js", import.meta.url);
 const { ServiceScript } = await import("../server/service/durable_object/scripts.js");
 const { route } = await import("../durable_object_router.js");
-const { default: worker } = await import("../api.js");
+const { default: api } = await import("../api.js");
+const worker = create_worker({ api, admin: handle_admin_request });
 
 function fixture(context) {
   const digest = crypto.subtle.digest.bind(crypto.subtle);
@@ -37,8 +40,32 @@ function fixture(context) {
     method, headers: authorized ? { Authorization: "Bearer test-admin" } : {},
     ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }),
   }), env);
-  return { repo, settings, credentials, send, saved: () => saved };
+  return { repo, settings, credentials, send, fetch: request => worker.fetch(request, env), saved: () => saved };
 }
+
+test("统一 Worker 入口通过后台登录会话读取、保存 Cookie 解密设置，不进入静态资源路由", async context => {
+  const f = fixture(context);
+  const url = "https://local/admin/api/settings/cookies";
+  assert.equal((await f.fetch(new Request(url))).status, 401);
+  const login = await f.fetch(new Request("https://local/admin/auth/login", {
+    method: "POST", body: JSON.stringify({ password: "test-admin" }),
+  }));
+  assert.equal(login.status, 200);
+  const Cookie = login.headers.get("Set-Cookie").split(";")[0];
+  const read = () => f.fetch(new Request(url, { headers: { Cookie } }));
+  const initial = await read();
+  assert.equal(initial.status, 200);
+  assert.deepEqual(await initial.json(), { uuid: "", configured: false, updated_at: 0 });
+  const saved = await f.fetch(new Request(url, {
+    method: "PUT", headers: { Cookie, "Content-Type": "application/json" },
+    body: JSON.stringify({ uuid: "123", password: "secret" }),
+  }));
+  assert.equal(saved.status, 200);
+  const settings = await saved.json();
+  assert.equal(settings.configured, true);
+  assert.equal(settings.uuid, "123");
+  assert.deepEqual(await (await read()).json(), settings);
+});
 
 test("后台 Cookie 解密设置鉴权、派生加密保存、不回显秘密，保存后立即用于两种推送模式", async context => {
   const f = fixture(context);

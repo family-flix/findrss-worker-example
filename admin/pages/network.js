@@ -2,13 +2,14 @@ import { NetworkTestModel } from "./network.model.js";
 import { ScriptMediaPreviewView } from "../components/script_media.js";
 import { Checkbox } from "../components/frui/checkbox.js";
 
-const { View, Badge, Button, Input, Textarea, For, Show, CodeEditor, computed, combine } = window.FindRSSAdminUI;
+const { View, Badge, Button, Input, For, Show, CodeEditor, computed, combine } = window.FindRSSAdminUI;
 
 function NetworkTestPage({ view } = {}) {
   const model = NetworkTestModel();
   const { state, methods } = model;
   let stop_show, stop_hide;
   const cookie_disabled = combine({ busy: state.busy, loading: state.cookies_loading }, state => state.busy || state.loading);
+  const copy_label = combine({ copying: state.copying, copied: state.copied }, state => state.copying ? "正在复制…" : state.copied ? "已复制 curl 命令" : "复制 curl 命令");
   const status_badge = (status, name, text) => Badge({
     tone: status == null || status >= 400 ? "danger" : status >= 300 ? "warning" : status >= 200 ? "success" : "brand",
     attributes: { n: name },
@@ -31,6 +32,7 @@ function NetworkTestPage({ view } = {}) {
         "由当前 Worker 发起 GET 请求，默认使用起点示例的请求头。可修改网址和请求头，比较不同网站的访问结果。",
       ]),
       Input({ label: "目标网址", value: state.url, disabled: state.busy, placeholder: "https://example.com/",
+        help: "修改网址后会自动填入 Referer，仍可在下方手动编辑。",
         attributes: { n: "network-url", type: "url", spellcheck: "false" },
         onInput: event => methods.set("url", event.target.value), onEnter: methods.run }),
       Input({ label: "超时（秒）", value: state.timeout, disabled: state.busy,
@@ -62,12 +64,37 @@ function NetworkTestPage({ view } = {}) {
           } }),
         ]),
       ]),
-      Textarea({ label: "请求头（JSON）", value: state.headers, disabled: state.busy, rows: 7,
-        attributes: { n: "network-headers", spellcheck: "false" },
-        help: "可设置 User-Agent、Referer、Accept 等脚本支持的请求头；Cookie 请从上方已有域名中勾选。",
-        onInput: event => methods.set("headers", event.target.value) }),
-      Button({ class: "justify-self-start", disabled: state.busy, attributes: { n: "network-test-start" }, onClick: methods.run },
-        [computed(state.busy, busy => busy ? "正在请求…" : "开始测试")]),
+      View({ class: "grid min-w-0 gap-space-2", attributes: { n: "network-headers", role: "group", "aria-labelledby": "network-headers-label" } }, [
+        View({ class: "flex items-center justify-between gap-space-2", attributes: { n: "network-headers-heading" } }, [
+          View({ class: "text-sm", attributes: { n: "network-headers-label", id: "network-headers-label" } }, ["请求头"]),
+          Button({ size: "small", disabled: state.busy, attributes: { n: "network-header-add" }, onClick: () => methods.add_header() }, ["添加请求头"]),
+        ]),
+        For({ each: state.headers, key: "id", render(value) {
+          const row = value?.__is_ref ? value.value : value;
+          return View({ class: "grid min-w-0 gap-space-2 items-center", style: { "grid-template-columns": "minmax(0, 1fr) minmax(0, 2fr) auto" },
+            attributes: { n: "network-header-row-" + row.id } }, [
+            Input({ value: row.key, disabled: state.busy, placeholder: "请求头名称，如 User-Agent",
+              attributes: { n: "network-header-key-" + row.id, "aria-label": "请求头名称", spellcheck: "false" },
+              onInput: event => methods.update_header(row.id, "key", event.target.value) }),
+            Input({ value: row.value, disabled: state.busy, placeholder: "请求头值",
+              attributes: { n: "network-header-value-" + row.id, "aria-label": "请求头值", spellcheck: "false" },
+              onInput: event => methods.update_header(row.id, "value", event.target.value) }),
+            Button({ size: "small", disabled: state.busy, attributes: { n: "network-header-remove-" + row.id, "aria-label": "删除此请求头" },
+              onClick: () => methods.remove_header(row.id) }, ["删除"]),
+          ]);
+        } }),
+        View({ class: "text-muted text-sm", attributes: { n: "network-headers-help" } }, [
+          "可添加、删除或编辑请求头，完全空白的行不参与请求；Cookie 请从上方已有域名中勾选。",
+        ]),
+      ]),
+      View({ class: "flex flex-wrap items-center gap-space-2", attributes: { n: "network-actions" } }, [
+        Button({ disabled: state.busy, attributes: { n: "network-test-start" }, onClick: methods.run },
+          [combine({ busy: state.busy, copying: state.copying }, state => state.busy && !state.copying ? "正在请求…" : "开始测试")]),
+        Button({ disabled: cookie_disabled, attributes: { n: "network-copy-curl", "aria-label": copy_label }, onClick: methods.copy_curl }, [copy_label]),
+      ]),
+      View({ class: "text-muted text-sm", attributes: { n: "network-curl-help" } }, [
+        "curl 包含当前请求头、超时和匹配的已选 Cookie，可在本机终端运行并查看响应头；仅复现首个请求，不自动跟随重定向。命令含登录凭证，请勿公开分享。",
+      ]),
       View({ class: "text-danger whitespace-pre-wrap break-anywhere", attributes: { n: "network-error", role: "alert" } }, [state.error]),
       Show({ when: computed(state.result, Boolean), ok: () => View({ class: "grid min-w-0 gap-space-4", attributes: { n: "network-result" } }, [
         View({ class: "flex flex-wrap items-center gap-space-2 text-sm break-anywhere", attributes: { n: "network-summary", role: "status" } }, [

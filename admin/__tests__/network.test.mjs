@@ -3,6 +3,138 @@ import test from "node:test";
 import { NetworkTestModel } from "../pages/network.model.js";
 
 const ui = { ref: value => ({ value, as(next) { this.value = next; } }) };
+const set_headers = (model, headers) => {
+  for (const row of model.state.headers.value) model.methods.remove_header(row.id);
+  for (const [key, value] of Object.entries(headers)) model.methods.add_header(key, value);
+};
+
+test("请求头支持增删和编辑键值，忽略空白行，空值保留，测试与 curl 使用同一份数据", async () => {
+  const calls = [];
+  const model = NetworkTestModel({ ui, clipboard: { writeText: async () => {} }, fetch_impl: async (url, options) => {
+    calls.push(JSON.parse(options.body).headers);
+    return Response.json(url.endsWith("/curl") ? { command: "curl 'https://example.com/'" } : { status: 200 });
+  } });
+  assert.deepEqual(model.state.headers.value.map(row => row.key.value), ["Referer", "Accept", "Accept-Language", "User-Agent"]);
+  set_headers(model, {});
+  model.methods.add_header();
+  const row = model.state.headers.value[0];
+  model.methods.update_header(row.id, "key", "  Accept  ");
+  model.methods.update_header(row.id, "value", "text/html");
+  model.methods.update_header(row.id, "key", "User-Agent");
+  model.methods.update_header(row.id, "value", "local-test");
+  model.methods.add_header("Accept", "");
+  model.methods.add_header();
+  assert.equal(model.state.headers.value[0], row);
+  await model.methods.run();
+  await model.methods.copy_curl();
+  assert.deepEqual(calls, [{ "User-Agent": "local-test", Accept: "" }, { "User-Agent": "local-test", Accept: "" }]);
+  assert.equal(model.state.copied.value, true);
+  model.methods.update_header(row.id, "value", "edited");
+  assert.equal(model.state.copied.value, false);
+  for (const entry of model.state.headers.value) model.methods.remove_header(entry.id);
+  await model.methods.run();
+  assert.deepEqual(calls[2], {});
+});
+
+test("无效名称、重复名称、换行值及手填 Cookie 阻止测试和复制请求", async () => {
+  const model = NetworkTestModel({ ui, fetch_impl: async () => assert.fail("无效请求头不得提交") });
+  for (const headers of [ [["", "value"]], [["bad name", "value"]], [["Accept", "a"], ["accept", "b"]],
+    [["Accept", "a\r\nb"]], [["Accept", "a\0b"]], [["cOoKiE", "manual"]] ]) {
+    set_headers(model, {});
+    for (const [key, value] of headers) model.methods.add_header(key, value);
+    for (const action of [model.methods.run, model.methods.copy_curl]) {
+      await action();
+      assert.ok(model.state.error.value);
+      assert.equal(model.state.busy.value, false);
+    }
+  }
+});
+
+test("修改有效目标网址更新 Referer，删除后补回，允许手动编辑，无效网址不覆盖", () => {
+  const model = NetworkTestModel({ ui });
+  const referer = model.state.headers.value[0];
+  model.methods.set("url", "https://example.com/path?x=1#section");
+  assert.equal(referer.value.value, "https://example.com/path?x=1");
+  assert.equal(model.state.headers.value[0], referer);
+  model.methods.update_header(referer.id, "key", "rEfErEr");
+  model.methods.update_header(referer.id, "value", "https://manual.example/");
+  assert.equal(referer.value.value, "https://manual.example/");
+  for (const url of ["", "https://", "file:///tmp/example", "https://user:pass@example.com/"]) model.methods.set("url", url);
+  assert.equal(referer.value.value, "https://manual.example/");
+  model.methods.set("url", "http://other.example/");
+  assert.equal(referer.value.value, "http://other.example/");
+  model.methods.remove_header(referer.id);
+  model.methods.set("url", "https://example.com/new");
+  const added = model.state.headers.value.find(row => row.key.value === "Referer");
+  assert.equal(added.value.value, "https://example.com/new");
+  const before = model.state.headers.value;
+  model.state.busy.as(true);
+  model.methods.add_header(); model.methods.remove_header(added.id);
+  model.methods.update_header(added.id, "value", "blocked");
+  model.methods.set("url", "https://blocked.example/");
+  assert.equal(model.state.headers.value, before);
+  assert.equal(added.value.value, "https://example.com/new");
+});
+
+test("复制 curl 使用当前参数和所选域名，保留测试结果并显示复制状态", async () => {
+  const calls = [], copied = [];
+  let finish;
+  const model = NetworkTestModel({ ui, clipboard: { writeText: async text => copied.push(text) }, fetch_impl: (url, options) => {
+    calls.push({ url, options });
+    return new Promise(resolve => { finish = resolve; });
+  } });
+  model.state.cookie_domains.as([{ domain: ".example.com", count: 1 }]);
+  model.methods.set("url", "https://www.example.com/private");
+  set_headers(model, { "User-Agent": "local-test" });
+  model.methods.set("timeout", "15");
+  const result = { status: 403, body: "保留结果" };
+  model.state.result.as(result);
+  const pending = model.methods.copy_curl();
+  assert.equal(model.state.busy.value, true);
+  assert.equal(model.state.copying.value, true);
+  await model.methods.copy_curl();
+  await model.methods.run();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "/admin/api/network-test/curl");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { url: "https://www.example.com/private", timeout_ms: 15000,
+    headers: { "User-Agent": "local-test" }, cookie_domains: [".example.com"] });
+  finish(Response.json({ command: "curl --url 'https://www.example.com/private'" }));
+  await pending;
+  assert.deepEqual(copied, ["curl --url 'https://www.example.com/private'"]);
+  assert.equal(model.state.result.value, result);
+  assert.equal(model.state.copied.value, true);
+  assert.equal(model.state.busy.value, false);
+  assert.equal(model.state.copying.value, false);
+  model.methods.toggle_cookie_domain(".example.com", false);
+  assert.equal(model.state.copied.value, false);
+});
+
+test("复制 curl 校验输入，显示接口或剪贴板错误，离开页面后不复制迟到响应", async () => {
+  const copied = [];
+  let response = Response.json({ error: "读取 Cookie 失败" }, { status: 502 });
+  let finish, calls = 0;
+  const model = NetworkTestModel({ ui, clipboard: { async writeText(text) { copied.push(text); throw new Error("剪贴板权限被拒绝"); } },
+    fetch_impl: async () => { calls++; return response ?? new Promise(resolve => { finish = resolve; }); } });
+  set_headers(model, { Cookie: "manual" });
+  await model.methods.copy_curl();
+  assert.match(model.state.error.value, /请勾选/);
+  assert.equal(calls, 0);
+  set_headers(model, {});
+  await model.methods.copy_curl();
+  assert.equal(model.state.error.value, "读取 Cookie 失败");
+  response = Response.json({ command: "curl 'https://example.com/'" });
+  await model.methods.copy_curl();
+  assert.equal(model.state.error.value, "剪贴板权限被拒绝");
+  assert.equal(model.state.copied.value, false);
+  assert.equal(model.state.busy.value, false);
+  response = null;
+  const pending = model.methods.copy_curl();
+  model.methods.leave();
+  finish(Response.json({ command: "旧命令" }));
+  await pending;
+  assert.deepEqual(copied, ["curl 'https://example.com/'"]);
+  assert.equal(model.state.copied.value, false);
+});
 
 test("网络测试只调用后台接口，可编辑网址、超时和请求头，保留 HTTP 错误响应", async () => {
   let finish;
@@ -13,7 +145,7 @@ test("网络测试只调用后台接口，可编辑网址、超时和请求头�
   } });
   model.methods.set("url", "https://example.com/path");
   model.methods.set("timeout", "60");
-  model.methods.set("headers", '{"User-Agent":"my-agent"}');
+  set_headers(model, { "User-Agent": "my-agent" });
   const pending = model.methods.run();
   assert.equal(model.state.busy.value, true);
   await model.methods.run();
@@ -37,7 +169,7 @@ test("输入无效不提交；后端校验错误和带诊断的超时均可展�
     return calls === 1 ? Response.json({ error: "地址被拒绝" }, { status: 400 })
       : Response.json({ status: null, requests: [], error: "请求超时", code: "UPSTREAM_TIMEOUT" });
   } });
-  for (const [key, invalid] of [["url", "file:///etc/passwd"], ["timeout", "61"], ["headers", "[1]"], ["headers", '{"Accept":1}'], ["headers", '{"Cookie":"manual"}']]) {
+  for (const [key, invalid] of [["url", "file:///etc/passwd"], ["timeout", "61"]]) {
     const original = model.state[key].value;
     model.methods.set(key, invalid);
     await model.methods.run();

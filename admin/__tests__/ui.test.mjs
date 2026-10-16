@@ -48,12 +48,14 @@ test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使�
   Object.assign(context, { AbortController, Blob });
   context.FindRSSAdminShell = { Page: (_, children) => ui.View({ attributes: { n: "network-test-page" } }, children) };
   let status = 200;
-  const submitted = [];
+  const submitted = [], copied = [];
+  context.navigator = { clipboard: { writeText: async text => copied.push(text) } };
   context.FindRSSAdminAuth = { fetch: async (url, options) => {
     if (url.endsWith("/cookie-domains")) return Response.json({ domains: [
       { domain: ".example.com", count: 2 }, { domain: "other.example", count: 1 },
     ] });
     submitted.push(JSON.parse(options.body));
+    if (url.endsWith("/curl")) return Response.json({ command: "curl 'https://www.example.com/'" });
     return Response.json({ status, body_kind: "file", elapsed_ms: 10,
       requests: [{ status, url: "https://www.example.com/", elapsed_ms: 10 }] });
   } };
@@ -77,6 +79,44 @@ test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使�
       }
     }
     assert.deepEqual(submitted[0].cookie_domains, [".example.com"]);
+    assert.equal(submitted[0].headers.Referer, "https://www.example.com/");
+    const actions = find(root, "network-actions");
+    assert.ok(find(actions, "network-test-start"));
+    const copy_button = find(actions, "network-copy-curl");
+    assert.equal(copy_button.state.attributes["aria-label"], "复制 curl 命令");
+    await copy_button.events.onClick();
+    await new Promise(setImmediate);
+    assert.deepEqual(copied, ["curl 'https://www.example.com/'"]);
+    assert.equal(copy_button.state.attributes["aria-label"], "已复制 curl 命令");
+    assert.ok(find(root, "network-curl-help"));
+    await find(root, "network-header-add").events.onClick();
+    const header_row = find(root, "network-header-row-4");
+    assert.ok(header_row);
+    const header_key = find(header_row, "network-header-key-4");
+    const header_value = find(header_row, "network-header-value-4");
+    header_key.events.onInput({ target: { value: "Origin" } });
+    header_value.events.onInput({ target: { value: "https://local.example" } });
+    assert.equal(find(root, "network-header-row-4"), header_row);
+    assert.equal(find(root, "network-header-key-4"), header_key);
+    await find(root, "network-test-start").events.onClick();
+    await new Promise(setImmediate);
+    assert.equal(submitted.at(-1).headers.Origin, "https://local.example");
+    header_key.events.onInput({ target: { value: "Cache-Control" } });
+    header_value.events.onInput({ target: { value: "no-cache" } });
+    await copy_button.events.onClick();
+    await new Promise(setImmediate);
+    assert.equal(submitted.at(-1).headers["Cache-Control"], "no-cache");
+    assert.equal(submitted.at(-1).headers.Origin, undefined);
+    await find(root, "network-header-remove-4").events.onClick();
+    assert.equal(find(root, "network-header-row-4"), null);
+    await find(root, "network-header-remove-0").events.onClick();
+    find(root, "network-url").events.onInput({ target: { value: "https://www.example.com/changed#section" } });
+    assert.ok(find(root, "network-header-key-5"));
+    find(root, "network-header-value-5").events.onInput({ target: { value: "https://manual.example/" } });
+    await find(root, "network-test-start").events.onClick();
+    await new Promise(setImmediate);
+    assert.equal(submitted.at(-1).headers.Referer, "https://manual.example/");
+    assert.equal(submitted.at(-1).headers["Cache-Control"], undefined);
     find(root, "network-url").events.onInput({ target: { value: "https://unmatched.example/" } });
     assert.equal(find(root, "network-cookie-domain-.example.com"), null);
     assert.ok(find(root, "network-cookies-no-match"));

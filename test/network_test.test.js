@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { register } from "node:module";
+import { spawnSync } from "node:child_process";
 import { admin_network_test } from "../server/service/worker/network_test.js";
 import { handle_admin_request } from "../admin.js";
 import { create_worker } from "../router.js";
@@ -57,6 +58,44 @@ test("域名列表仅向管理员返回域名及数量，不包含 Cookie 名称
   const result = await response.json();
   assert.deepEqual(result, { domains: [{ domain: ".example.com", count: 2 }, { domain: "z.example", count: 1 }] });
   assert.doesNotMatch(JSON.stringify(result), /secret|private-value/);
+});
+
+test("复制 curl 仅管理员可用，不出网，匹配已选 Cookie 并安全转义终端参数", async t => {
+  t.mock.method(globalThis, "fetch", () => assert.fail("生成命令不得请求目标网站"));
+  const url = "https://www.example.com/private/[page]?q=a'b&next=$HOME";
+  const referer = "https://example.com/'$(printf expanded)`printf expanded`";
+  const saved = [
+    { domain: ".example.com", name: "session", value: "a'b$HOME`printf expanded`", path: "/private", secure: true },
+    { domain: ".example.com", name: "expired", value: "no", expirationDate: 1 },
+    { domain: ".example.com", name: "wrong_path", value: "no", path: "/elsewhere" },
+    { domain: ".example.com", name: "host_only", value: "no", hostOnly: true },
+    { domain: "www.example.com", name: "unselected", value: "no" },
+  ];
+  const curl_request = options => new Request("https://app.example/admin/api/network-test/curl", {
+    method: "POST", headers: { Authorization: "Bearer test-admin" },
+    body: JSON.stringify({ url, timeout_ms: 1250, headers: { Referer: referer, Accept: "" }, cookie_domains: [".example.com"] }),
+    ...options,
+  });
+  const cookies = cookie_env(saved);
+  assert.equal((await api.fetch(curl_request({ headers: {} }), cookies)).status, 401);
+  assert.equal((await api.fetch(curl_request({ method: "GET", body: undefined }), cookies)).status, 405);
+  const response = await api.fetch(curl_request(), cookies);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  const { command } = await response.json();
+  const parsed = spawnSync("/bin/sh", ["-c", "curl() { printf '%s\\0' \"$@\"; }\n" + command], { encoding: "utf8" });
+  assert.equal(parsed.status, 0, parsed.stderr);
+  assert.deepEqual(parsed.stdout.split("\0").slice(0, -1), [
+    "-q", "--globoff", "--silent", "--show-error", "--include", "--compressed", "--max-time", "1.25",
+    "--header", "user-agent: findrss-script/1.0", "--header", "accept;", "--header", "referer: " + referer,
+    "--header", "cookie: session=a'b$HOME`printf expanded`", "--url", new URL(url).href,
+  ]);
+  const anonymous = await (await admin_network_test(request(), env, true)).json();
+  assert.doesNotMatch(anonymous.command, /cookie:|test-admin|--location/);
+  for (const body of [{ url: "http://127.0.0.1/" }, { headers: { Host: "evil.example" } },
+    { headers: { Cookie: "manual" } }, { timeout_ms: 0 }, { cookie_domains: ["missing.example"] }]) {
+    assert.equal((await admin_network_test(request(body), cookies, true)).status, 400);
+  }
 });
 
 test("每一跳重新匹配所选域名的路径、HTTPS、hostOnly 和有效期，不发送未勾选的域", async t => {
