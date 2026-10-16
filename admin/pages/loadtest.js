@@ -1,3 +1,4 @@
+import { format_datetime } from "../../server/lib/datetime.js";
 import { LoadTestModel } from "./loadtest.model.js";
 
 const { View, Button, Input, Select, Icon, For, computed, ref } =
@@ -641,7 +642,7 @@ function LoadTestPage() {
                     render(value) {
                       const event = unwrap(value);
                       return node("event", [
-                        new Date(event.at).toLocaleTimeString() +
+                        format_datetime(event.at) +
                           " " +
                           event.text,
                       ]);

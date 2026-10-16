@@ -1,3 +1,4 @@
+import { format_datetime as format_time } from "../../server/lib/datetime.js";
 const Timeless = window.FindRSSAdminUI;
 const fetch = window.FindRSSAdminAuth.fetch;
 const { combine, ref, refarr, refobj } = Timeless;
@@ -1387,26 +1388,6 @@ function DashboardViewModel() {
   };
 
   return { state, methods, ui: ui_stores };
-}
-
-function format_time(value) {
-  if (!value) return "未知";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "未知";
-  const pad = (part) => String(part).padStart(2, "0");
-  return (
-    date.getFullYear() +
-    "-" +
-    pad(date.getMonth() + 1) +
-    "-" +
-    pad(date.getDate()) +
-    " " +
-    pad(date.getHours()) +
-    ":" +
-    pad(date.getMinutes()) +
-    ":" +
-    pad(date.getSeconds())
-  );
 }
 
 function DeviceTokensModel(confirm_action) {

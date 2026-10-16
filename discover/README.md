@@ -82,7 +82,7 @@ DISCOVERY_API_ORIGIN=https://your-worker.example FINDRSS_HOSTNAME=https://feeds.
 后台不再要求分类。保留旧 `category` 存储与 API 参数兼容；旧的科技、开发、商业、科学、设计、生活分类在读取时并入标签，后台编辑保存时转为显式标签。
 
 
-平台筛选和目录行优先使用正式脚本提交的 `platform.icon`；示例脚本已直接内嵌 `public/platform-icons/` 的对应 SVG。旧数据或未提供图标时保留内置图标回退。社媒图标保留原路径和品牌色；网站与全部使用广场已有的线形图标。
+平台筛选和目录行优先使用正式脚本提交的 `platform.icon`；品牌示例脚本直接内嵌 `public/platform-icons/` 的对应 SVG。`icon` 可省略或留空，旧数据或未提供图标时回退到内置平台图标，自定义平台默认显示地球 SVG，脚本无需重复内嵌。社媒图标保留原路径和品牌色；网站与全部使用广场已有的线形图标。
 
 `qidian.svg` 与 `fanqienovel.svg` 分别参考[起点 favicon](https://qdfepccdn.qidian.com/www.qidian.com/favicon/qd_icon.ico) 和[番茄小说 favicon](https://p1-tt.byteimg.com/origin/novel-static/a3621391ca2e537045168afda6722ee9) 绘制为纯矢量路径，供项目 README 的网站分组使用。
 

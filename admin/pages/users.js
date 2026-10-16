@@ -1,3 +1,4 @@
+import { format_datetime } from "../../server/lib/datetime.js";
 import { PaginationView } from "../components/pagination.js";
 import { source_value, UsersViewModel } from "./users.model.js";
 
@@ -14,9 +15,7 @@ if (
 const { Button, For, Input, Show, View, combine, computed } = Timeless;
 
 function format_time(value) {
-  if (!value) return "—";
-  const date = new Date(Number(value));
-  return Number.isNaN(date.getTime()) ? "未知" : date.toLocaleString();
+  return value ? format_datetime(value) : "—";
 }
 
 function email_text(email) {

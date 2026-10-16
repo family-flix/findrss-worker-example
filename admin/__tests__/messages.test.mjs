@@ -7,7 +7,7 @@ test("消息模型接收实时通知、标记已读、删除已读并在断线�
   const element = (props, children = []) => ({ props, children });
   const ref = value => ({ __is_ref: true, value, set(next) { this.value = next; }, as(next) { this.value = next; } });
   const stored = new Map(), sockets = [], timers = [];
-  let messages = [{ id: 1, error_text: "boom\n at handler (script-source.js:3:18)", params: { gh: "gh_e59ba9dfaa66" }, query: { offset: "20" }, created_at: Date.now(), source: "request" }];
+  let messages = [{ id: 1, error_text: "boom\n at handler (script-source.js:3:18)", params: { gh: "gh_e59ba9dfaa66" }, query: { offset: "20" }, created_at: new Date(2026, 0, 2, 3, 4, 59).getTime(), source: "request" }];
   let request_error = false;
   const deleted_read_ids = [];
   const window = {
@@ -49,6 +49,7 @@ test("消息模型接收实时通知、标记已读、删除已读并在断线�
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(sockets[0].url.protocol, "ws:");
   assert.equal(model.state.badge.value, "1");
+  assert.equal(model.state.rows.value[0].time, "2026-01-02 03:04");
   assert.match(model.state.rows.value[0].location, /第 3 行/);
   assert.match(model.state.rows.value[0].parameters, /gh_e59ba9dfaa66/);
   assert.equal(model.state.tab.value, "unread");

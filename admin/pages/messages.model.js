@@ -1,3 +1,4 @@
+import { format_datetime } from "../../server/lib/datetime.js";
 import { ScriptViewModel } from "./script.model.js";
 
 const { ref, refarr } = window.FindRSSAdminUI;
@@ -11,7 +12,7 @@ function message_value(value) {
     error_text,
     location: location ? "第 " + location[1] + " 行" + (location[2] ? "，第 " + location[2] + " 列" : "") + " · " + location[0] : (error_text.includes("script.js:") ? "历史记录：堆栈为沙箱行号" : "未提供源码位置"),
     parameters: JSON.stringify({ params: row.params || {}, query: row.query || {} }, null, 2),
-    time: new Date(Number(row.created_at)).toLocaleString(),
+    time: format_datetime(row.created_at),
     source_label: ({ request: "订阅请求", test: "测试运行", save: "保存校验" })[row.source] || row.source,
   };
 }

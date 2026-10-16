@@ -1,3 +1,4 @@
+import { format_datetime } from "../../server/lib/datetime.js";
 import {
   atomic_classes
 } from "../components/frui/atomic.js";
@@ -198,10 +199,7 @@ function RoleCallsView({
                     attributes: {
                       n: "role-call-date"
                     }
-                  }, [computed(raw, value => value.message_count < 2 ? "调用中…" : new Date(value.updated_at)
-                    .toLocaleString("zh-CN", {
-                      hour12: false
-                    }))]),
+                  }, [computed(raw, value => value.message_count < 2 ? "调用中…" : format_datetime(value.updated_at))]),
                 ]),
                 Popconfirm({
                   title: "删除这段调用记录及全部消息？",

@@ -1,3 +1,4 @@
+import { format_datetime } from "../../server/lib/datetime.js";
 import { PaginationView } from "../components/pagination.js";
 import { RedemptionCardsViewModel } from "./redemptions.model.js";
 
@@ -13,9 +14,7 @@ function source_value(value) {
 }
 
 function format_time(value) {
-  if (!value) return "不限";
-  const date = new Date(Number(value));
-  return Number.isNaN(date.getTime()) ? "未知" : date.toLocaleString();
+  return value ? format_datetime(value) : "不限";
 }
 
 function campaign_status_label(status) {

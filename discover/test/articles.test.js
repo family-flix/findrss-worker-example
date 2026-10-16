@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
+import { readFileSync } from "node:fs";
 import { home_source as source, initialize_home } from "./home_fixture.js";
 
 const make_feeds = () => Array.from({ length: 6 }, (_, i) => ({ title: "源" + i, feed_url: "https://example.com/feed/" + i, tags: [], source_type: "website", avatar_url: "", website: "", language: "", snapshot: { saved_at: 1000, articles: items } }));
@@ -92,6 +93,45 @@ test("目录只读取一次，筛选后复用静态文章快照", async () => {
   await context.model.methods.submit_search("源");
   assert.equal(context.model.methods.articles_for(context.model.state.feeds.value[0]).value.items[0].title, "初始文章");
   assert.deepEqual(calls, ["/api/catalog"]);
+});
+
+test("文章发布时间使用本地时区，兼容秒与毫秒并保留未知时间", async () => {
+  const timestamp = new Date(2026, 0, 2, 3, 4, 59).getTime();
+  const context = fixture(async () => Response.json({ sources: [{
+    title: "源", feed_url: "https://example.com/feed", snapshot: {
+      saved_at: timestamp,
+      articles: [timestamp, String(timestamp / 1000), null].map(published_at => ({ title: "文章", published_at })),
+    },
+  }] }));
+  await context.model.methods.init();
+  const feed = context.model.state.feeds.value[0];
+  assert.deepEqual(Array.from(context.model.methods.articles_for(feed).value.items, item => item.published_at.value),
+    ["2026-01-02 03:04", "2026-01-02 03:04", "时间未知"]);
+});
+
+test("SSR 时间在挂载后响应式切换到访客本地时区，不保留服务器文字", async () => {
+  const timestamp = new Date(2026, 0, 2, 3, 4, 59);
+  const context = vm.createContext({ URL, URLSearchParams,
+    setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
+    window: { location: { href: "https://discover.example/" }, history: { replaceState() {} }, addEventListener() {} },
+    document: { readyState: "loading", addEventListener() {} },
+  });
+  for (const name of ["timeless.umd.min.js", "timeless.dom.umd.min.js"]) {
+    vm.runInContext(readFileSync(new URL("../../public/assets/timeless/0.34.2/" + name, import.meta.url), "utf8"), context);
+  }
+  context.window.Timeless = context.Timeless;
+  context.catalog = { sources: [{
+    title: "源", feed_url: "https://example.com/feed", snapshot: {
+      saved_at: 1, articles: [{ title: "文章", published_at: timestamp.getTime() }],
+    },
+  }] };
+  initialize_home(context, vm);
+  const label = context.model.state.feeds.value[0].snapshot.articles[0].published_at;
+  const text = { nodeType: 3, textContent: timestamp.toISOString().slice(0, 16).replace("T", " ") };
+  context.Timeless.DOM.hydrate(context.Timeless.Text(label), { firstChild: text });
+  await context.model.methods.init();
+  assert.equal(label.value, "2026-01-02 03:04");
+  assert.equal(text.textContent, "2026-01-02 03:04");
 });
 
 test("头像曝光前只渲染首字占位，没有头像 URL 时不发起加载", () => {

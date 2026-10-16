@@ -1,3 +1,4 @@
+import { format_datetime } from "../../server/lib/datetime.js";
 import { PaginationModel } from "../components/pagination.js";
 
 const Timeless = window.FindRSSAdminUI;
@@ -325,7 +326,7 @@ function RedemptionCardsViewModel() {
     const object_url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = object_url;
-    anchor.download = "FindRSS-兑换卡-" + new Date().toISOString().slice(0, 10) + ".csv";
+    anchor.download = "FindRSS-兑换卡-" + format_datetime(Date.now(), { format: "YYYY-MM-DD" }) + ".csv";
     anchor.click();
     window.setTimeout(() => URL.revokeObjectURL(object_url), 1000);
   }

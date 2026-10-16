@@ -1,3 +1,4 @@
+import { format_datetime } from "../../server/lib/datetime.js";
 import { PaginationModel } from "../components/pagination.js";
 import { PollPolicyModel } from "../components/poll_policy.model.js";
 import {
@@ -569,7 +570,7 @@ function DiscoveryAdminViewModel() {
         anchor.setAttribute("data-n", "discovery-source-export-download");
         anchor.href = object_url;
         anchor.download =
-          "findrss-sources-" + new Date().toISOString().slice(0, 10) + ".json";
+          "findrss-sources-" + format_datetime(Date.now(), { format: "YYYY-MM-DD" }) + ".json";
         anchor.click();
       } catch (error) {
         list_error_.set("导出失败：" + (error.message || "无法下载 JSON 文件"));

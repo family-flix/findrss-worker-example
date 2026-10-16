@@ -1,3 +1,4 @@
+import { format_datetime } from "../server/lib/datetime.js";
 import {
   Button,
   For,
@@ -42,18 +43,13 @@ const search_debounce_ms = 350;
 const copy_status_ms = 2000;
 export const SOURCE_PAGE_SIZE = 20;
 
-function format_time(value) {
+function format_time(value, timezone) {
   const timestamp = Number(value || 0);
   if (!timestamp) return "";
-  const date = new Date(
-    timestamp > 100000000000 ? timestamp : timestamp * 1000,
-  );
-  return Number.isNaN(date.getTime())
-    ? ""
-    : date.toLocaleString("zh-CN", { hour12: false });
+  return format_datetime(timestamp > 100000000000 ? timestamp : timestamp * 1000, { fallback: "", timezone });
 }
 
-function normalize_feed(item) {
+function normalize_feed(item, local_time) {
   const feed_url = safe_http_url(item.feed_url);
   if (!feed_url) return null;
   const website = safe_http_url(item.website);
@@ -94,7 +90,8 @@ function normalize_feed(item) {
           id: String(index),
           title: plain_text(article.title, 180) || "无标题",
           link: safe_http_url(article.link),
-          published_at: format_time(article.published_at),
+          published_at: computed(local_time, local =>
+            format_time(article.published_at, local ? undefined : "UTC") || "时间未知"),
           cover_url: safe_http_url(article.cover_url),
           cover_blurhash: String(article.cover_blurhash || ""),
           cover_width: Math.max(
@@ -112,6 +109,8 @@ function normalize_feed(item) {
 
 export function DiscoveryViewModel(catalog = null) {
   let catalog_pending = null;
+  // SSR 与 hydration 先使用 UTC，挂载后由模型切换为访客本地时间。
+  const local_time_ = ref(false);
   const query_ = ref("");
   const selected_platform_ = ref("");
   const platforms_ = ref(default_platforms);
@@ -177,6 +176,7 @@ export function DiscoveryViewModel(catalog = null) {
   }
 
   function init() {
+    local_time_.set(true);
     if (!initialized) {
       window.addEventListener("popstate", restore_location);
       initialized = true;
@@ -298,7 +298,7 @@ export function DiscoveryViewModel(catalog = null) {
           current_page * SOURCE_PAGE_SIZE,
           (current_page + 1) * SOURCE_PAGE_SIZE,
         )
-        .map(normalize_feed)
+        .map(item => normalize_feed(item, local_time_))
         .filter(Boolean),
     );
     available_tags_.set([
@@ -1239,7 +1239,6 @@ export function HomePage({ vm$ }) {
       class: "discovery-app",
       attributes: { n: "discovery-app" },
       onMounted() {
-        document.querySelector("input")?.focus();
         vm$.methods.init();
       },
     },

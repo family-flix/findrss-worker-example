@@ -1,3 +1,4 @@
+import { format_datetime as format_time } from "../../server/lib/datetime.js";
 import xml_parser from "fast-xml-parser/src/fxp.js";
 import { create_feed_parser } from "../../packages/feed-fetch/src/feed_parser.js";
 import { FeedModel } from "../../server/domain/feed_format.js";
@@ -18,12 +19,6 @@ function safe_url(value, base) {
 function plain_text(value) {
   return String(value || "").replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "")
     .replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function format_time(value) {
-  const date = new Date(value);
-  const pad = value => String(value).padStart(2, "0");
-  return `${String(date.getFullYear()).padStart(4, "0")}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 export function ScriptFeedPreviewModel(source, request_url = "", preview_assets = null) {

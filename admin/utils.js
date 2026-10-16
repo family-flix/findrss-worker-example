@@ -1,11 +1,12 @@
 // 叶子模块：调试开关/日志、ref 解包、时间格式化。
-// 不 import 任何东西（连 constants.js 都不需要）——biz/、components/、pages/ 都从这里取。
+// 只依赖共享时间工具——biz/、components/、pages/ 都从这里取。
 // domain/ 刻意不依赖它：领域层不该碰 ref 解包或时间格式化这类平台/展示关注点。
 //
 // 这里**不认识 window / navigator**：业务层要能在多个宿主里跑，所以调试开关与在线状态
 // 都由宿主 provider 探测（见 platform/browser.js 的 browser_host_environment），组装根在启动时
 // 用 `configure_debug_logging(host.is_debug())` 灌进来；离线判断则由调用方把
 // `host.is_offline()` 的结果当参数传进 `startup_error_message`。
+import { dayjs, format_datetime } from "../server/lib/datetime.js";
 
 /**
  * 阅读端诊断开关：URL 带 `?debug=1`、localStorage 置 `findrss-reader:debug=1`，
@@ -53,13 +54,13 @@ function unwrap_feed(raw) {
 function format_clock(timestamp) {
   const value = Number(timestamp) || 0;
   if (value === 0) return "";
-  const date = new Date(value);
-  const now = new Date();
-  const clock = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-  if (date.toDateString() === now.toDateString()) return clock;
-  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  if (date.toDateString() === yesterday.toDateString()) return `昨天 ${clock}`;
-  return `${date.getMonth() + 1}月${date.getDate()}日 ${clock}`;
+  const date = dayjs(value);
+  if (!date.isValid()) return "";
+  const now = dayjs();
+  const clock = date.format("HH:mm");
+  if (date.isSame(now, "day")) return clock;
+  if (date.isSame(now.subtract(1, "day"), "day")) return `昨天 ${clock}`;
+  return date.format("M月D日 HH:mm");
 }
 
 /** @param {number} timestamp */
@@ -70,7 +71,7 @@ function format_time(timestamp) {
   if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前`;
   if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前`;
   if (elapsed < 7 * 86_400_000) return `${Math.floor(elapsed / 86_400_000)} 天前`;
-  return new Date(timestamp).toLocaleDateString("zh-CN");
+  return format_datetime(timestamp, { fallback: "", format: "YYYY-MM-DD" });
 }
 
 /**

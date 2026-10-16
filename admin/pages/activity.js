@@ -1,3 +1,4 @@
+import { format_datetime } from "../../server/lib/datetime.js";
 import { source_value, UserActivityViewModel } from "./activity.model.js";
 
 const Timeless = window.FindRSSAdminUI;
@@ -8,9 +9,7 @@ if (!Timeless || !Timeless.DOM || !window.FindRSSAdminAuth || !window.FindRSSAdm
 const { Button, For, Input, Show, View, combine, computed } = Timeless;
 
 function format_time(value) {
-  if (!value) return "—";
-  const date = new Date(Number(value));
-  return Number.isNaN(date.getTime()) ? "未知" : date.toLocaleString();
+  return value ? format_datetime(value) : "—";
 }
 
 function email_text(email) {

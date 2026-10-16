@@ -1,3 +1,4 @@
+import { format_datetime as format_time } from "../../server/lib/datetime.js";
 import { ScriptDebugOutputModel } from "../components/script_output.js";
 import { ScriptFeedPreviewModel, ScriptFeedPreviewView } from "../components/script_feed.js";
 import { ScriptDebugPreviewModel } from "../domain/script_preview.js";
@@ -46,12 +47,6 @@ const {
 /** @param {unknown} value */
 function source_value(value) {
   return value && value.__is_ref ? value.value : value;
-}
-
-function format_time(value) {
-  if (!value) return "未知";
-  const date = new Date(Number(value));
-  return Number.isNaN(date.getTime()) ? "未知" : date.toLocaleString();
 }
 
 const source_labels = {
