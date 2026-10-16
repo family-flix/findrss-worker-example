@@ -5,6 +5,8 @@ import { snapshot_store } from "./support/snapshot_store.js";
 import { RssRouteCache, rss_route_cache_key } from "../server/infra/rss_cache.js";
 import { RSS_ROUTE_CACHE_TTL_MS } from "../server/lib/constants.js";
 import { ServiceCredit } from "../server/service/durable_object/credits.js";
+import { RepositoryBackgroundTasks } from "../server/repository/background_tasks.js";
+import { ServiceBackgroundTasks } from "../server/service/durable_object/background_tasks.js";
 register("./support/quickjs_wasm_hook.js", import.meta.url);
 const { ServiceScript } = await import("../server/service/durable_object/scripts.js");
 
@@ -38,6 +40,30 @@ function fixture(public_source = true) {
     get calls() { return calls; }, get scheduled() { return scheduled; },
     set_public(value) { public_source = value; }, fail(value = true) { fail = value; } };
 }
+
+test("XML 刷新记录后台任务，终止真实脚本后保留旧 XML 且不会误报脚本失败", async t => {
+  const f = fixture(); t.after(() => f.db.close());
+  const tasks_repo = new RepositoryBackgroundTasks(f);
+  const tasks = new ServiceBackgroundTasks({ repo: tasks_repo, wait_until: f.ports.wait_until });
+  f.service.app.background_tasks = tasks;
+  await f.serve("rss", undefined, true);
+  assert.equal(tasks.list().tasks[0].status, "completed");
+  let started, resolve;
+  const invoked = new Promise(done => { started = done; });
+  f.service.script_invoke = () => { started(); return new Promise(done => { resolve = done; }); };
+  f.service.record_log = () => assert.fail("管理员取消不能记录为脚本错误");
+  const pending = f.serve("rss", undefined, true);
+  const rejected = assert.rejects(pending, /快照刷新已终止/);
+  await invoked;
+  const active = tasks.list().tasks.find(task => task.status === "running");
+  assert.ok(active);
+  tasks.cancel(active.id);
+  resolve("取消后返回的内容");
+  await rejected;
+  assert.equal(tasks_repo.find(active.id).status, "cancelled");
+  assert.match((await f.serve()).body, /版本1/);
+  assert.equal(tasks.list().tasks.length, 2);
+});
 
 test("首次访问返回正在生成并启动后台任务，生成后只读 XML，重建 DO 后仍复用", async () => {
   const f = fixture();

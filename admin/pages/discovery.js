@@ -609,6 +609,7 @@ function SourceRowView({ store: vm$, source }) {
           Button({ size: "small", variant: "ghost", disabled: row_busy, attributes: { n: "discovery-source-edit-button" },
             onClick() { vm$.methods.edit_source(source.id); } }, ["编辑"]),
           Button({ size: "small", variant: "ghost",
+            loading: computed(vm$.state.snapshot_refreshing, ids => ids.includes(source.id)),
             disabled: combine({ ids: vm$.state.snapshot_refreshing, busy: row_busy }, ({ ids, busy }) => busy || (source.require_token && !source.cache) || ids.includes(source.id)),
             attributes: { n: "discovery-source-refresh-snapshot" }, onClick() { return vm$.methods.refresh_snapshot(source.id); },
           }, [computed(vm$.state.snapshot_refreshing, ids => ids.includes(source.id) ? "生成中…" : "刷新快照")]),

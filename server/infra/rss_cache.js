@@ -182,7 +182,8 @@ export class RssRouteCache {
    * @param {() => Promise<{ output: string, invoked: boolean }>} produce
    * @returns {Promise<{ output: string, invoked: boolean, cached: boolean }>}
    */
-  async run(key, now, produce, { force = false } = {}) {
+  async run(key, now, produce, { force = false, signal } = {}) {
+    signal?.throwIfAborted();
     const generation = this.generation;
     const hit = force ? null : await this.resolve(key, now);
     if (hit !== null) return { ...hit, cached: true };
@@ -194,12 +195,13 @@ export class RssRouteCache {
       pending = Promise.resolve()
         .then(produce)
         .then(async (result) => {
+          signal?.throwIfAborted();
           // 失效发生在执行期间时（如脚本刚被更新）不回填，避免旧内容重新进入缓存。
           if (this.inflight.get(key) === pending) {
             const completed_at = this.clock();
             const value = { ...result, saved_at: completed_at, expires_at: is_xml_key(key) ? 0 : completed_at + this.ttl_ms };
             // 先持久化再替换内存；刷新失败时仍可读取旧快照。
-            await this.persist(key, value);
+            await this.persist(key, value, signal);
             if (this.inflight.get(key) === pending) this.put(key, value, completed_at);
           }
           return result;
@@ -305,7 +307,8 @@ export class RssRouteCache {
    * @param {{ output: string, invoked: boolean, expires_at: number, rendered?: Map<string, string> }} result
    * @returns {Promise<void>}
    */
-  async persist(key, result) {
+  async persist(key, result, signal) {
+    signal?.throwIfAborted();
     if (this.store === null) return;
     if (!result.rendered && result.output.length > this.persist_max_bytes) return;
     const entry = {
@@ -323,6 +326,7 @@ export class RssRouteCache {
       await this.object_store.put(object_key, JSON.stringify({ output_json: entry.output_json, rendered: entry.rendered }),
         { httpMetadata: { contentType: "application/json; charset=utf-8" } });
       try {
+        signal?.throwIfAborted();
         this.store.write({ ...entry, output_json: "", rendered: undefined, object_key,
           bytes: result.output.length + entry.rendered.reduce((total, [, body]) => total + body.length, 0) });
       } catch (error) {

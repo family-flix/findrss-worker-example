@@ -37,7 +37,8 @@ export class ServiceTask {
    * @param {number} [timeout_milliseconds]
    * @returns {Promise<unknown>}
    */
-  async invoke(request, timeout_milliseconds = INVOKE_TIMEOUT_MILLISECONDS, resume = false) {
+  async invoke(request, timeout_milliseconds = INVOKE_TIMEOUT_MILLISECONDS, resume = false, signal) {
+    signal?.throwIfAborted();
     const deadline = Date.now() + timeout_milliseconds;
     // create_task 的成功体是 do_result 信封（201 创建 / 200 幂等重放）；失败一律抛
     // DurableObjectError（402 余额不足等），由 router 翻译，这里原样向上冒泡。
@@ -59,7 +60,7 @@ export class ServiceTask {
         };
 
     const remaining_milliseconds = Math.max(0, deadline - Date.now());
-    const row = await this.wait_for_invoke(task_id, remaining_milliseconds);
+    const row = await this.wait_for_invoke(task_id, remaining_milliseconds, signal);
     if (row === null) {
       throw do_error(
         "invoke timed out after " + Math.round(timeout_milliseconds / 1000) + " seconds",
@@ -90,7 +91,8 @@ export class ServiceTask {
    * @param {number} timeout_milliseconds
    * @returns {Promise<any>}
    */
-  wait_for_invoke(task_id, timeout_milliseconds) {
+  wait_for_invoke(task_id, timeout_milliseconds, signal) {
+    signal?.throwIfAborted();
     const existing = this.find_task(task_id);
     if (existing === null || existing.status === "completed" || existing.status === "failed") {
       return Promise.resolve(existing);
@@ -99,7 +101,7 @@ export class ServiceTask {
       return Promise.resolve(null);
     }
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       /** @type {Set<{ resolve: (row: unknown) => void, timeout_id: ReturnType<typeof setTimeout> }>} */
       let group = this.waiters.get(task_id);
       if (group === undefined) {
@@ -108,13 +110,18 @@ export class ServiceTask {
       }
       // 先建桩、后赋定时器：回调要引用桩自己。到点只摘自己那一格——同一条任务上可能还有
       // 别的等待者（合并/重试），不能一起清，否则后来者会被前一个的超时误伤。
-      const waiter = { resolve, timeout_id: 0 };
-      waiter.timeout_id = setTimeout(() => {
+      const remove = () => {
+        clearTimeout(waiter.timeout_id);
+        signal?.removeEventListener("abort", on_abort);
         group.delete(waiter);
         if (group.size === 0) this.waiters.delete(task_id);
-        resolve(null);
-      }, timeout_milliseconds);
+      };
+      // 设备调用可能由多个刷新共享，终止时只移除本次等待，已下发调用仍按原租约结束。
+      const on_abort = () => { remove(); reject(signal.reason); };
+      const waiter = { resolve: row => { remove(); resolve(row); }, timeout_id: 0 };
+      waiter.timeout_id = setTimeout(() => waiter.resolve(null), timeout_milliseconds);
       group.add(waiter);
+      signal?.addEventListener("abort", on_abort, { once: true });
 
       const current = this.find_task(task_id);
       if (current === null || current.status === "completed" || current.status === "failed") {

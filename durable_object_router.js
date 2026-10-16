@@ -80,6 +80,15 @@ function translate(result) {
  */
 async function dispatch(request, app) {
   const url = new URL(request.url);
+  if (url.pathname === "/_admin/background-tasks") {
+    if (request.method === "GET") return app.background_tasks.list();
+    throw new DurableObjectError("method not allowed", 405);
+  }
+  const cancel_background_task = url.pathname.match(/^\/_admin\/background-tasks\/([A-Za-z0-9-]+)\/cancel$/);
+  if (cancel_background_task) {
+    if (request.method === "POST") return app.background_tasks.cancel(cancel_background_task[1]);
+    throw new DurableObjectError("method not allowed", 405);
+  }
   if (["/_admin/settings/snapshots", "/_admin/settings/cookies", "/_admin/settings/webhook"].includes(url.pathname)) {
     const settings = url.pathname.endsWith("/webhook") ? app.webhook_settings
       : url.pathname.endsWith("/cookies") ? app.cookie_push_settings : app.snapshot_settings;
@@ -287,6 +296,9 @@ async function dispatch(request, app) {
   }
   const discovery_snapshot_match = url.pathname.match(/^\/_admin\/discovery\/sources\/([A-Za-z0-9-]+)\/snapshot$/);
   if (discovery_snapshot_match && request.method === "POST") {
+    if (request.headers.get("Prefer") === "respond-async") {
+      return new DurableObjectResult({ task: app.discovery.snapshot_task(discovery_snapshot_match[1], request.headers.get("X-Feed-Public-URL")).task }, 202);
+    }
     return app.discovery.refresh_discovery_snapshot(discovery_snapshot_match[1], request.headers.get("X-Feed-Public-URL"));
   }
   const discovery_source_avatar_match = url.pathname.match(

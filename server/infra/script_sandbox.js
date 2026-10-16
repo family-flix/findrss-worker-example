@@ -362,6 +362,7 @@ export function execute_script(
   cookies = [],
   mock_ctx_source = "",
   cookie_access = null,
+  signal,
 ) {
   return run_in_sandbox_queue(() =>
     execute_script_inner(
@@ -372,6 +373,7 @@ export function execute_script(
       cookies,
       mock_ctx_source,
       cookie_access,
+      signal,
     ));
 }
 
@@ -383,7 +385,9 @@ export async function execute_script_inner(
   cookies,
   mock_ctx_source,
   cookie_access = null,
+  task_signal,
 ) {
+  task_signal?.throwIfAborted();
   const QuickJS = await get_quickjs_module();
   const runtime = QuickJS.newRuntime();
   const vm = runtime.newContext();
@@ -395,12 +399,14 @@ export async function execute_script_inner(
       route_metadata = { ...route_metadata, config: route_metadata.config_schema ? script_config_value(route_metadata.config_schema, route_metadata.config) : {} };
     } catch (error) { throw new ScriptError("runtime", "脚本配置无效，请在脚本卡片中配置：" + error.message); }
     const get_cookies = promises.bind("cookies.get", async id_handle => {
+      task_signal?.throwIfAborted();
       if (!cookie_access) throw new Error("Cookie 权限尚未获得管理员确认");
       return vm.unwrapResult(vm.evalCode("(" + JSON.stringify(cookie_access.get(vm.getString(id_handle))) + ")"));
     });
     vm.setProp(vm.global, "__getCookies", get_cookies);
     get_cookies.dispose();
     const fetch_text = promises.bind("fetchText", async (url_handle, options_handle) => {
+      task_signal?.throwIfAborted();
       const url = vm.getString(url_handle);
       const fetch_options = options_handle ? vm.dump(options_handle) : null;
       const headers = rss_fetch_headers(fetch_options);
@@ -443,7 +449,7 @@ export async function execute_script_inner(
         const signed = sign_douyin_request(QuickJS, sdk, { url: outgoing_url, cookie: request_cookie, user_agent: headers["user-agent"] });
         outgoing_url = signed.url; signed_headers = signed.headers;
       }
-      signal ||= AbortSignal.timeout(timeout_ms);
+      signal ||= task_signal ? AbortSignal.any([AbortSignal.timeout(timeout_ms), task_signal]) : AbortSignal.timeout(timeout_ms);
       const derived_headers = rss_cookie_headers(fetch_options, request_cookie);
       if (!credentials_allowed) for (const name of RSS_FETCH_CREDENTIAL_HEADERS) delete derived_headers[name];
       const trace = route_metadata.debug === true ? {
@@ -472,6 +478,7 @@ export async function execute_script_inner(
       });
       if (trace) trace.status = response.status;
       } catch (failure) {
+        task_signal?.throwIfAborted();
         const timed_out = signal.aborted;
         throw Object.assign(new Error(timed_out ? "脚本上游请求超时，请稍后重试" : "脚本上游连接失败，请稍后重试"), {
           name: "FeedError", code: timed_out ? "UPSTREAM_TIMEOUT" : "UPSTREAM_FETCH_FAILED",
@@ -517,6 +524,7 @@ export async function execute_script_inner(
     if (invoke_impl !== null) {
       let invoke_count = 0;
       const invoke_fn = promises.bind("invoke", async (spec_handle) => {
+        task_signal?.throwIfAborted();
         invoked = true;
         invoke_count += 1;
         if (invoke_count > MAX_SCRIPT_INVOKES) {

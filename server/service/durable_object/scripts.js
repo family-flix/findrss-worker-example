@@ -897,7 +897,7 @@ export class ServiceScript {
    * @param {string} [coalesce_key] 合并键：同键的在飞同参调用会被复用而不是重复下发
    * @returns {Promise<unknown>} 设备返回的结果
    */
-  async script_invoke(access_token_id, spec, credit_subject = "", coalesce_key = "", resume_key = "") {
+  async script_invoke(access_token_id, spec, credit_subject = "", coalesce_key = "", resume_key = "", signal) {
     const method = typeof spec.method === "string" ? spec.method.trim() : "";
     if (!valid_identifier(method)) {
       throw new Error("invoke 的 method 非法：" + String(spec.method).slice(0, 100));
@@ -925,7 +925,7 @@ export class ServiceScript {
     // invoke 成功回 do_result（200 + 结果），失败抛 DurableObjectError；把后者还原成
     // ScriptInvokeError，保持「402/409 被 serve_rss_route 透传」的既有语义。
     try {
-      const result = await this.app.tasks.invoke(invoke_request, resume_key ? 1000 : SCRIPT_INVOKE_TIMEOUT_MS, resume_key !== "");
+      const result = await this.app.tasks.invoke(invoke_request, resume_key ? 1000 : SCRIPT_INVOKE_TIMEOUT_MS, resume_key !== "", signal);
       return result.data;
     } catch (error) {
       if (error instanceof DurableObjectError) {
@@ -976,7 +976,8 @@ export class ServiceScript {
    * @param {{ refresh?: boolean }} [options]
    * @returns {Promise<{ body: string, headers: Record<string, string> }>}
    */
-  async serve_rss_route(format, route_pathname, request, { refresh = false } = {}) {
+  async serve_rss_route(format, route_pathname, request, { refresh = false, signal } = {}) {
+    signal?.throwIfAborted();
     const debug_request = format === "debug";
     if (
       !route_pathname.startsWith("/") ||
@@ -1069,6 +1070,11 @@ export class ServiceScript {
     const cache_key = (snapshot ? (feed_public ? "public-snapshot:" : "private-snapshot:")
       : preview_script_id ? "admin-preview:" + preview_script_id + ":" : "")
       + rss_route_cache_key(route_pathname, request_query);
+    if (snapshot && refresh && !signal && this.app.background_tasks) {
+      return this.app.background_tasks.start(cache_key, {
+        kind: "snapshot", title: "刷新 XML 快照：" + (metadata.name || route_pathname), target: route_pathname + request_url.search,
+      }, signal => this.serve_rss_route(format, route_pathname, request, { refresh, signal })).promise;
+    }
     const self_url = (request.headers.get("X-Feed-Public-URL") ?? "").trim();
     if (snapshot && feed_public && !this.public_registered.has(cache_key)) {
       if (!this.repo.rss_route_cache.register_public(cache_key, route_pathname, request_query, self_url, RSS_ROUTE_CACHE_MAX_ENTRIES)) {
@@ -1104,13 +1110,14 @@ export class ServiceScript {
     const resumable = /^[a-f0-9-]{36}$/.test(refresh_id);
     let invocation_index = 0;
     const invoke_impl = async (spec) => {
+      signal?.throwIfAborted();
       script_invoked = true;
       const index = ++invocation_index;
       try {
         // cache_key 作为合并键一路传到 create_task：同一个「路由+query」派生出的同参调用
         // 已经有一条在飞时，后来的请求挂到那条上等结果，而不是再下发一次设备调用。
         const resume_key = resumable ? "rss:" + await sha256_resume(JSON.stringify([refresh_id, cache_key, index, spec])) : "";
-        return await this.script_invoke(invoke_token, spec, credit_subject, cache_key, resume_key);
+        return await this.script_invoke(invoke_token, spec, credit_subject, cache_key, resume_key, signal);
       } catch (error) {
         if (invoke_failure === null && error instanceof ScriptInvokeError) {
           if (error.status === 402 || error.status === 409 || error.status === 503) {
@@ -1132,12 +1139,14 @@ export class ServiceScript {
     const started_at = Date.now();
     try {
       const produce = async () => {
+        signal?.throwIfAborted();
         const result = await execute_script(
           String(selected.row.script),
           metadata,
           invoke_impl,
           request_context,
-          [], "", cookie_access);
+          [], "", cookie_access, signal);
+        signal?.throwIfAborted();
         cookie_access?.assert_grant();
         if (snapshot) {
           const feed = FeedModel.fromValue(JSON.parse(result.output));
@@ -1156,7 +1165,7 @@ export class ServiceScript {
       };
       const { output, invoked, cached, lines, upstream_requests, cookie_accesses, rendered } = debug_request
         ? await produce()
-        : await this.ports.route_cache.run(cache_key, Date.now(), produce, { force: refresh });
+        : await this.ports.route_cache.run(cache_key, Date.now(), produce, { force: refresh, signal });
       cookie_access?.assert_grant();
       if (format === "raw" && !debug_request) {
         return {
@@ -1197,6 +1206,7 @@ export class ServiceScript {
         },
       };
     } catch (failure) {
+      signal?.throwIfAborted();
       cookie_access?.assert_grant();
       if (failure instanceof DurableObjectError) throw failure;
       const fields = script_failure_fields(failure);

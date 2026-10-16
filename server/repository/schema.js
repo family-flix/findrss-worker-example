@@ -27,6 +27,7 @@ export function migrate_script_tables(sql) {
 export const API_TABLE_NAMES = Object.freeze([
   "overview_snapshot",
   "snapshot_settings",
+  "background_tasks",
   "cookie_push_settings",
   "webhook_settings",
   "platforms",
@@ -70,6 +71,11 @@ export const API_SCHEMA_SQL = `
     id INTEGER PRIMARY KEY CHECK (id = 1),
     policy_json TEXT NOT NULL,
     updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS background_tasks (
+    id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, target TEXT NOT NULL,
+    status TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT ''
   );
   CREATE TABLE IF NOT EXISTS cookie_push_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),

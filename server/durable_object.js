@@ -60,6 +60,8 @@ import { ServiceMaintenance } from "./service/durable_object/maintenance.js";
 import { ServiceRedemption } from "./service/durable_object/redemption.js";
 import { ServiceScript } from "./service/durable_object/scripts.js";
 import { ServiceTask } from "./service/durable_object/tasks.js";
+import { RepositoryBackgroundTasks } from "./repository/background_tasks.js";
+import { ServiceBackgroundTasks } from "./service/durable_object/background_tasks.js";
 import { ServiceUser } from "./service/durable_object/users.js";
 import { RepositorySnapshotSettings } from "./repository/snapshot_settings.js";
 import { ServiceSnapshotSettings } from "./service/durable_object/snapshot_settings.js";
@@ -347,6 +349,7 @@ export const route = {
     }
     /** 纯 SQL 存储层：每个聚合一个 RepositoryX，只回原始行/Set/数字。 */
     this.repo = {
+      background_tasks: new RepositoryBackgroundTasks({ sql: this.ctx.storage.sql }),
       snapshot_settings: new RepositorySnapshotSettings({ sql: this.ctx.storage.sql }),
       cookie_push_settings: new RepositoryCookiePushSettings({ sql: this.ctx.storage.sql }),
       webhook_settings: new RepositoryWebhookSettings({ sql: this.ctx.storage.sql }),
@@ -394,6 +397,7 @@ export const route = {
     };
     /** 应用服务注册表：兄弟服务经 `this.app.<svc>.<method>` 互相调用。 */
     this.app = {};
+    this.app.background_tasks = new ServiceBackgroundTasks({ repo: this.repo.background_tasks, wait_until: ports.wait_until });
     this.app.webhook_settings = new ServiceWebhookSettings({ repo: this.repo.webhook_settings,
       credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || "") });
     this.app.snapshot_settings = new ServiceSnapshotSettings({ repo: this.repo.snapshot_settings, schedule_alarm: ports.schedule_alarm });
@@ -435,6 +439,7 @@ export const route = {
     });
     this.app.users = new ServiceUser({ repo: this.repo, storage: this.ctx.storage });
     this.app.discovery = new ServiceDiscovery({
+      background_tasks: this.app.background_tasks,
       snapshot_settings: () => this.app.snapshot_settings.settings(),
       check_cookie_permissions: script_id => this.app.scripts.check_cookie_permissions(script_id),
       public_origin: feed_hostname_origin(env),
@@ -443,8 +448,8 @@ export const route = {
       object_store: create_api_object_store(env),
       schedule_alarm: ports.schedule_alarm,
       render_catalog: catalog => render_embedded_home(catalog, DISCOVERY_CATALOG_ORIGIN),
-      load_snapshot: (source, origin) => load_discovery_snapshot(source, origin,
-        (...args) => this.app.scripts.serve_rss_route(...args)),
+      load_snapshot: (source, origin, signal) => load_discovery_snapshot(source, origin,
+        (...args) => this.app.scripts.serve_rss_route(...args), signal),
     });
     this.app.scripts = new ServiceScript({
       repo: this.repo,

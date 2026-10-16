@@ -40,8 +40,9 @@ export class ServiceDiscovery {
   /**
    * @param {{ repo: Record<string, any>, storage?: any, route_cache?: any, object_store?: any, load_snapshot?: Function, schedule_alarm?: Function, render_catalog?: Function, public_origin?: string }} deps
    */
-  constructor({ repo, storage, route_cache = null, object_store = null, load_snapshot = null, schedule_alarm = null, render_catalog = null, statistics = null, public_origin = "", snapshot_settings = () => null, check_cookie_permissions = null }) {
+  constructor({ repo, storage, route_cache = null, object_store = null, load_snapshot = null, schedule_alarm = null, render_catalog = null, statistics = null, public_origin = "", snapshot_settings = () => null, check_cookie_permissions = null, background_tasks = null }) {
     this.repo = repo;
+    this.background_tasks = background_tasks;
     this.snapshot_settings = snapshot_settings;
     this.check_cookie_permissions = check_cookie_permissions;
     this.schedule_cache = new Map();
@@ -267,7 +268,19 @@ export class ServiceDiscovery {
     }).filter(Boolean));
   }
 
-  async refresh_discovery_snapshot(source_id, public_url = "", { automatic = false } = {}) {
+  snapshot_task(source_id, public_url = "", { automatic = false } = {}) {
+    const source = this.repo.discovery.find(source_id);
+    if (!source) throw do_error("discovery source not found", 404);
+    if (source.require_token && !SourceAddressModel(source.feed_url).is_route()) throw do_error("外部私密源的快照由上游管理", 400);
+    if (!this.load_snapshot) throw do_error("snapshot service is unavailable", 503);
+    return this.background_tasks.start("discovery:" + source_id, {
+      kind: "snapshot", title: "刷新快照：" + source.title, target: source.feed_url,
+    }, signal => this.refresh_discovery_snapshot(source_id, public_url, { automatic, signal }));
+  }
+
+  async refresh_discovery_snapshot(source_id, public_url = "", { automatic = false, signal } = {}) {
+    if (this.background_tasks && !signal) return this.snapshot_task(source_id, public_url, { automatic }).promise;
+    signal?.throwIfAborted();
     if (this.snapshot_pending.has(source_id)) return this.snapshot_pending.get(source_id);
     const source = this.repo.discovery.find(source_id);
     if (!source) throw do_error("discovery source not found", 404);
@@ -278,9 +291,11 @@ export class ServiceDiscovery {
     const pending = (async () => {
       try {
         const origin = await this.snapshot_origin(public_url);
-        const result = await this.load_snapshot(source, origin);
+        signal?.throwIfAborted();
+        const result = await this.load_snapshot(source, origin, signal);
         const articles = Array.isArray(result) ? result : result.articles;
         const fingerprint = source.require_token ? result.fingerprint || await sha256_hex(JSON.stringify(articles)) : "";
+        signal?.throwIfAborted();
         // 抓取期间编辑 / 删除源时，不能把旧地址的内容重新发布到新卡片。
         const current = this.repo.discovery.find(source_id);
         if (current?.feed_url === source.feed_url && Boolean(current.require_token) === Boolean(source.require_token)) {
@@ -297,9 +312,11 @@ export class ServiceDiscovery {
           }
         }
       } catch (error) {
+        if (signal?.aborted) throw signal.reason;
         this.repo.discovery.snapshot_save(source_id, source.feed_url, [], 0, String(error.message || "快照更新失败").slice(0, 240));
         if (source.require_token && !automatic) throw error;
       } finally { this.snapshot_pending.delete(source_id); await this.schedule_alarm?.(); }
+      signal?.throwIfAborted();
       if (!source.require_token) await this.publish_catalog();
       const latest = this.repo.discovery.snapshot_get(source_id) || {};
       const value = this.source_value({ ...source, ...latest, snapshot_attempted_at: latest.attempted_at }, true);

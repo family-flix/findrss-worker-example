@@ -73,6 +73,9 @@ export default {
       if (!admin_authorized(request, env)) {
         return admin_auth_required();
       }
+      if (/^\/admin\/api\/background-tasks(?:\/[A-Za-z0-9-]+\/cancel)?$/.test(url.pathname)) {
+        return env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal" + url.pathname.replace("/admin/api/", "/_admin/"), request));
+      }
       if (["/admin/api/storage", "/admin/api/storage/usage", "/admin/api/storage/file"].includes(url.pathname)) {
         return admin_storage_request(request, env);
       }

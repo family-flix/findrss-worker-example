@@ -19,6 +19,30 @@ function modal_model(fetch, { confirm = () => true } = {}) {
   return context.model;
 }
 
+test("手动刷新保持加载状态，完成后更新当前记录的快照与缓存", async () => {
+  const snapshot = { saved_at: 123, articles: [{ title: "旧文章" }] };
+  let finish;
+  const model = modal_model(async (url, options) => {
+    if (!url.endsWith("/snapshot")) return Response.json({ sources: [{ id: "one", title: "源", snapshot }, { id: "two", title: "其他源", snapshot }] });
+    assert.equal(options.headers.Prefer, undefined);
+    return new Promise(resolve => { finish = resolve; });
+  });
+  await model.methods.refresh_list();
+  const pending = model.methods.refresh_snapshot("one");
+  assert.deepEqual(Array.from(model.state.snapshot_refreshing.value), ["one"]);
+  assert.equal(model.state.sources.value[0].snapshot.saved_at, 123);
+  finish(Response.json({ snapshot: { saved_at: 456, articles: [{ title: "新文章" }], error: "" },
+    cache: { status: "fresh", saved_at: 456 }, next_snapshot_at: 789, poll_effective: { mode: "interval", interval: 300 } }));
+  assert.equal(await pending, true);
+  assert.equal(model.state.sources.value[0].snapshot.saved_at, 456);
+  assert.equal(model.state.sources.value[0].snapshot.articles[0].title, "新文章");
+  assert.equal(model.state.sources.value[0].cache.saved_at, 456);
+  assert.equal(model.state.sources.value[0].next_snapshot_at, 789);
+  assert.equal(model.state.sources.value[0].poll_effective.interval, 300);
+  assert.equal(model.state.sources.value[1].snapshot.saved_at, 123);
+  assert.equal(model.state.snapshot_refreshing.value.length, 0);
+});
+
 test("表格选择支持本页全选和跨页保留，筛选与刷新清理过期选择", async () => {
   let sources = Array.from({ length: 25 }, (_, index) => ({ id: String(index), title: "源 " + index, enabled: true }));
   const model = modal_model(async () => Response.json({ sources }));

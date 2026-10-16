@@ -53,8 +53,10 @@ export const fetch_discovery_feed = (feed_url) => proxy_target_url(feed_url)
   ? fetch_source_feed({ feed_url })
   : Promise.resolve({ error: "订阅源地址被拒绝" });
 
-export const fetch_discovery_document = (feed_url) => proxy_target_url(feed_url)
-  ? fetch_feed_document({ feed_url }) : Promise.resolve({ http_status: 0, error: '订阅源地址被拒绝', xml: '' });
+export const fetch_discovery_document = (feed_url, signal) => proxy_target_url(feed_url)
+  ? fetch_feed_document({ feed_url, ...(signal ? { fetch_impl: (url, options) => fetch(url, {
+    ...options, signal: AbortSignal.any([options.signal, signal]),
+  }) } : {}) }) : Promise.resolve({ http_status: 0, error: '订阅源地址被拒绝', xml: '' });
 
 export function discovery_feed_defaults(xml, feed_url) {
   const feed = parse_feed_document(xml, feed_url);

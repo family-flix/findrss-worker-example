@@ -133,6 +133,7 @@ export const routes_configure = {
       cookies: { title: "Cookie 管理", pathname: "/admin/cookies", page: "Cookies", options: { short_title: "Cookie", icon: "lock" } },
       tokens: { title: "Token", pathname: "/admin/tokens", page: "Tokens", options: { short_title: "Token", icon: "users" } },
       storage: { title: "存储", pathname: "/admin/storage", page: "Storage", options: { short_title: "存储", icon: "hard-drive" } },
+      tasks: { title: "任务", pathname: "/admin/tasks", page: "Tasks", options: { short_title: "任务", icon: "activity" } },
       network: { title: "网络测试", pathname: "/admin/network", page: "NetworkTest", options: { short_title: "网络测试", icon: "activity" } },
       settings: { title: "设置", pathname: "/admin/settings", page: "Settings", options: { short_title: "设置", icon: "settings" } },
       devices: { title: "设备管理", pathname: "/admin/devices", page: "Devices", options: { short_title: "设备", icon: "server", hidden: true, aliases: ["/admin/devices.html"] } },
@@ -184,6 +185,7 @@ export async function create_admin_store() {
     Scripts: (await import("./pages/script.js")).ScriptPage,
     Cookies: (await import("./pages/cookies.js")).CookiesPage,
     Storage: (await import("./pages/storage.js")).StoragePage,
+    Tasks: (await import("./pages/tasks.js")).TasksPage,
     Settings: (await import("./pages/settings.js")).SettingsPage,
     Redemptions: (await import("./pages/redemptions.js")).RedemptionCardsPage,
   };

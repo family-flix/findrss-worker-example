@@ -5,7 +5,8 @@ import { encode_cover_blurhash } from "./cover_blurhash.js";
 import { SourceAddressModel } from "../domain/source_address.js";
 import { sha256_hex } from "../lib/crypto.js";
 
-export async function load_discovery_snapshot(source, origin, serve_route) {
+export async function load_discovery_snapshot(source, origin, serve_route, signal) {
+  signal?.throwIfAborted();
   const address = SourceAddressModel(source.feed_url);
   if (address.is_template && !origin) throw new Error("尚未获取访问域名，请访问站点后重试或配置 FINDRSS_HOSTNAME");
   const feed_url = address.resolve(origin);
@@ -15,17 +16,18 @@ export async function load_discovery_snapshot(source, origin, serve_route) {
     const internal = new URL("https://internal/" + (source.require_token ? "_admin" : "_public") + "/feed/" + address.format + address.route_pathname);
     internal.search = target.search;
     const result = await serve_route(address.format, address.route_pathname,
-      new Request(internal, { headers: { "X-Feed-Public-URL": feed_url } }), { refresh: true });
+      new Request(internal, { headers: { "X-Feed-Public-URL": feed_url } }), { refresh: true, signal });
     xml = result.body;
   } else {
-    const result = await fetch_discovery_document(feed_url);
+    const result = await fetch_discovery_document(feed_url, signal);
     if (result.error || result.http_status !== 200) throw new Error(result.error || "订阅源读取失败");
     xml = result.xml;
   }
+  signal?.throwIfAborted();
   if (source.require_token) {
     return { articles: [], fingerprint: await discovery_snapshot_fingerprint(xml, feed_url) };
   }
-  return { articles: await discovery_snapshot_articles(xml, feed_url) };
+  return { articles: await discovery_snapshot_articles(xml, feed_url, url => fetch_cover_metadata(url, decode_cover, signal)) };
 }
 
 export async function discovery_snapshot_fingerprint(xml, feed_url) {
@@ -84,8 +86,9 @@ function decode_cover(bytes, content_type) {
   return result;
 }
 
-async function read_cover(url, decode) {
-  const signal = AbortSignal.timeout(8000);
+async function read_cover(url, decode, task_signal) {
+  const timeout = AbortSignal.timeout(8000);
+  const signal = task_signal ? AbortSignal.any([timeout, task_signal]) : timeout;
   const max_bytes = decode ? 2 * 1024 * 1024 : 65536;
   let dimensions = null;
   for (let hop = 0; hop <= 5; hop++) {
@@ -126,7 +129,7 @@ async function read_cover(url, decode) {
 }
 
 export function fetch_cover_dimensions(url) { return read_cover(url, null); }
-export function fetch_cover_metadata(url, decode = decode_cover) { return read_cover(url, decode); }
+export function fetch_cover_metadata(url, decode = decode_cover, signal) { return read_cover(url, decode, signal); }
 
 export async function discovery_snapshot_articles(xml, feed_url, dimensions_for = fetch_cover_metadata) {
   const feed = discovery_feed_preview(xml, feed_url);
