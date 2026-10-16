@@ -46,7 +46,7 @@ Browser
 
 “设置 → Device Token”和“设备管理 → Device Token”共用管理界面，通过 `/admin/api/device-tokens` 管理多个设备接入凭证，支持名称、备注、有效期、最近使用时间和撤销。创建成功后自动获取明文并在弹窗展示，支持复制；关闭弹窗或离开设置页清除弹窗明文。列表默认脱敏，管理员点击「查看明文」时才通过独立的 `POST /admin/api/device-tokens/:id/reveal` 接口获取解密结果，30 秒自动隐藏；撤销删除密文并断开关联连接。旧 `DEVICE_TOKEN` 自动导入，部署时不再必填。设备 Token 与用户 Token 分开保存；设备 Token 的加密副本依赖部署的 `ADMIN_PASSWORD`，轮换后台密码后应创建新设备 Token 替换原凭证。
 
-`/admin/overview` 每 5 秒读取 `/admin/api/overview` 的 `statistics` 快照：脚本、订阅源、Cookie 数量，去重后的有效路由声明、平台和标签数量，以及每个订阅源的累计调用次数与总次数。数量包含停用项；平台沿用目录规则，包含默认「网站」，标签包含旧分类对应的标签。快照只读元数据，不回传脚本正文或 Cookie 值。
+`/admin/overview` 打开时读取 `/admin/api/overview` 的持久化快照，不轮询；「立即刷新」也只读取最新快照，不触发统计。DO alarm 每 5 分钟统计一次，覆盖设备、任务记录、用户 Token、脚本、订阅源、Cookie 数量，去重后的有效路由声明、平台和标签数量，以及每个订阅源的累计调用次数与总次数，并保存到 SQLite `overview_snapshot` 单行中。页面展示快照生成时间。首次无快照时由后台 alarm 尽快生成，接口返回 503 提示稍后刷新；生成失败保留上次成功快照，DO 重启后继续读取。数量包含停用项；平台沿用目录规则，包含默认「网站」，标签包含旧分类对应的标签。快照不保存或回传脚本正文、Cookie 值和 Token 明细。设备管理和 Token 页继续通过 `/admin/api/management-overview` 读取实时数据并保留原有刷新方式。
 
 调用计数存于 SQLite `discovery_source_calls`，从部署此功能后累计，DO 重启保留。通过鉴权、匹配到脚本的真实 RSS/Atom 请求按已登记且启用的源计数，包含缓存命中及后续失败；调试、管理预览、测试和后台刷新不计入。源身份沿用路由 pathname（忽略 host 和 RSS/Atom 前缀）加归一化 query，不包含 token；同一身份登记多个地址时，每个源都加一次，总次数为当前源计数之和。改名、编辑及停用保留计数，删除源同时删除计数。外部 RSS 源和未到达 Worker 的客户端/CDN 缓存请求无法统计。
 

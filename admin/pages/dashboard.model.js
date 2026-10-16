@@ -20,7 +20,8 @@ function empty_metrics() {
   };
 }
 
-function DashboardViewModel() {
+function DashboardViewModel(page_id = "overview") {
+  const is_overview = page_id === "overview";
   const loading_ = ref(false);
   const error_ = ref("");
   const devices_ = refarr([]);
@@ -1232,16 +1233,16 @@ function DashboardViewModel() {
     if (refresh_promise !== null) return refresh_promise;
     if (show_loading) loading_.as(true);
     error_.as("");
-    refresh_promise = fetch("/admin/api/overview", {
+    refresh_promise = fetch(is_overview ? "/admin/api/overview" : "/admin/api/management-overview", {
       credentials: "same-origin",
       cache: "no-store",
     })
       .then(async (response) => {
-        if (!response.ok) throw new Error("加载失败：HTTP " + response.status);
         const overview = await response.json();
-        if (!overview || !Array.isArray(overview.devices))
+        if (!response.ok) throw new Error(overview?.error || "加载失败：HTTP " + response.status);
+        if (!overview || (is_overview ? !overview.statistics : !Array.isArray(overview.devices)))
           throw new Error("管理接口返回格式不正确");
-        const normalized_overview = normalize_overview(overview);
+        const normalized_overview = normalize_overview({ ...overview, devices: overview.devices || [] });
         test_drafts_.as(reconcile_test_drafts(normalized_overview.devices));
         download_drafts_.as(
           reconcile_download_drafts(
@@ -1255,9 +1256,7 @@ function DashboardViewModel() {
             empty_metrics(),
             normalized_overview.metrics,
             normalized_overview.statistics,
-            {
-              token_count: normalized_overview.access_tokens.length,
-            },
+            is_overview ? {} : { token_count: normalized_overview.access_tokens.length },
           ),
         );
         source_calls_.assign(normalized_overview.statistics?.sources || []);
@@ -1284,7 +1283,7 @@ function DashboardViewModel() {
     if (started) return;
     started = true;
     refresh();
-    refresh_timer = setInterval(() => refresh(false), 5000);
+    if (!is_overview) refresh_timer = setInterval(() => refresh(false), 5000);
   }
 
   function dispose() {
@@ -1305,13 +1304,15 @@ function DashboardViewModel() {
   }
 
   const refresh_status_ = combine(
-    { loading: loading_, refreshedAt: refreshed_at_ },
-    ({ loading, refreshedAt }) =>
+    { loading: loading_, refreshedAt: refreshed_at_, generated_at: generated_at_ },
+    ({ loading, refreshedAt, generated_at }) =>
       loading
         ? "正在刷新…"
-        : refreshedAt
-          ? "更新于 " + format_time(refreshedAt)
-          : "等待刷新",
+        : is_overview
+          ? (generated_at ? "快照生成于 " + format_time(generated_at) : "等待快照生成")
+          : refreshedAt
+            ? "更新于 " + format_time(refreshedAt)
+            : "等待刷新",
   );
 
   const state = {

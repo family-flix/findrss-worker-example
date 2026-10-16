@@ -4,10 +4,14 @@ import { RssRoutePatternModel } from "../../domain/rss_route.js";
 import { SourceAddressModel } from "../../domain/source_address.js";
 import { discovery_platforms } from "../../lib/discovery_platform.js";
 import { rss_route_cache_key } from "../../infra/rss_cache.js";
+import { do_error } from "./error.js";
+
+const SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
 
 export class ServiceStatistics {
-  constructor({ repo }) {
+  constructor({ repo, app }) {
     this.repo = repo;
+    this.app = app;
     this.source_index = null;
   }
 
@@ -33,6 +37,34 @@ export class ServiceStatistics {
   }
 
   snapshot() {
+    const row = this.repo.statistics.get_snapshot();
+    if (!row) throw do_error("概览快照尚未生成，请稍后刷新", 503);
+    return JSON.parse(row.snapshot_json);
+  }
+
+  next_snapshot_at() {
+    const generated_at = this.repo.statistics.snapshot_generated_at();
+    return generated_at ? generated_at + SNAPSHOT_INTERVAL_MS : 0;
+  }
+
+  refresh_snapshot(now = Date.now()) {
+    if (this.next_snapshot_at() > now) return;
+    const { devices, task_counts } = this.app.devices.summary();
+    const online_count = devices.filter(device => device.status === "online" || device.status === "busy").length;
+    this.repo.statistics.put_snapshot({
+      generated_at: now,
+      statistics: {
+        ...this.collect(now),
+        device_count: devices.length,
+        online_count,
+        offline_count: devices.length - online_count,
+        task_count: task_counts.reduce((total, item) => total + Number(item.count || 0), 0),
+        token_count: this.repo.access_tokens.count_active(),
+      },
+    });
+  }
+
+  collect(now = Date.now()) {
     const rows = this.repo.statistics.sources();
     const scripts = this.repo.statistics.scripts().map(row => ScriptModel.fromRow(row));
     const sources = rows.map(row => {
@@ -41,7 +73,7 @@ export class ServiceStatistics {
         call_count: Number(row.call_count || 0), tracked: SourceAddressModel(source.feed_url).is_route() };
     });
     return {
-      generated_at: Date.now(),
+      generated_at: now,
       script_count: scripts.length,
       source_count: sources.length,
       source_call_count: sources.reduce((total, source) => total + source.call_count, 0),

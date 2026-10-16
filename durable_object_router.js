@@ -131,8 +131,9 @@ async function dispatch(request, app) {
     return app.devices.summary();
   }
   if (url.pathname === "/_admin/statistics" && request.method === "GET") {
-    return app.statistics.snapshot();
+    return app.statistics.snapshot().statistics;
   }
+  if (url.pathname === "/_admin/overview" && request.method === "GET") return app.statistics.snapshot();
   if ((url.pathname === "/call" || url.pathname === "/tasks") && request.method === "POST") {
     return app.tasks.create_task(request);
   }

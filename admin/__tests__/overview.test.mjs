@@ -4,16 +4,20 @@ import test from "node:test";
 import vm from "node:vm";
 import { readFileSync } from "node:fs";
 
-function fixture(create_response) {
+function fixture(create_response, page_id = "overview") {
   const requests = [];
+  const intervals = [];
   const access_tokens = [];
-  const statistics = { script_count: 200, source_count: 700, source_call_count: 1234,
+  const statistics = { device_count: 9, online_count: 4, offline_count: 5, task_count: 42, token_count: 7,
+    script_count: 200, source_count: 700, source_call_count: 1234,
     cookie_count: 3, route_count: 8, platform_count: 4, tag_count: 6,
     sources: [{ id: "a", title: "源", feed_url: "https://feeds.example/rss/a", enabled: true, tracked: true, call_count: 1234 }] };
-  const context = vm.createContext({ URL, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {} });
+  const context = vm.createContext({ URL, setTimeout: () => 0, clearTimeout() {},
+    setInterval(callback, milliseconds) { intervals.push({ callback, milliseconds }); return intervals.length; }, clearInterval() {} });
   context.window = context;
   context.document = { querySelector: () => null };
   vm.runInContext(readFileSync(new URL("../../public/assets/timeless/0.34.2/timeless.umd.min.js", import.meta.url), "utf8"), context);
+  intervals.length = 0;
   const ui = context.Timeless;
   const element = (props, children = []) => ({ props, children });
   Object.assign(ui, { DOM: {}, View: element, Button: element, Input: element, Select: element,
@@ -27,11 +31,13 @@ function fixture(create_response) {
   context.FindRSSAdminAuth = { fetch: async (url, options) => {
     requests.push(url);
     if (options?.method === "POST") return create_response(options);
-    return Response.json({ devices: [], methods: [], task_counts: [], access_tokens, statistics });
+    return Response.json(url === "/admin/api/overview"
+      ? { generated_at: 1000, statistics }
+      : { devices: [], methods: [], task_counts: [], access_tokens });
   } };
   vm.runInContext(page_source("dashboard.js")
-    + "\nglobalThis.model = DashboardViewModel(); globalThis.source_view = SourceCallsView; globalThis.metrics_view = MetricsView; globalThis.token_view = AccessTokenManagementView;", context);
-  return { context, model: context.model, statistics, access_tokens, requests, ui };
+    + `\nglobalThis.model = DashboardViewModel(${JSON.stringify(page_id)}); globalThis.source_view = SourceCallsView; globalThis.metrics_view = MetricsView; globalThis.token_view = AccessTokenManagementView;`, context);
+  return { context, model: context.model, statistics, access_tokens, requests, intervals, ui };
 }
 
 function nodes(view) {
@@ -42,7 +48,7 @@ test("概览 Model 仅从快照刷新指标和调用明细，后续刷新更新�
   const f = fixture();
   await f.model.methods.refresh();
   assert.deepEqual(f.requests, ["/admin/api/overview"]);
-  for (const field of ["script_count", "source_count", "source_call_count", "cookie_count", "route_count", "platform_count", "tag_count"])
+  for (const field of ["device_count", "online_count", "offline_count", "task_count", "token_count", "script_count", "source_count", "source_call_count", "cookie_count", "route_count", "platform_count", "tag_count"])
     assert.equal(f.model.state.metrics.value[field], f.statistics[field]);
   assert.equal(f.model.state.source_calls.value[0].call_count, 1234);
   f.statistics.source_call_count = 1235;
@@ -50,6 +56,25 @@ test("概览 Model 仅从快照刷新指标和调用明细，后续刷新更新�
   await f.model.methods.refresh(false);
   assert.equal(f.model.state.metrics.value.source_call_count, 1235);
   assert.equal(f.model.state.source_calls.value[0].call_count, 1235);
+});
+
+test("概览仅在打开和手动刷新时读取快照，不启动轮询，展示快照生成时间", async () => {
+  const f = fixture();
+  f.model.methods.ready();
+  f.model.methods.ready();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.requests, ["/admin/api/overview"]);
+  assert.equal(f.intervals.length, 0);
+  assert.equal(f.model.state.generated_at.value, 1000);
+  const status = f.model.state.refresh_status.value;
+  assert.equal(status, "快照生成于 " + vm.runInContext("format_time(1000)", f.context));
+  await f.model.methods.refresh();
+  assert.equal(f.requests.length, 2);
+  assert.equal(f.model.state.refresh_status.value, status);
+  assert.equal(f.intervals.length, 0);
+  const overview = f.context.OverviewPage();
+  assert.ok(nodes(overview).some(node => node.children?.includes("统计快照每 5 分钟生成一次，点击刷新读取最新快照")));
+  f.model.methods.dispose();
 });
 
 test("概览 View 渲染全部指标、每源次数、停用与外部源提示、空列表和可访问滚动区", async () => {
@@ -94,7 +119,8 @@ test("概览移除在线方法容器与 Token 抽屉，独立 Token 页面显示
   assert.equal(token_nodes.some(node => node.props.attributes?.n === "overview-metrics"), false);
   tokens.children[0].props.onMounted();
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(f.requests, ["/admin/api/overview"]);
+  assert.deepEqual(f.requests, ["/admin/api/management-overview"]);
+  assert.deepEqual(f.intervals.map(interval => interval.milliseconds), [5000]);
   f.access_tokens.push({ id: "test-token", name: "测试 Token" });
   await tokens.props.actions.find(node => node.props.attributes?.n === "refresh-button").props.onClick();
   assert.equal(f.requests.length, 2);
@@ -112,7 +138,7 @@ test("Token 弹窗保留校验与失败提示，提交时防止关闭和重复�
       f.access_tokens.push(access_token);
       resolve(Response.json({ access_token, token: "new-token-plaintext" }));
     }; });
-  });
+  }, "tokens");
   const model = f.model;
   model.methods.openAccessTokenForm();
   model.methods.setAccessTokenDraft("token", "short");

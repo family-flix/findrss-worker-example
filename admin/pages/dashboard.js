@@ -3360,7 +3360,7 @@ function DeviceTokensView(model) {
 function DashboardApplicationView(page_id = "overview", embedded = false) {
   const is_device_page = page_id === "devices";
   const is_token_page = page_id === "tokens";
-  const vm$ = DashboardViewModel();
+  const vm$ = DashboardViewModel(page_id);
   const device_tokens = is_device_page
     ? DeviceTokensModel(vm$.methods.confirm)
     : null;
@@ -3503,7 +3503,7 @@ function DashboardApplicationView(page_id = "overview", embedded = false) {
                     },
                     attributes: { n: "dashboard-footer" },
                   },
-                  ["页面每 5 秒自动刷新"],
+                  ["统计快照每 5 分钟生成一次，点击刷新读取最新快照"],
                 ),
               ]),
         ],

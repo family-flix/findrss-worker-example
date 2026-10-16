@@ -18,6 +18,7 @@ import {
   admin_device_logs,
   admin_discovery_source_request,
   admin_overview,
+  admin_management_overview,
   admin_redemption_campaign_request,
   admin_reset_device,
   admin_script_request,
@@ -139,6 +140,9 @@ export default {
       }
       if (url.pathname === "/admin/api/overview" && request.method === "GET") {
         return admin_overview(env);
+      }
+      if (url.pathname === "/admin/api/management-overview" && request.method === "GET") {
+        return admin_management_overview(env);
       }
       if (["/admin/api/settings/snapshots", "/admin/api/settings/cookies"].includes(url.pathname) && ["GET", "PUT"].includes(request.method)) {
         return env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal" + url.pathname.replace("/admin/api/", "/_admin/"), request));

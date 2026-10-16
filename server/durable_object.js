@@ -387,7 +387,7 @@ export const route = {
     this.app.snapshot_settings = new ServiceSnapshotSettings({ repo: this.repo.snapshot_settings, schedule_alarm: ports.schedule_alarm });
     this.app.cookie_push_settings = new ServiceCookiePushSettings({ repo: this.repo.cookie_push_settings,
       credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || "") });
-    this.app.statistics = new ServiceStatistics({ repo: this.repo });
+    this.app.statistics = new ServiceStatistics({ repo: this.repo, app: this.app });
     this.app.maintenance = new ServiceMaintenance({ repo: this.repo });
     this.app.activity = new ServiceActivity({ repo: this.repo, app: this.app });
     this.app.credit = new ServiceCredit({ repo: this.repo });
@@ -445,7 +445,8 @@ export const route = {
       admin_ports: {
         source_types: () => this.app.discovery.platforms().map(platform => platform.id),
         context: async page => {
-          if (["overview", "devices"].includes(page)) return this.app.devices.summary();
+          if (page === "overview") return this.app.statistics.snapshot();
+          if (page === "devices") return this.app.devices.summary();
           if (page === "discovery") return { source_count: this.repo.discovery.count(), source_types: Object.fromEntries(this.app.discovery.platforms().map(platform => [platform.id, platform.label])), tags: this.app.discovery.tags(),
             script_routes: (await this.app.scripts.list_scripts()).scripts.filter(script => script.status === "published").flatMap(script => (script.routes || [script]).map(route => ({ path: route.path, platform: route.platform, tags: route.tags, enabled: script.enabled }))) };
           if (page === "scripts") return { scripts: (await this.app.scripts.list_scripts()).scripts.map(({ id, name, path, platform, tags, enabled, routes }) => ({ id, name, path, platform, tags, enabled, routes })) };
@@ -566,6 +567,7 @@ export const route = {
       }
     }
     await this.app.tasks.dispatch_pending();
+    this.app.statistics.refresh_snapshot(now);
     this.ctx.waitUntil(this.app.discovery.refresh_due_snapshots());
     this.ctx.waitUntil(this.app.scripts.refresh_due_snapshots());
     this.ctx.waitUntil(this.app.discovery.ensure_catalog().catch(error => console.warn("discovery catalog retry failed", error)));
@@ -579,8 +581,9 @@ export const route = {
     const next_snapshot = this.app.discovery.next_snapshot_at();
     const next_feed = this.app.scripts?.next_snapshot_at();
     const now = Date.now();
+    const next_statistics = Math.max(now, this.app.statistics.next_snapshot_at());
     const next_token_expiry = this.repo.device_tokens.min_expires_at(now);
-    const desired = Math.min(next_lease ?? Infinity, next_snapshot ?? Infinity, next_feed ?? Infinity, next_token_expiry ?? Infinity, now + MAINTENANCE_MILLISECONDS);
+    const desired = Math.min(next_lease ?? Infinity, next_snapshot ?? Infinity, next_feed ?? Infinity, next_statistics, next_token_expiry ?? Infinity, now + MAINTENANCE_MILLISECONDS);
     const current = await this.ctx.storage.getAlarm();
     // 新任务只能提前唤醒，不能把已经安排的快照或租约检查不断推迟。
     if (current === null || desired < current - 1000) {

@@ -14,23 +14,29 @@ import { script_media_response } from "./media_proxy.js";
  */
 export async function admin_overview(env) {
   const object = env.API.getByName(API_OBJECT_NAME);
-  const [response, access_tokens_response, statistics_response] = await Promise.all([
+  const response = await object.fetch("https://internal/_admin/overview");
+  if (!response.ok) return response;
+  const overview = await response.json();
+  const statistics = await (await resolve_discovery_source_feed_urls(json_response(overview.statistics), feed_hostname_origin(env), false)).json();
+  return json_response({ ...overview, statistics });
+}
+
+export async function admin_management_overview(env) {
+  const object = env.API.getByName(API_OBJECT_NAME);
+  const [response, access_tokens_response] = await Promise.all([
     object.fetch("https://internal/"),
     object.fetch("https://internal/_admin/access-tokens"),
-    object.fetch("https://internal/_admin/statistics"),
   ]);
-  if (!response.ok || !access_tokens_response.ok || !statistics_response.ok) {
+  if (!response.ok || !access_tokens_response.ok) {
     return error_response("failed to load API overview", 500);
   }
   /** @type {Record<string, unknown>} */
   const summary = await response.json();
   /** @type {{ access_tokens?: Record<string, unknown>[] }} */
   const access_tokens = await access_tokens_response.json();
-  const statistics = await (await resolve_discovery_source_feed_urls(statistics_response, feed_hostname_origin(env), false)).json();
   return json_response({
     generated_at: Date.now(),
     ...summary,
-    statistics,
     access_tokens: Array.isArray(access_tokens.access_tokens)
       ? access_tokens.access_tokens
       : [],
