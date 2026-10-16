@@ -67,6 +67,8 @@ import { RepositoryCookiePushSettings } from "./repository/cookie_push_settings.
 import { ServiceCookiePushSettings } from "./service/durable_object/cookie_push_settings.js";
 import { RepositoryWebhookSettings } from "./repository/webhook_settings.js";
 import { ServiceWebhookSettings } from "./service/durable_object/webhook_settings.js";
+import { seed_default_data } from "./service/durable_object/default_data.js";
+import apple_script from "../examples/scripts/rss/apple.js" with { type: "text" };
 
 /**
  * @typedef {Object} Env
@@ -418,6 +420,7 @@ export const route = {
     this.ctx.blockConcurrencyWhile(async () => {
       await this.app.device_tokens.import_legacy(env.DEVICE_TOKEN);
       await this.app.cookie_push_settings.import_legacy(cookie_push_uuid, cookie_push_key);
+      await seed_default_data({ repo: this.repo, storage: this.ctx.storage, script: apple_script });
     });
     this.app.auth = new ServiceAuth({
       repo: this.repo,

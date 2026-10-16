@@ -38,7 +38,7 @@ Cloudflare 会根据锁文件安装依赖，`npm run deploy` 会先构建后台�
 
 **如果部署报错 `assets.directory` 指向的 `dist/assets` 不存在**：这个目录由构建生成，不随 Git 仓库提交。进入 **Settings → Builds** 检查并保存上表中的命令，尤其是将 `npx wrangler deploy` 改为 `npm run deploy`，再重新运行构建。更新 Fork 代码不会修改 Cloudflare 中已保存的构建设置。正常日志会先出现 `node scripts/build.js` 和 `FindRSS frontend assets built`，然后才运行 Wrangler 部署；如果已有这两条日志仍然报错，请检查完整日志中的部署命令和工作目录是否与上表一致。
 
-部署成功后打开 Worker 的站点地址，在地址后加 `/admin/`，使用 `ADMIN_PASSWORD` 登录。首次没有预置采集规则，需要自行配置并发布，详见[创建自己的订阅源](#创建自己的订阅源)。自定义域名可在 Worker 的 **Settings → Domains & Routes** 中添加。
+部署成功后打开 Worker 的站点地址，在地址后加 `/admin/`，使用 `ADMIN_PASSWORD` 登录。空库首次启动会自动创建 Apple 应用更新脚本和一条公开订阅源；添加自己的规则详见[创建自己的订阅源](#创建自己的订阅源)。自定义域名可在 Worker 的 **Settings → Domains & Routes** 中添加。
 
 后续按下方 [Fork 仓库更新步骤](#fork-仓库更新)更新即可。
 
@@ -54,7 +54,7 @@ Cloudflare 会根据锁文件安装依赖，`npm run deploy` 会先构建后台�
 
 点击上方 **Deploy to Cloudflare**，按引导连接 GitHub / GitLab，选择 Cloudflare 账号，设置 Worker 名称和密钥后部署。Cloudflare 会复制项目、配置 Workers Builds，并按 Wrangler 配置创建所需的 Durable Object 和 R2 资源。[官方部署说明](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
 
-部署时必须填写 `ADMIN_PASSWORD`，作为后台登录密码；该密钥没有默认值，请自行设置随机长密码。无需传入 `DEVICE_TOKEN`、`FINDRSS_HOSTNAME` 或 `FEED_HOSTNAME`，域名默认使用当前访问地址。使用项目定义的构建命令 `npm run build` 和部署命令 `npm run deploy`。完成后打开 Worker 域名的 `/admin/`，输入密码登录并创建第一个脚本；需要连接设备时，在「设备管理 → Device Token」创建凭证。
+部署时必须填写 `ADMIN_PASSWORD`，作为后台登录密码；该密钥没有默认值，请自行设置随机长密码。无需传入 `DEVICE_TOKEN`、`FINDRSS_HOSTNAME` 或 `FEED_HOSTNAME`，域名默认使用当前访问地址。使用项目定义的构建命令 `npm run build` 和部署命令 `npm run deploy`。完成后打开 Worker 域名的 `/admin/`，输入密码登录即可查看默认 Apple 脚本和订阅源；需要连接设备时，在「设备管理 → Device Token」创建凭证。
 
 ## 更新已部署的站点
 
@@ -128,7 +128,7 @@ npm run dev
 
 本地后台用户名为 `admin`，密码使用你在 `.dev.vars` 中填写的 `ADMIN_PASSWORD`，没有默认值。本地配置只用于开发，生产部署时请设置独立的随机长密码。
 
-首次启动的订阅广场为空，不再预置外部订阅源。登录后台后，在「订阅源」中添加外部 RSS / Atom 地址；需要生成自己的订阅源时，先在「脚本」中发布脚本，再添加对应的订阅地址。旧版本已写入的示例源可在后台手动删除。
+空库首次启动会将 `examples/scripts/rss/apple.js` 保存为已发布的 `1.0.0` 版本，并创建公开订阅源 `{{hostname}}/rss/apple/apps/update/us/id408709785`，地址随当前访问域名解析，无需设备或 Cookie。初始化只执行一次；已有脚本或订阅源的部署跳过默认数据，修改、停用或删除默认记录后重启不会恢复。文章内容由快照任务从 Apple 获取，首次抓取前可以先看到订阅源记录。登录后台后，可在「订阅源」中添加外部 RSS / Atom 地址；需要生成自己的订阅源时，先在「脚本」中发布脚本，再添加对应的订阅地址。
 
 ### 常用命令
 

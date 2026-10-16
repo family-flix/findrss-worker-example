@@ -84,7 +84,7 @@ RSS 是供阅读器获取更新的订阅格式。阅读器是用来集中查看�
 3. 在 Worker 的 **Settings → Builds → Connect** 中连接自己的 Fork 仓库，生产分支选择 `master`，**Build command 留空，Deploy command 填写 `npm run deploy`**。若部署命令是 `npx wrangler deploy`，需手动替换，否则会跳过静态资源构建。
 4. 等待部署成功，打开站点地址；在地址后加 `/admin/` 进入后台。
 
-完整步骤与构建设置见 [Fork 部署指南](docs/setup.md#fork-部署到-cloudflare-workers)。首次部署后需要自行配置并发布采集规则。
+完整步骤与构建设置见 [Fork 部署指南](docs/setup.md#fork-部署到-cloudflare-workers)。空库首次启动会自动创建 Apple 应用更新脚本和一条公开订阅源。
 
 ## 一键部署到 Cloudflare Workers
 
@@ -100,7 +100,7 @@ RSS 是供阅读器获取更新的订阅格式。阅读器是用来集中查看�
 2. 按提示填写站点名称，将 `ADMIN_PASSWORD` 设置为你的后台登录密码。
 3. 等待完成，打开生成的站点地址；在地址后加 `/admin/` 进入后台。
 
-首次部署后没有预置采集规则，需要先在后台配置并发布。遇到配置问题，查看[安装与配置指南](docs/setup.md)。
+空库首次启动会自动创建 Apple 应用更新脚本和一条公开订阅源，可在后台修改或删除。遇到配置问题，查看[安装与配置指南](docs/setup.md)。
 
 ## 更新已部署的站点
 
