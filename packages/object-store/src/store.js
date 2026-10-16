@@ -152,12 +152,13 @@ export class BucketStore {
 
   /**
    * 翻一页。返回 `{ objects, truncated, cursor }`，`cursor` 在未截断时为 `null`。
-   * @param {{ prefix?: string, cursor?: string | null, limit?: number }} [options]
-   * @returns {Promise<{ objects: any[], truncated: boolean, cursor: string | null }>}
+   * @param {{ prefix?: string, cursor?: string | null, limit?: number, delimiter?: string }} [options]
+   * @returns {Promise<{ objects: any[], truncated: boolean, cursor: string | null, delimited_prefixes?: string[] }>}
    */
-  async list({ prefix = "", cursor = null, limit = 1000 } = {}) {
-    if (!this.available) return { objects: [], truncated: false, cursor: null };
+  async list({ prefix = "", cursor = null, limit = 1000, delimiter } = {}) {
+    if (!this.available) return { objects: [], truncated: false, cursor: null, ...(delimiter ? { delimited_prefixes: [] } : {}) };
     const options = { prefix: this.full_prefix(prefix), limit };
+    if (delimiter) options.delimiter = delimiter;
     // 真实 R2 会校验 `ListOptions` 的字段类型：`cursor` 只接受 string，**没有游标时
     // 必须整个字段省略**，传 `null` 直接抛 `Incorrect type for the 'cursor' field`。
     // 内存桶容忍 `null`，所以只有打真桶（miniflare / 线上）才会暴露。
@@ -168,6 +169,7 @@ export class BucketStore {
       objects: Array.isArray(page?.objects) ? page.objects : [],
       truncated,
       cursor: truncated ? (page?.cursor ?? null) : null,
+      ...(delimiter ? { delimited_prefixes: page?.delimitedPrefixes || [] } : {}),
     };
   }
 

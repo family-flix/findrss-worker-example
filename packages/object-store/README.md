@@ -32,6 +32,8 @@ const usage = await store.usage();                 // { bytes, objects, truncate
 - **`usage()` 是配额读数**：游标循环翻 `list` 累加 `object.size`，在
   `maxObjects`/`maxPages` 处停下并置 `truncated: true`——语义是「至少这么多」，
   UI 必须照实渲染。
+- **目录读取**：`list({ prefix, delimiter: "/", cursor })` 只返回直接子文件，
+  子目录在 `delimited_prefixes` 中返回，与对象 key 一样保留桶内完整前缀。
 - **空 store 模式**（桶缺席）：`get/head → null`、`get_text → ""`、`exists → false`、
   `put/delete/delete_many → 0`、`list/list_all → 空且未截断`、
   `usage → { ..., available: false }`。
@@ -45,8 +47,8 @@ interface Bucket {
   get(key: string): Promise<ObjectBody | null>;
   put(key: string, value: unknown, options?: object): Promise<unknown>;
   delete(keys: string[]): Promise<unknown>;   // 空数组抛错、>1000 键抛错
-  list(options: { prefix: string; cursor: string | null; limit: number }):
-    Promise<{ objects: { key: string; size: number }[]; truncated: boolean; cursor: string | null }>;
+  list(options: { prefix: string; cursor?: string; limit: number; delimiter?: string }):
+    Promise<{ objects: { key: string; size: number }[]; truncated: boolean; cursor: string | null; delimitedPrefixes?: string[] }>;
 }
 ```
 

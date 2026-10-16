@@ -41,41 +41,62 @@ function find(node, name) {
   return null;
 }
 
-test("存储实际视图加载用量和文件，支持分页及下载链接", async () => {
+test("存储文件树使用虚拟窗口，目录可展开且只提供预览", async () => {
   const storage_bundle = await build({
     entryPoints: [fileURLToPath(new URL("../pages/storage.js", import.meta.url))],
     bundle: true, format: "iife", globalName: "StorageModule", write: false,
   });
+  Object.assign(context, { URLSearchParams, AbortController, TextDecoder });
   const requests = [];
   context.FindRSSAdminShell = { Page: (props, children) => ui.View({ attributes: { n: "storage-test-page" } }, [...props.actions, ...children]) };
-  context.FindRSSAdminAuth = { fetch: async url => {
+  context.FindRSSAdminAuth = { fetch: async (url, options) => {
     requests.push(url);
-    if (url.endsWith("/usage")) return Response.json({ bytes: 1024, objects: 101, generated_at: Date.now() });
-    return Response.json({ objects: [{ key: url.includes("cursor=") ? "last.png" : "avatars/头像.png", size: 1024, uploaded: "2026-10-16T00:00:00Z" }],
-      truncated: !url.includes("cursor="), cursor: url.includes("cursor=") ? null : "next" });
+    if (url.endsWith("/usage")) return Response.json({ bytes: 1024, objects: 5000, generated_at: Date.now() });
+    if (url.includes("/file?")) return new Response(options.method === "HEAD" ? null : "<script>预览文本</script>", { headers: { "Content-Type": "text/plain" } });
+    const child = new URL("https://test" + url).searchParams.get("prefix");
+    return Response.json({ objects: child ? Array.from({ length: 5000 }, (_, index) => ({ key: "files/" + index, size: 1024, uploaded: "2026-10-16T00:00:00Z" })) : [],
+      delimited_prefixes: child ? [] : ["files/"], truncated: false, cursor: null });
   } };
   vm.runInContext(storage_bundle.outputFiles[0].text, context);
   const root = context.StorageModule.StoragePage();
-  let usage_text, count_text;
+  let usage_text;
   find(root, "storage-usage").children[0].$elm = { setText(value) { usage_text = value; } };
-  find(root, "storage-count").children[0].$elm = { setText(value) { count_text = value; } };
   find(root, "storage-page").onMounted();
   await new Promise(setImmediate);
   assert.equal(usage_text, "1.0 KB");
-  assert.equal(count_text, "101 个文件");
-  assert.equal(find(root, "storage-file-key").children[0].state.value, "avatars/头像.png");
-  const download = find(root, "storage-file-download");
-  assert.equal(download.t, "link");
-  assert.match(download.state.href, /download=1&key=avatars%2F/);
-  assert.equal(download.state.attributes.target, "_blank");
-  assert.equal(find(root, "storage-file-view").state.attributes.rel, "noopener");
-  await find(root, "storage-next").events.onClick();
+  const tree = find(root, "storage-tree");
+  assert.equal(tree.t, "list-view-v2");
+  assert.equal(tree.state.attributes.role, "tree");
+  assert.equal(tree.state.attributes.tabindex, "0");
+  assert.equal(tree.config.itemHeight, 40);
+  const folder = tree.renderItem(ui.ref(tree.source.value[0]), ui.ref(0));
+  assert.equal(find(folder, "storage-tree-name").children[0].state.value, "files");
+  assert.equal(find(folder, "storage-tree-row").state.attributes["aria-expanded"], "false");
+  find(folder, "storage-tree-row").events.onClick();
   await new Promise(setImmediate);
-  assert.equal(find(root, "storage-file-key").children[0].state.value, "last.png");
+  assert.equal(tree.source.value.length, 5001);
+  tree.model.setItems(tree.source.value);
+  for (const top of [0, 3200, tree.model.getTotalHeight() - 560]) {
+    const range = tree.model.getRange(top, 560, tree.config.buffer);
+    assert.ok(range.end - range.start <= 27, "5000 个文件只渲染视口及缓冲行");
+  }
+  const last = tree.model.getRange(tree.model.getTotalHeight() - 560, 560, tree.config.buffer);
+  assert.equal(last.end, 5001);
+  const file = tree.renderItem(ui.ref(tree.source.value[1]), ui.ref(1));
+  assert.equal(find(file, "storage-tree-row").state.attributes["aria-level"], 2);
+  find(file, "storage-tree-row").events.onClick();
+  await new Promise(setImmediate);
+  assert.equal(find(root, "storage-preview-text").children[0].state.value, "<script>预览文本</script>");
+  for (const name of ["storage-file-download", "storage-pagination", "storage-previous", "storage-next"]) assert.equal(find(root, name), null);
+  assert.equal(tree.state.attributes.draggable, undefined);
+  const expanded = tree.renderItem(ui.ref(tree.source.value[0]), ui.ref(0));
+  find(expanded, "storage-tree-row").events.onClick();
+  await new Promise(setImmediate);
+  tree.model.setItems(tree.source.value);
+  assert.equal(tree.model.items.length, 1);
   assert.equal(requests.filter(url => url.endsWith("/usage")).length, 1);
-  await find(root, "storage-previous").events.onClick();
-  await new Promise(setImmediate);
-  assert.equal(find(root, "storage-file-key").children[0].state.value, "avatars/头像.png");
+  folder.destroy(); file.destroy(); expanded.destroy();
+  find(root, "storage-page").onUnmounted();
 });
 
 test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使用对应颜色的标签", async () => {

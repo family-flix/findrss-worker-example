@@ -1,5 +1,6 @@
 // 绑定缺席时返回 null，让无需对象存储的环境继续工作。
 import { BucketStore } from "@findrss/object-store";
+export { is_valid_key } from "@findrss/object-store";
 
 /** 桶的默认前缀。api 侧的对象与阅读端的正文/图标分属不同桶，前缀留空即可按 key 组织。 */
 const API_STORAGE_PREFIX = "";

@@ -103,12 +103,18 @@ export function create_memory_bucket() {
       for (const key of list) objects.delete(String(key));
     },
 
-    async list({ prefix = "", cursor = null, limit = 1000 } = {}) {
+    async list({ prefix = "", cursor = null, limit = 1000, delimiter } = {}) {
       calls.list += 1;
       maybe_fail("list");
-      const filtered = [...objects.keys()]
-        .filter((key) => key.startsWith(String(prefix ?? "")))
-        .sort();
+      const prefixes = new Set();
+      const entries = [...objects.keys()].filter(key => key.startsWith(String(prefix ?? ""))).map(key => {
+        const index = delimiter ? key.indexOf(delimiter, prefix.length) : -1;
+        if (index < 0) return key;
+        const directory = key.slice(0, index + delimiter.length);
+        prefixes.add(directory);
+        return directory;
+      });
+      const filtered = [...new Set(entries)].sort();
       const effective = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 1000;
       let start = 0;
       if (cursor !== null && cursor !== undefined && String(cursor) !== "") {
@@ -118,9 +124,10 @@ export function create_memory_bucket() {
       const slice = filtered.slice(start, start + effective);
       const truncated = start + slice.length < filtered.length;
       return {
-        objects: slice.map((key) => view(key)),
+        objects: slice.filter(key => !prefixes.has(key)).map((key) => view(key)),
         truncated,
         cursor: truncated ? slice[slice.length - 1] : null,
+        ...(delimiter ? { delimitedPrefixes: slice.filter(key => prefixes.has(key)) } : {}),
       };
     },
 

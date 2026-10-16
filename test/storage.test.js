@@ -9,16 +9,19 @@ register("./support/quickjs_wasm_hook.js", import.meta.url);
 const { default: api } = await import("../api.js");
 const request = (path = "", options) => new Request("https://feeds.example/admin/api/storage" + path, options);
 
-test("存储列表分页只返回元数据，用量包含跨页对象和所有文件类型", async () => {
+test("存储按目录读取子文件和文件夹，目录游标不遗漏文件，用量仍覆盖整个桶", async () => {
   const bucket = create_memory_bucket();
   for (let index = 0; index < 1005; index++) await bucket.put(`files/${String(index).padStart(4, "0")}`, "abc");
   await bucket.put("discovery/avatars/头像.png", "1234");
   const env = { API_STORAGE: bucket };
-  const first = await (await admin_storage_request(request(), env)).json();
+  const root = await (await admin_storage_request(request(), env)).json();
+  assert.deepEqual(root.delimited_prefixes, ["discovery/", "files/"]);
+  assert.deepEqual(root.objects, []);
+  const first = await (await admin_storage_request(request("?prefix=files%2F"), env)).json();
   assert.equal(first.objects.length, 100);
   assert.equal(first.truncated, true);
   assert.deepEqual(Object.keys(first.objects[0]), ["key", "size", "uploaded"]);
-  const next = await (await admin_storage_request(request("?cursor=" + encodeURIComponent(first.cursor)), env)).json();
+  const next = await (await admin_storage_request(request("?prefix=files%2F&cursor=" + encodeURIComponent(first.cursor)), env)).json();
   assert.equal(next.objects.length, 100);
   assert.ok(next.objects[0].key > first.objects.at(-1).key);
   const usage = await (await admin_storage_request(request("/usage"), env)).json();
@@ -45,7 +48,7 @@ test("用量达到扫描上限时标记下限，R2 失败和缺少绑定不会�
   assert.doesNotMatch(await failed.text(), /secret/);
 });
 
-test("文件查看、下载和 HEAD 支持中文路径，HTML/SVG 不以可执行内容返回", async () => {
+test("仅预览和 HEAD 支持中文路径，拒绝下载，HTML/SVG 不以可执行内容返回", async () => {
   const bucket = create_memory_bucket();
   const env = { API_STORAGE: bucket };
   for (const [key, content_type] of [["头像/图 #1.png", "image/png"], ["files/a.html", "text/html"], ["icons/a.svg", "image/svg+xml"]]) {
@@ -57,8 +60,8 @@ test("文件查看、下载和 HEAD 支持中文路径，HTML/SVG 不以可执�
     assert.equal(preview.headers.get("Cache-Control"), "no-store");
     assert.equal(preview.headers.get("X-Content-Type-Options"), "nosniff");
     const download = await admin_storage_request(request(path + "&download=1"), env);
-    assert.match(download.headers.get("Content-Disposition"), /^attachment; filename\*=UTF-8''/);
-    assert.equal(await download.text(), "payload");
+    assert.equal(download.status, 400);
+    assert.equal(preview.headers.get("Content-Disposition"), "inline");
     assert.equal(await (await admin_storage_request(request(path, { method: "HEAD" }), env)).text(), "");
   }
   assert.equal((await admin_storage_request(request("/file?key=missing"), env)).status, 404);
@@ -66,6 +69,9 @@ test("文件查看、下载和 HEAD 支持中文路径，HTML/SVG 不以可执�
     assert.equal((await admin_storage_request(request("/file?key=" + encodeURIComponent(key)), env)).status, 400);
   }
   assert.equal((await admin_storage_request(request("?cursor=" + "x".repeat(8193)), env)).status, 400);
+  for (const prefix of ["files", "../", "/", "files//", "files/../"]) {
+    assert.equal((await admin_storage_request(request("?prefix=" + encodeURIComponent(prefix)), env)).status, 400);
+  }
   assert.equal((await admin_storage_request(request("", { method: "DELETE" }), env)).status, 405);
   assert.equal(bucket.calls.delete, 0);
 });
