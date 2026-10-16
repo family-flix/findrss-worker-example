@@ -1,4 +1,5 @@
 import { load_douyin_sdk, sign_douyin_request } from './douyin_sdk.js';
+import { load_kuaishou_sdk, sign_kuaishou_request } from './kuaishou_sdk.js';
 import { rss_fetch_headers, rss_cookie_headers, rss_fetch_request, rss_fetch_timeout, RSS_FETCH_CREDENTIAL_HEADERS } from "./rss_fetch_headers.js";
 import { create_sandbox_promises } from "./sandbox_promises.js";
 import { public_feed_failure } from "../lib/feed_error.js";
@@ -407,6 +408,7 @@ export async function execute_script_inner(
       let { method, body } = rss_fetch_request(fetch_options);
       rss_cookie_headers(fetch_options, "");
       if (fetch_options?.douyin_sign !== undefined && typeof fetch_options.douyin_sign !== "boolean") throw new Error("douyin_sign 必须为布尔值");
+      if (fetch_options?.kuaishou_sign !== undefined && typeof fetch_options.kuaishou_sign !== "boolean") throw new Error("kuaishou_sign 必须为布尔值");
       let parsed;
       try {
         parsed = new URL(url);
@@ -428,6 +430,14 @@ export async function execute_script_inner(
         ? cookie_access.header(cookie_handle, parsed, fetch_options?.cookie_headers) : "";
       let signed_headers = {};
       let outgoing_url = parsed.toString();
+      if (fetch_options?.kuaishou_sign) {
+        if (parsed.origin !== 'https://www.kuaishou.com' || parsed.pathname !== '/rest/v/profile/feed' || method !== 'POST') {
+          throw new Error('快手签名只允许 POST www.kuaishou.com/rest/v/profile/feed');
+        }
+        const sdk = await load_kuaishou_sdk();
+        // fetchText 正挂起主沙箱的 Asyncify 栈，签名必须使用独立 wasm 实例。
+        outgoing_url = sign_kuaishou_request(await get_quickjs_module(), sdk, { url: outgoing_url, method, body, cookie: request_cookie });
+      }
       if (fetch_options?.douyin_sign && parsed.origin === "https://www.douyin.com") {
         const sdk = await load_douyin_sdk();
         const signed = sign_douyin_request(QuickJS, sdk, { url: outgoing_url, cookie: request_cookie, user_agent: headers["user-agent"] });

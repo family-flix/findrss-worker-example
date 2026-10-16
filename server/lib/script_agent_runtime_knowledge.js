@@ -78,6 +78,7 @@ absolute_url(value,base) → Result<string>：拼接 HTTP(S) 地址，相对地�
 timestamp(value) → Result<number|undefined>：秒/毫秒/数字字符串/日期转毫秒；缺失为 undefined，无时区的年月日格式按北京时间。RSSScript.timestamp(value) 返回 Result<ISO字符串|undefined>，不能混淆两者的单位和返回类型。
 identity(value) → Result<string>：稳定非空 ID，数字必须是安全整数；不要使用排名、列表下标、随机值或采集时间充当 ID。array_at(value,path='') → Result<Array>：按点分路径读取数组；空数组成功，缺失/类型错误失败。
 request_text(ctx,url,options) / request_json(ctx,url,options) → Promise<Result>：复用 ctx.fetchText，后者再 parseJSON。默认提供基础 Accept、Accept-Language、User-Agent，headers 可覆盖；Referer、Cookie 句柄需显式提供，其它请求 options 透传。错误保留 Result，不猜测网站业务状态字段，脚本自行校验回包。
+kuaishou_sign:true：仅用于 POST https://www.kuaishou.com/rest/v/profile/feed，宿主以固定版本官方 SDK 为本次 JSON 请求体动态生成 __NS_hxfalcon/caver；配合显式授权的 cookies 句柄使用，不能复用 HAR 中的固定签名。网页 HTTP 200 不代表作品接口成功，需检查 result===1 和 feeds 数组。
 embedded_json(text,marker:RegExp) → Result：扫描 marker 后的 JSON 对象/数组，处理括号和字符串转义，不执行页面脚本。
 document_nodes(text,xml=false) → Result<节点树>：轻量 HTML/XML 解析，XML 拒绝 DOCTYPE。rows(root,selector) → Result<非空节点数组>：必需列表缺失时失败。
 descendants(root)/select(root,selector) → 节点数组，matches(node,selector) → boolean，first(root,selector) → 节点或 undefined，text_of(node)/field(root,selector)/attribute(root,selector,name) → 字符串；未命中 select 返回空数组，文本/属性返回空串。节点查询直接返回值，document_nodes/rows 返回 Result；元素有不可枚举的 parent 供父节点查询，节点树可 JSON 序列化。
