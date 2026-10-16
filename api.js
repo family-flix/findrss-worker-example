@@ -33,7 +33,7 @@ import {
   public_discovery_sources,
 } from "./server/service/worker/discovery.js";
 import { public_rss_route } from "./server/service/worker/rss.js";
-import { admin_network_test } from "./server/service/worker/network_test.js";
+import { admin_network_test, admin_network_cookie_domains } from "./server/service/worker/network_test.js";
 
 /** @type {ExportedHandler<Env>} */
 export default {
@@ -71,7 +71,11 @@ export default {
       if (!admin_authorized(request, env)) {
         return admin_auth_required();
       }
-      if (url.pathname === "/admin/api/network-test") return admin_network_test(request);
+      if (url.pathname === "/admin/api/network-test") return admin_network_test(request, env);
+      if (url.pathname === "/admin/api/network-test/cookie-domains") {
+        if (request.method !== "GET") return error_response("method not allowed", 405, { Allow: "GET" });
+        return admin_network_cookie_domains(env);
+      }
       if (
         (["/admin/api/messages", "/admin/api/messages/ws"].includes(
           url.pathname,
@@ -131,8 +135,8 @@ export default {
       if (url.pathname === "/admin/api/overview" && request.method === "GET") {
         return admin_overview(env);
       }
-      if (url.pathname === "/admin/api/settings/snapshots" && ["GET", "PUT"].includes(request.method)) {
-        return env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal/_admin/settings/snapshots", request));
+      if (["/admin/api/settings/snapshots", "/admin/api/settings/cookies"].includes(url.pathname) && ["GET", "PUT"].includes(request.method)) {
+        return env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal" + url.pathname.replace("/admin/api/", "/_admin/"), request));
       }
       if (
         /^\/admin\/api\/device-tokens(?:\/[A-Za-z0-9-]+(?:\/(?:reveal|revoke))?)?$/.test(

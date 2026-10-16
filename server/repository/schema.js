@@ -26,6 +26,7 @@ export function migrate_script_tables(sql) {
 /** 本模块 DDL 里恰好这些表。 @type {readonly string[]} */
 export const API_TABLE_NAMES = Object.freeze([
   "snapshot_settings",
+  "cookie_push_settings",
   "platforms",
   "tags",
   "rss_cookie_grants",
@@ -61,6 +62,12 @@ export const API_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS snapshot_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     policy_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS cookie_push_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    uuid TEXT NOT NULL,
+    encrypted_key TEXT NOT NULL,
     updated_at INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS platforms (

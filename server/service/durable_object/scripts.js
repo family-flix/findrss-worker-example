@@ -18,7 +18,6 @@ import { ScriptPreviewAssets } from "../../infra/script_preview_assets.js";
 import { image_proxy_descriptor } from "../../lib/image_proxy.js";
 import { script_output } from "../../lib/script_output.js";
 import { sha256_hex } from "../../lib/crypto.js";
-import { decrypt_cookie_push } from "../../infra/cookie_push.js";
 import { LogThrottle } from "../../infra/log_throttle.js";
 import { ScriptInvokeError, compile_script_module, execute_script, script_failure_fields } from "../../infra/script_sandbox.js";
 import { rss_route_cache_key } from "../../infra/rss_cache.js";
@@ -64,9 +63,9 @@ function normalize_rss_cookies(cookies) {
 
 export class ServiceScript {
   /**
-   * @param {{ repo: Record<string, any>, ports: Record<string, any>, app: Record<string, any>, cookie_push_uuid: string, cookie_push_key: string }} deps
+   * @param {{ repo: Record<string, any>, ports: Record<string, any>, app: Record<string, any> }} deps
    */
-  constructor({ repo, ports, app, cookie_push_uuid, cookie_push_key, public_origin = "" }) {
+  constructor({ repo, ports, app, public_origin = "" }) {
     try {
       const origin = new URL(public_origin);
       this.public_origin = ["http:", "https:"].includes(origin.protocol) && !origin.username && !origin.password ? origin.origin : "";
@@ -75,8 +74,6 @@ export class ServiceScript {
     this.ports = ports;
     /** 兄弟服务注册表（serve_rss_route 经 tasks.invoke 下发设备调用）。 */
     this.app = app;
-    this.cookie_push_uuid = cookie_push_uuid;
-    this.cookie_push_key = cookie_push_key;
     /**
      * 启用中的路由表（内存索引）。`repo.scripts.list_enabled()` 是「LIMIT 500 +
      * ORDER BY updated_at DESC」的 storage 读，命中缓存的请求原本也要付这一次；并发一高，
@@ -575,7 +572,7 @@ export class ServiceScript {
     }
     let cookies;
     try {
-      cookies = await decrypt_cookie_push(body, this.cookie_push_uuid, this.cookie_push_key);
+      cookies = await this.app.cookie_push_settings.decrypt(body);
     } catch (failure) {
       throw do_error(failure instanceof Error ? failure.message : String(failure), 400);
     }

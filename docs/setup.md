@@ -200,10 +200,16 @@ R2 桶只需创建一次，已有同名桶可跳过。`secret put` 命令会提�
 | `DEVICE_TOKEN` | 可选旧配置 | 自动导入后台 Device Token 列表，保留原设备接入能力 |
 | `READER_SESSION_SECRET` | 可选 secret | 中央账号会话签名；未配置时依次回退旧 `DEVICE_TOKEN`、`ADMIN_PASSWORD` |
 | `FINDRSS_HOSTNAME` | 可选变量 | 展开 `{{hostname}}`；留空按请求 origin 展开，可指定公开域名 |
-| `COOKIE_PUSH_UUID` / `COOKIE_PUSH_KEY` | 使用 Cookie 推送时配置 | 接收 Cookie 同步凭据 |
+| `COOKIE_PUSH_UUID` / `COOKIE_PUSH_KEY` | 可选旧配置 | 首次启动时自动迁移到后台 Cookie 解密设置；新配置请在后台填写 |
 | `API_STORAGE` | Wrangler 已声明的 R2 绑定 | 存储头像、公开目录和文章快照 |
 
 需要固定订阅域名时，可自行在 `wrangler.jsonc` 中添加 `vars.FINDRSS_HOSTNAME`。本地开发可在项目根目录的 `.env` 或 `.dev.vars` 中设置 `FINDRSS_HOSTNAME=http://127.0.0.1:8787`，修改后重启 `npm run dev`；兼容旧名称 `FEED_HOSTNAME`，同时设置时优先使用 `FINDRSS_HOSTNAME`。存在 `.dev.vars` 时 Wrangler 不读取 `.env`。未配置时，订阅地址和手动快照刷新使用当前访问地址，脚本的 `ctx.public_origin` 也使用该地址生成图片代理等绝对链接；通过 workers.dev 或自定义域名访问均可。发现页的定时快照刷新沿用最近一次访问的域名，该域名会持久化保存。模型厂商与 API Key 可在后台「大模型设置」中配置。
+
+### 配置 Cookie 解密
+
+登录后台，打开「设置」→「Cookie 解密」，填写与推送端相同的 UUID 和原始密码，点击「保存 Cookie 解密设置」后立即生效，无需配置环境变量。支持 AES-128-CBC 固定 IV 和 AES-256-CBC 兼容模式，两种模式共用这组凭据。
+
+服务端自动派生解密密钥，并使用 `ADMIN_PASSWORD` 派生的 AES-GCM 密钥加密存储；原始密码不保存、不回显。已配置时密码留空可保留原值，更换 UUID 时需要重新填写密码。更换 `ADMIN_PASSWORD` 后，需要重新填写 Cookie 解密密码。已有有效的 `COOKIE_PUSH_UUID` / `COOKIE_PUSH_KEY` 只会在后台尚无配置时导入，后续以后台设置为准。
 
 ### 管理 Device Token
 

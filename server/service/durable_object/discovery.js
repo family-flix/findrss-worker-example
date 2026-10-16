@@ -11,10 +11,12 @@ import { ScriptModel } from "../../domain/script.js";
 import { DISCOVERY_CATALOG_KEY } from "../../lib/discovery_catalog.js";
 import { discovery_platforms, discovery_platform_id } from "../../lib/discovery_platform.js";
 import { RssRoutePatternModel } from "../../domain/rss_route.js";
+import { RssRouteSelectionModel } from "../../domain/rss_route_selection.js";
 import { gzip_html } from "../../infra/discovery_compression.js";
 import { snapshot_policy, snapshot_next_at } from "../../lib/snapshot_schedule.js";
 import { default_poll_policy, learn_poll_interval } from "../../lib/poll_schedule.js";
 import { sha256_hex } from "../../lib/crypto.js";
+import { discovery_snapshot_articles, discovery_snapshot_fingerprint } from "../../infra/discovery_snapshot.js";
 
 const snapshot_interval = default_poll_policy().interval * 1000;
 
@@ -38,9 +40,10 @@ export class ServiceDiscovery {
   /**
    * @param {{ repo: Record<string, any>, storage?: any, route_cache?: any, object_store?: any, load_snapshot?: Function, schedule_alarm?: Function, render_catalog?: Function, public_origin?: string }} deps
    */
-  constructor({ repo, storage, route_cache = null, object_store = null, load_snapshot = null, schedule_alarm = null, render_catalog = null, statistics = null, public_origin = "", snapshot_settings = () => null }) {
+  constructor({ repo, storage, route_cache = null, object_store = null, load_snapshot = null, schedule_alarm = null, render_catalog = null, statistics = null, public_origin = "", snapshot_settings = () => null, check_cookie_permissions = null }) {
     this.repo = repo;
     this.snapshot_settings = snapshot_settings;
+    this.check_cookie_permissions = check_cookie_permissions;
     this.schedule_cache = new Map();
     this.statistics = statistics;
     this.storage = storage;
@@ -330,6 +333,30 @@ export class ServiceDiscovery {
     if (!matches) throw do_error("订阅源路由必须匹配 kind 为 rss 的脚本", 400);
   }
 
+  async cache_discovery_preview({ feed_url, resolved_feed_url, xml, managed }) {
+    if (!this.route_cache) throw do_error("snapshot service is unavailable", 503);
+    const generation = this.route_cache.generation;
+    const address = SourceAddressModel(feed_url);
+    const url = new URL(resolved_feed_url);
+    let route_snapshot;
+    if (managed && address.is_route()) {
+      const key = rss_route_cache_key(address.route_pathname, url.searchParams);
+      route_snapshot = ["public-snapshot:", "private-snapshot:"]
+        .map(prefix => this.route_cache.resolve(prefix + key, Date.now()))
+        .find(value => value?.rendered?.get(address.format + "\n") === xml);
+      if (!route_snapshot) throw do_error("读取结果已失效，请重新读取订阅源信息", 409);
+    }
+    const articles = await discovery_snapshot_articles(xml, resolved_feed_url);
+    const fingerprint = await discovery_snapshot_fingerprint(xml, resolved_feed_url);
+    if (generation !== this.route_cache.generation) throw do_error("读取结果已失效，请重新读取订阅源信息", 409);
+    const preview_id = crypto.randomUUID();
+    await this.route_cache.run("discovery-preview:" + preview_id, Date.now(), async () => ({
+      output: JSON.stringify({ feed_url, articles, fingerprint, saved_at: Date.now(), route_output: route_snapshot?.output }),
+      invoked: false, rendered: route_snapshot?.rendered || new Map(),
+    }));
+    return { preview_id };
+  }
+
   /**
    * @param {Request} request
    * @returns {Promise<Record<string, unknown>>}
@@ -347,6 +374,9 @@ export class ServiceDiscovery {
       const conflict = DiscoverySourceModel.duplicate_reason();
       throw do_error(conflict.message, conflict.status);
     }
+    const preview_id = request.headers.get("X-Feed-Preview-ID") || "";
+    const cached = this.route_cache?.resolve("discovery-preview:" + preview_id, Date.now());
+    const preview = cached ? JSON.parse(cached.output) : null;
     const now = Date.now();
     const id = crypto.randomUUID();
     this.repo.discovery.insert({
@@ -367,10 +397,32 @@ export class ServiceDiscovery {
     });
     const row = this.repo.discovery.find(id);
     this.route_cache?.invalidate_all?.();
+    if (preview?.feed_url === source.feed_url) {
+      this.repo.discovery.snapshot_attempt(id, source.feed_url, preview.saved_at);
+      let permission_error = "";
+      if (preview.route_output) {
+        const address = SourceAddressModel(source.feed_url);
+        const selected = RssRouteSelectionModel((this.repo.scripts.list() || []).filter(row => ScriptModel.fromRow(row).is_servable()), address.route_pathname).best();
+        try {
+          if (!selected) throw do_error("订阅源路由已失效", 404);
+          // 新公开源会改变 Cookie 授权范围，复用前仍需按保存后的目录校验。
+          await this.check_cookie_permissions?.(selected.row.route);
+        } catch (error) { permission_error = String(error.message || "Cookie 权限校验失败").slice(0, 240); }
+        const url = new URL(source.feed_url.replace("{{hostname}}", "https://template.invalid"));
+        const key = (source.require_token ? "private-snapshot:" : "public-snapshot:")
+          + rss_route_cache_key(address.route_pathname, url.searchParams);
+        if (!permission_error) await this.route_cache.run(key, Date.now(), async () => ({
+          output: preview.route_output, invoked: false, rendered: cached.rendered,
+        }));
+      }
+      this.repo.discovery.snapshot_save(id, source.feed_url, source.require_token ? [] : preview.articles,
+        preview.saved_at, permission_error, preview.fingerprint);
+    }
     this.statistics?.invalidate_sources();
     await this.publish_catalog();
     await this.schedule_alarm?.();
-    return do_result({ source: DiscoverySourceModel.fromRow(row).toValue() }, 201);
+    const snapshot = this.repo.discovery.snapshot_get(id) || {};
+    return do_result({ source: this.source_value({ ...row, ...snapshot, snapshot_attempted_at: snapshot.attempted_at }, true) }, 201);
   }
 
   /**
@@ -527,7 +579,8 @@ export class ServiceDiscovery {
     }
     await this.delete_avatar_object(previous);
     await this.publish_catalog();
-    return { source: DiscoverySourceModel.fromRow(row).toValue() }
+    const snapshot = this.repo.discovery.snapshot_get(source_id) || {};
+    return { source: this.source_value({ ...row, ...snapshot, snapshot_attempted_at: snapshot.attempted_at }, true) }
   }
 
   /**

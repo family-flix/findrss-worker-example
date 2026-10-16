@@ -510,6 +510,39 @@ test("读取订阅源信息失败时展示具体错误描述，清除读取中�
   assert.equal(calls, 2);
 });
 
+test("新增保存携带读取缓存标识，修改地址、重新读取失败或关闭表单后不复用旧标识", async () => {
+  for (const mode of ["matching", "changed", "failed", "closed"]) {
+    let saved, preview_body, fail = false;
+    const snapshot = { saved_at: 123, articles: [{ title: "已读取文章" }] };
+    const model = modal_model(async (url, options) => {
+      if (url.endsWith("/preview")) {
+        preview_body = JSON.parse(options.body);
+        return fail ? Response.json({ error: "读取失败" }, { status: 502 })
+          : Response.json({ preview_id: "preview-id", defaults: { title: "源", website: "", description: "", tags: [], source_type: "website" } });
+      }
+      if (options?.method === "POST") {
+        saved = options;
+        return Response.json({ source: { ...JSON.parse(options.body), id: "new", snapshot, cache: { status: "fresh" } } });
+      }
+      return Response.json({ scripts: [] });
+    });
+    model.methods.set_draft("feed_url", "https://example.com/feed.xml");
+    await model.methods.preview_feed();
+    assert.equal(preview_body.cache_snapshot, true);
+    if (mode === "changed") model.methods.set_draft("feed_url", "https://example.com/other.xml");
+    if (mode === "failed") { fail = true; await model.methods.preview_feed(); }
+    if (mode === "closed") {
+      model.methods.close_form();
+      model.methods.set_draft("feed_url", "https://example.com/feed.xml");
+      model.methods.set_draft("title", "源");
+    }
+    await model.methods.save_source();
+    assert.equal(saved.headers?.["X-Feed-Preview-ID"], mode === "matching" ? "preview-id" : undefined);
+    assert.equal(model.state.sources.value[0].snapshot.saved_at, 123);
+    assert.equal(model.state.sources.value[0].cache.status, "fresh");
+  }
+});
+
 
 test("后台编辑将旧分类带入标签，保存不再设置分类，新增地址识别平台", async () => {
   let saved;

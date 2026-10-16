@@ -20,7 +20,7 @@ test("网络测试只调用后台接口，可编辑网址、超时和请求头�
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "/admin/api/network-test");
   assert.deepEqual(JSON.parse(calls[0].options.body), {
-    url: "https://example.com/path", timeout_ms: 60000, headers: { "User-Agent": "my-agent" },
+    url: "https://example.com/path", timeout_ms: 60000, headers: { "User-Agent": "my-agent" }, cookie_domains: [],
   });
   finish(Response.json({ status: 403, body: "WAF 拦截", error: "" }));
   await pending;
@@ -37,7 +37,7 @@ test("输入无效不提交；后端校验错误和带诊断的超时均可展�
     return calls === 1 ? Response.json({ error: "地址被拒绝" }, { status: 400 })
       : Response.json({ status: null, requests: [], error: "请求超时", code: "UPSTREAM_TIMEOUT" });
   } });
-  for (const [key, invalid] of [["url", "file:///etc/passwd"], ["timeout", "61"], ["headers", "[1]"], ["headers", '{"Accept":1}']]) {
+  for (const [key, invalid] of [["url", "file:///etc/passwd"], ["timeout", "61"], ["headers", "[1]"], ["headers", '{"Accept":1}'], ["headers", '{"Cookie":"manual"}']]) {
     const original = model.state[key].value;
     model.methods.set(key, invalid);
     await model.methods.run();
@@ -53,13 +53,104 @@ test("输入无效不提交；后端校验错误和带诊断的超时均可展�
   assert.equal(model.state.result.value.code, "UPSTREAM_TIMEOUT");
 });
 
+test("Cookie 按目标域名筛选并默认勾选，支持取消、刷新和仅提交匹配域名", async () => {
+  const calls = [];
+  let domains = [{ domain: ".example.com", count: 2 }, { domain: "www.example.com", count: 1 }, { domain: "other.example", count: 1 }];
+  const model = NetworkTestModel({ ui, fetch_impl: async (url, options) => {
+    if (url.endsWith("/cookie-domains")) return Response.json({ domains });
+    calls.push(options);
+    return Response.json({ status: 200, error: "" });
+  } });
+  model.methods.set("url", "https://www.example.com/path");
+  await model.methods.load_cookie_domains();
+  assert.deepEqual(model.state.cookie_domains.value, domains);
+  assert.deepEqual(model.state.matching_domains.value, domains.slice(0, 2));
+  assert.deepEqual(model.state.selected_domains.value, [".example.com", "www.example.com"]);
+  model.methods.toggle_cookie_domain(".example.com");
+  assert.deepEqual(model.state.selected_domains.value, ["www.example.com"]);
+  model.methods.toggle_cookie_domain(".example.com");
+  assert.deepEqual(model.state.selected_domains.value, ["www.example.com", ".example.com"]);
+  model.methods.toggle_cookie_domain("www.example.com", false);
+  model.methods.set("url", "https://www.example.com/other?next=https://other.example");
+  await model.methods.load_cookie_domains();
+  assert.deepEqual(model.state.selected_domains.value, [".example.com"]);
+  model.methods.toggle_cookie_domain(".example.com", true);
+  model.methods.toggle_cookie_domain("other.example", true);
+  model.methods.toggle_cookie_domain("missing.example", true);
+  assert.deepEqual(model.state.selected_domains.value, [".example.com"]);
+  model.methods.toggle_cookie_domain("other.example", false);
+  await model.methods.run();
+  assert.deepEqual(JSON.parse(calls[0].body).cookie_domains, [".example.com"]);
+  assert.equal(Object.keys(JSON.parse(calls[0].body).headers).some(name => name.toLowerCase() === "cookie"), false);
+  assert.equal(new Headers(calls[0].headers).has("cookie"), false);
+  domains = [{ domain: "other.example", count: 1 }];
+  await model.methods.load_cookie_domains();
+  assert.deepEqual(model.state.selected_domains.value, []);
+  await model.methods.run();
+  assert.deepEqual(JSON.parse(calls[1].body).cookie_domains, []);
+});
+
+test("切换目标域名重新默认勾选，匹配域边界、大小写和前导点，无效网址清空匹配", async () => {
+  const domains = [".example.com", "*.example.com", "API.Example.COM", "other.example", ".notexample.com"].map(domain => ({ domain, count: 1 }));
+  const model = NetworkTestModel({ ui, fetch_impl: async () => Response.json({ domains }) });
+  const loading = model.methods.load_cookie_domains();
+  model.methods.set("url", "https://API.Example.COM:443/path");
+  await loading;
+  assert.deepEqual(model.state.selected_domains.value, domains.slice(0, 3).map(entry => entry.domain));
+  model.methods.toggle_cookie_domain(".example.com", false);
+  model.methods.set("url", "https://other.example/");
+  assert.deepEqual(model.state.matching_domains.value, [domains[3]]);
+  assert.deepEqual(model.state.selected_domains.value, ["other.example"]);
+  model.methods.set("url", "https://example.com/");
+  assert.deepEqual(model.state.selected_domains.value, [".example.com", "*.example.com"]);
+  model.methods.set("url", "https://notexample.com/");
+  assert.deepEqual(model.state.selected_domains.value, [".notexample.com"]);
+  for (const url of ["", "https://", "file:///example.com", "https://user:pass@example.com/", "https://example.com.evil.test/"]) {
+    model.methods.set("url", url);
+    assert.deepEqual(model.state.matching_domains.value, [], url);
+    assert.deepEqual(model.state.selected_domains.value, [], url);
+  }
+  model.methods.set("url", "https://example.com/");
+  domains.push({ domain: "example.com", count: 1 });
+  await model.methods.load_cookie_domains();
+  assert.deepEqual(model.state.selected_domains.value, [".example.com", "*.example.com", "example.com"]);
+});
+
+test("域名读取失败可以重试，离开后忽略旧请求且不影响返回页面的新请求", async () => {
+  let fail = true;
+  const calls = [];
+  const model = NetworkTestModel({ ui, fetch_impl: (_, options) => fail
+    ? Promise.resolve(Response.json({ error: "读取失败" }, { status: 502 }))
+    : new Promise(resolve => calls.push({ options, resolve })) });
+  await model.methods.load_cookie_domains();
+  assert.equal(model.state.cookies_error.value, "读取失败");
+  fail = false;
+  const old = model.methods.load_cookie_domains();
+  model.methods.leave();
+  assert.equal(calls[0].options.signal.aborted, true);
+  const current = model.methods.load_cookie_domains();
+  calls[0].resolve(Response.json({ domains: [{ domain: "old.example", count: 1 }] }));
+  await old;
+  assert.equal(model.state.cookies_loading.value, true);
+  assert.deepEqual(model.state.cookie_domains.value, []);
+  calls[1].resolve(Response.json({ domains: [{ domain: "new.example", count: 2 }] }));
+  await current;
+  assert.equal(model.state.cookie_domains.value[0].domain, "new.example");
+  assert.equal(model.state.cookies_loading.value, false);
+});
+
 test("离开页面取消浏览器请求并忽略迟到结果，返回后可以再次测试", async () => {
   const calls = [];
   const model = NetworkTestModel({ ui, fetch_impl: (_, options) => new Promise(resolve => calls.push({ options, resolve })) });
+  model.state.cookie_domains.as([{ domain: ".example.com", count: 1 }]);
+  model.methods.set("url", "https://example.com/");
+  model.methods.toggle_cookie_domain(".example.com", true);
   const first = model.methods.run();
   model.methods.leave();
+  assert.deepEqual(model.state.selected_domains.value, []);
   assert.equal(calls[0].options.signal.aborted, true);
   const second = model.methods.run();
+  assert.deepEqual(JSON.parse(calls[1].options.body).cookie_domains, []);
   calls[0].resolve(Response.json({ status: 200, body: "旧响应" }));
   await first;
   assert.equal(model.state.busy.value, true);
@@ -68,4 +159,63 @@ test("离开页面取消浏览器请求并忽略迟到结果，返回后可以�
   await second;
   assert.equal(model.state.result.value.body, "新响应");
   assert.equal(model.state.busy.value, false);
+});
+
+test("网络正文严格按 Content-Type 格式化 HTML/JSON/JS/CSS，其他文本不高亮、不猜测", async () => {
+  let result;
+  const model = NetworkTestModel({ ui, fetch_impl: async () => Response.json(result) });
+  for (const [type, body, mode, formatted] of [
+    ["Text/HTML; charset=utf-8", "<div><p>内容</p></div>", "text/html", /\n  <p>/],
+    ["application/problem+json", '{"id":9007199254740993123,"ok":true}', "application/json", /\n  "id": 9007199254740993123/],
+    ["text/javascript; charset=utf-8", "const x={a:1};", "javascript", /const x = \{\n  a: 1/],
+    ["text/css", "a{color:red}", "text/css", /\n  color: red/],
+  ]) {
+    result = { body, content_type: type, body_kind: "text" };
+    await model.methods.run();
+    assert.equal(model.state.preview.value.mode, mode);
+    assert.match(model.state.preview.value.formatted, formatted);
+  }
+  for (const type of ["text/plain", "application/xml", "application/rss+xml", "text/csv", ""]) {
+    const body = '<root><node> x </node></root>';
+    result = { body, content_type: type, body_kind: "text" };
+    await model.methods.run();
+    assert.equal(model.state.preview.value.mode, "text/plain", type);
+    assert.equal(model.state.preview.value.formatted, body, type);
+  }
+  result = { body: '{"broken":', content_type: "application/json", body_kind: "text", truncated: true };
+  await model.methods.run();
+  assert.equal(model.state.preview.value.formatted, result.body);
+});
+
+test("媒体预览使用 Blob URL，切换响应及离开页面时释放，文件信息不生成播放器地址", async () => {
+  const created = [], revoked = [];
+  let kind = "img";
+  const model = NetworkTestModel({ ui, object_urls: {
+    createObjectURL(blob) { created.push(blob); return "blob:preview-" + created.length; },
+    revokeObjectURL(url) { revoked.push(url); },
+  }, fetch_impl: async () => {
+    const result = { body_kind: kind, file: { name: "demo", type: kind === "file" ? "application/zip" : "image/png", size_bytes: 3 } };
+    if (kind === "file") return Response.json(result);
+    const form = new FormData();
+    form.set("result", JSON.stringify(result));
+    form.set("media", new Blob([new Uint8Array([0, 128, 255])], { type: "image/png" }), "demo.png");
+    return new Response(form);
+  } });
+  await model.methods.run();
+  assert.equal(model.state.preview.value.kind, "img");
+  assert.equal(model.state.preview.value.src, "blob:preview-1");
+  assert.deepEqual(new Uint8Array(await created[0].arrayBuffer()), new Uint8Array([0, 128, 255]));
+  kind = "audio";
+  await model.methods.run();
+  assert.deepEqual(revoked, ["blob:preview-1"]);
+  assert.equal(model.state.preview.value.kind, "audio");
+  assert.equal(model.state.preview.value.src, "blob:preview-2");
+  model.methods.leave();
+  assert.deepEqual(revoked, ["blob:preview-1", "blob:preview-2"]);
+  assert.equal(model.state.preview.value.src, "");
+  kind = "file";
+  await model.methods.run();
+  assert.equal(model.state.preview.value.kind, "file");
+  assert.equal(model.state.preview.value.file.name, "demo");
+  assert.equal(created.length, 2);
 });

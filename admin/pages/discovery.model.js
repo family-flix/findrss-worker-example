@@ -168,6 +168,7 @@ function DiscoveryAdminViewModel() {
   const previewing_ = ref(false);
   const preview_avatar_ = ref("");
   let preview_generation = 0;
+  let preview_id = "";
   const list_error_ = ref("");
   const form_error_ = ref("");
   const form_message_ = ref("");
@@ -351,6 +352,7 @@ function DiscoveryAdminViewModel() {
           : "/admin/api/discovery/sources/" + encodeURIComponent(was_editing),
         {
           method: was_editing === "" ? "POST" : "PATCH",
+          ...(was_editing === "" && preview_id ? { headers: { "X-Feed-Preview-ID": preview_id } } : {}),
           body: JSON.stringify(payload),
         },
       );
@@ -678,14 +680,16 @@ function DiscoveryAdminViewModel() {
         Object.entries(fields).map(([key, field]) => [key, field.value]),
       );
       previewing_.set(true);
+      preview_id = "";
       form_error_.set("");
       form_message_.set("正在读取订阅源…");
       try {
         const result = await request_json("/admin/api/discovery/preview", {
           method: "POST",
-          body: JSON.stringify({ feed_url: address }),
+          body: JSON.stringify({ feed_url: address, cache_snapshot: editing_id_.value === "" }),
         });
         if (generation !== preview_generation) return;
+        preview_id = result.preview_id || "";
         for (const [key, field] of Object.entries(fields)) {
           if (
             field.value !== before[key] ||
@@ -754,6 +758,7 @@ function DiscoveryAdminViewModel() {
     set_draft(name, value) {
       if (name === "title") draft_title_.set(String(value));
       if (name === "feed_url") {
+        preview_id = "";
         preview_generation++;
         previewing_.set(false);
         if (preview_avatar_.value) clear_avatar_file();
@@ -798,6 +803,7 @@ function DiscoveryAdminViewModel() {
       if (saving_.value) return;
       const source = sources_.value.find((item) => item.id === source_id);
       if (!source) return;
+      preview_id = "";
       preview_generation++;
       previewing_.set(false);
       preview_avatar_.set("");
@@ -821,6 +827,7 @@ function DiscoveryAdminViewModel() {
       load_scripts();
     },
     reset_draft() {
+      preview_id = "";
       preview_generation++;
       previewing_.set(false);
       preview_avatar_.set("");

@@ -80,14 +80,16 @@ function translate(result) {
  */
 async function dispatch(request, app) {
   const url = new URL(request.url);
-  if (url.pathname === "/_admin/settings/snapshots") {
-    if (request.method === "GET") return app.snapshot_settings.settings();
+  if (["/_admin/settings/snapshots", "/_admin/settings/cookies"].includes(url.pathname)) {
+    const settings = url.pathname.endsWith("/cookies") ? app.cookie_push_settings : app.snapshot_settings;
+    if (request.method === "GET") return settings.settings();
     if (request.method === "PUT") {
+      if (Number(request.headers.get("Content-Length") || 0) > 16384) throw new DurableObjectError("request body is too large", 413);
       const text = await request.text();
-      if (text.length > 16384) throw new DurableObjectError("request body is too large", 413);
+      if (new TextEncoder().encode(text).byteLength > 16384) throw new DurableObjectError("request body is too large", 413);
       let body;
       try { body = JSON.parse(text); } catch { throw new DurableObjectError("invalid JSON", 400); }
-      return app.snapshot_settings.save_settings(body);
+      return settings.save_settings(body);
     }
     throw new DurableObjectError("method not allowed", 405);
   }
@@ -257,6 +259,9 @@ async function dispatch(request, app) {
   }
   if (admin_user_match && request.method === "DELETE") {
     return app.users.delete_admin_user(admin_user_match[1]);
+  }
+  if (url.pathname === "/_admin/discovery/preview-cache" && request.method === "POST") {
+    return app.discovery.cache_discovery_preview(await request.json());
   }
   if (url.pathname === "/_admin/discovery/sources" && request.method === "GET") {
     return app.discovery.list_discovery_sources(url, true);

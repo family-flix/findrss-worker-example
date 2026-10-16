@@ -36,7 +36,8 @@ export async function admin_discovery_preview(env, request) {
   const route = /^\/(rss|atom)(\/.*)$/.exec(target.pathname);
   if (is_template && !route) return error_response(template_error, 400);
   let xml;
-  if (route && (internal_preview || origin && target.origin === new URL(origin).origin)) {
+  const managed = Boolean(route && (internal_preview || origin && target.origin === new URL(origin).origin));
+  if (managed) {
     const internal = new URL("https://internal/_admin/feed/" + route[1] + route[2]);
     internal.search = target.search;
     const response = await env.API.getByName(API_OBJECT_NAME).fetch(new Request(internal, {
@@ -71,7 +72,15 @@ export async function admin_discovery_preview(env, request) {
       }
       catch (error) { avatar_error = error.message; }
     }
-    return json_response({ feed_url, defaults, avatar, avatar_error });
+    let preview_id;
+    if (body?.cache_snapshot === true) {
+      const response = await env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal/_admin/discovery/preview-cache", {
+        method: "POST", body: JSON.stringify({ feed_url: address, resolved_feed_url: feed_url, xml, managed }),
+      }));
+      if (!response.ok) return response;
+      ({ preview_id } = await response.json());
+    }
+    return json_response({ feed_url, defaults, avatar, avatar_error, ...(preview_id ? { preview_id } : {}) });
   } catch (error) {
     const message = error.message || "订阅源解析失败";
     return body?.include_feed === true ? json_response({ error: message, feed_url, xml }, 422) : error_response(message, 422);

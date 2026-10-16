@@ -23,11 +23,15 @@ export async function load_discovery_snapshot(source, origin, serve_route) {
     xml = result.xml;
   }
   if (source.require_token) {
-    const feed = discovery_feed_preview(xml, feed_url);
-    const identities = feed.articles.map(article => JSON.stringify([article.id, article.link, article.title, article.published_at])).sort();
-    return { articles: [], fingerprint: await sha256_hex(JSON.stringify(identities)) };
+    return { articles: [], fingerprint: await discovery_snapshot_fingerprint(xml, feed_url) };
   }
   return { articles: await discovery_snapshot_articles(xml, feed_url) };
+}
+
+export async function discovery_snapshot_fingerprint(xml, feed_url) {
+  const feed = discovery_feed_preview(xml, feed_url);
+  const identities = feed.articles.map(article => JSON.stringify([article.id, article.link, article.title, article.published_at])).sort();
+  return sha256_hex(JSON.stringify(identities));
 }
 
 // 只读取图片头，不解码像素；限制读取量，避免大封面占用 Worker 内存。

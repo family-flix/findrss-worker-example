@@ -14,6 +14,7 @@ function fixture({ with_bucket = true } = {}) {
   const avatars = new Map();
   const repo = { discovery: {
     find: id => sources.get(id),
+    snapshot_get: () => undefined,
     exists: id => sources.has(id),
     delete(id) { sources.delete(id); avatars.delete(id); },
     avatar_get: id => avatars.get(id),

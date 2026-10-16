@@ -1,11 +1,18 @@
 import { NetworkTestModel } from "./network.model.js";
+import { ScriptMediaPreviewView } from "../components/script_media.js";
+import { Checkbox } from "../components/frui/checkbox.js";
 
-const { View, Button, Input, Textarea, Show, computed } = window.FindRSSAdminUI;
+const { View, Badge, Button, Input, Textarea, For, Show, CodeEditor, computed, combine } = window.FindRSSAdminUI;
 
 function NetworkTestPage({ view } = {}) {
   const model = NetworkTestModel();
   const { state, methods } = model;
-  let stop_hide;
+  let stop_show, stop_hide;
+  const cookie_disabled = combine({ busy: state.busy, loading: state.cookies_loading }, state => state.busy || state.loading);
+  const status_badge = (status, name, text) => Badge({
+    tone: status == null || status >= 400 ? "danger" : status >= 300 ? "warning" : status >= 200 ? "success" : "brand",
+    attributes: { n: name },
+  }, [text || (status == null ? "无响应" : `HTTP ${status}`)]);
   const output = (name, label, value) => View({ class: "grid min-w-0 gap-space-2", attributes: { n: "network-" + name } }, [
     View({ as: "h2", class: "m-0 text-sm", attributes: { n: "network-" + name + "-label" } }, [label]),
     View({ as: "pre", class: "box-border m-0 overflow-auto whitespace-pre-wrap break-anywhere bg-surface-raised rounded-control",
@@ -14,8 +21,12 @@ function NetworkTestPage({ view } = {}) {
   ]);
   return window.FindRSSAdminShell.Page({ page_id: "network", title: "网络测试" }, [
     View({ class: "grid min-w-0 gap-space-4", attributes: { n: "network-test", "aria-busy": computed(state.busy, String) },
-      onMounted() { stop_hide = view?.onBeforeHide(methods.leave); },
-      onUnmounted() { stop_hide?.(); methods.leave(); } }, [
+      onMounted() {
+        stop_show = view?.onShow(methods.load_cookie_domains);
+        stop_hide = view?.onBeforeHide(methods.leave);
+        void methods.load_cookie_domains();
+      },
+      onUnmounted() { stop_show?.(); stop_hide?.(); methods.leave(); } }, [
       View({ class: "text-muted text-sm", attributes: { n: "network-description" } }, [
         "由当前 Worker 发起 GET 请求，默认使用起点示例的请求头。可修改网址和请求头，比较不同网站的访问结果。",
       ]),
@@ -25,28 +36,87 @@ function NetworkTestPage({ view } = {}) {
       Input({ label: "超时（秒）", value: state.timeout, disabled: state.busy,
         attributes: { n: "network-timeout", type: "number", min: "1", max: "60", step: "1" },
         onInput: event => methods.set("timeout", event.target.value) }),
+      View({ class: "grid min-w-0 gap-space-2", attributes: { n: "network-cookies" } }, [
+        View({ class: "flex items-center justify-between gap-space-2", attributes: { n: "network-cookies-header" } }, [
+          View({ class: "text-sm", attributes: { n: "network-cookies-label", id: "network-cookies-label" } }, ["已有 Cookie 域名（可选）"]),
+          Button({ size: "small", disabled: cookie_disabled, attributes: { n: "network-cookies-refresh" }, onClick: methods.load_cookie_domains }, ["刷新域名"]),
+        ]),
+        View({ class: "text-muted text-sm", attributes: { n: "network-cookies-help" } }, ["根据目标网址筛选并默认勾选匹配的 Cookie 域名，可手动取消。每次请求按域名、路径、HTTPS 和有效期匹配；未勾选时匿名访问。"]),
+        Show({ when: state.cookies_loading, ok: () => View({ class: "text-muted text-sm", attributes: { n: "network-cookies-loading", role: "status" } }, ["正在读取 Cookie 域名…"]) }),
+        View({ class: "text-danger text-sm", attributes: { n: "network-cookies-error", role: "alert" } }, [state.cookies_error]),
+        Show({ when: combine({ loading: state.cookies_loading, error: state.cookies_error, domains: state.cookie_domains }, state => !state.loading && !state.error && !state.domains.length),
+          ok: () => View({ class: "text-muted text-sm", attributes: { n: "network-cookies-empty" } }, ["尚未保存 Cookie，请先在 Cookie 管理中导入。"]) }),
+        Show({ when: combine({ loading: state.cookies_loading, error: state.cookies_error, domains: state.cookie_domains, matching: state.matching_domains }, state => !state.loading && !state.error && state.domains.length > 0 && !state.matching.length),
+          ok: () => View({ class: "text-muted text-sm", attributes: { n: "network-cookies-no-match" } }, ["没有与目标网址域名匹配的 Cookie。请检查目标网址，或先在 Cookie 管理中导入。"]) }),
+        View({ class: "box-border grid min-w-0 gap-space-2 overflow-auto", style: { "max-height": "200px" },
+          attributes: { n: "network-cookie-domains", role: "group", "aria-labelledby": "network-cookies-label" } }, [
+          For({ each: state.matching_domains, key: "domain", render(value) {
+            const entry = value?.__is_ref ? value.value : value;
+            return Checkbox({ label: `${entry.domain}（${entry.count} 条）`, disabled: cookie_disabled,
+              checked: computed(state.selected_domains, selected => selected.includes(entry.domain)),
+              attributes: { n: "network-cookie-domain-" + entry.domain, "aria-label": entry.domain, tabindex: "0" },
+              onChange: checked => methods.toggle_cookie_domain(entry.domain, checked),
+              onKeyDown(event) {
+                if (event.key === " " || event.key === "Enter") { event.preventDefault(); methods.toggle_cookie_domain(entry.domain); }
+              } });
+          } }),
+        ]),
+      ]),
       Textarea({ label: "请求头（JSON）", value: state.headers, disabled: state.busy, rows: 7,
         attributes: { n: "network-headers", spellcheck: "false" },
-        help: "可设置 User-Agent、Referer、Accept 等脚本支持的请求头；不会自动携带后台或站点 Cookie。",
+        help: "可设置 User-Agent、Referer、Accept 等脚本支持的请求头；Cookie 请从上方已有域名中勾选。",
         onInput: event => methods.set("headers", event.target.value) }),
       Button({ class: "justify-self-start", disabled: state.busy, attributes: { n: "network-test-start" }, onClick: methods.run },
         [computed(state.busy, busy => busy ? "正在请求…" : "开始测试")]),
       View({ class: "text-danger whitespace-pre-wrap break-anywhere", attributes: { n: "network-error", role: "alert" } }, [state.error]),
       Show({ when: computed(state.result, Boolean), ok: () => View({ class: "grid min-w-0 gap-space-4", attributes: { n: "network-result" } }, [
-        View({ class: "text-sm whitespace-pre-wrap break-anywhere", attributes: { n: "network-summary", role: "status" } }, [
+        View({ class: "flex flex-wrap items-center gap-space-2 text-sm break-anywhere", attributes: { n: "network-summary", role: "status" } }, [
+          For({ each: computed(state.result, result => result ? [result] : []), key: "status", render(value) {
+            const result = value?.__is_ref ? value.value : value;
+            return status_badge(result.status, "network-status", result.status == null ? "未收到 HTTP 响应" : `HTTP ${result.status} ${result.status_text || ""}`.trim());
+          } }),
           computed(state.result, result => result ? [
-            result.status == null ? "未收到 HTTP 响应" : `HTTP ${result.status} ${result.status_text}`.trim(),
             `总耗时 ${result.elapsed_ms} ms`,
             result.headers_ms == null ? "" : `收到响应头 ${result.headers_ms} ms`,
             result.colo ? `Worker 入口 ${result.colo}` : "",
           ].filter(Boolean).join(" · ") : ""),
         ]),
-        output("trace", "请求过程", computed(state.result, result => (result?.requests || []).map(entry =>
-          `${entry.status ?? "无响应"}  ${entry.elapsed_ms} ms  ${entry.url}`).join("\n"))),
+        View({ class: "grid min-w-0 gap-space-2", attributes: { n: "network-trace" } }, [
+          View({ as: "h2", class: "m-0 text-sm", attributes: { n: "network-trace-label" } }, ["请求过程"]),
+          View({ class: "grid min-w-0 gap-space-2 overflow-auto bg-surface-raised rounded-control", style: { padding: "12px", "max-height": "420px" },
+            attributes: { n: "network-trace-value" } }, [
+            For({ each: computed(state.result, result => result?.requests || []), render(value) {
+              const entry = value?.__is_ref ? value.value : value;
+              return View({ class: "flex flex-wrap items-center gap-space-2 text-sm break-anywhere", attributes: { n: "network-trace-entry" } }, [
+                status_badge(entry.status, "network-trace-status"),
+                View({ attributes: { n: "network-trace-time" } }, [`${entry.elapsed_ms} ms`]),
+                View({ attributes: { n: "network-trace-url" } }, [entry.url]),
+              ]);
+            } }),
+          ]),
+        ]),
         output("response-headers", "响应头", computed(state.result, result => JSON.stringify(result?.headers || {}, null, 2))),
-        output("response-body", "响应正文（最多 64KB，按纯文本显示）", computed(state.result, result => result?.body || "（空）")),
+        View({ class: "grid min-w-0 gap-space-2", attributes: { n: "network-response-body" } }, [
+          View({ as: "h2", class: "m-0 text-sm", attributes: { n: "network-response-body-label" } }, ["响应正文"]),
+          Show({ when: computed(state.preview, preview => preview.kind === "text"), ok: () => CodeEditor({
+            value: computed(state.preview, preview => preview.formatted), readOnly: true,
+            mode: computed(state.preview, preview => preview.mode),
+            attributes: { n: "network-response-code", "aria-label": "响应正文" },
+            wrapperStyle: { height: "420px", "max-height": "60dvh", width: "100%" },
+          }) }),
+          Show({ when: computed(state.preview, preview => ["img", "video", "audio"].includes(preview.kind)),
+            ok: () => ScriptMediaPreviewView(window.FindRSSAdminUI, { preview: state.preview, name: "network-response" }) }),
+          Show({ when: computed(state.preview, preview => Boolean(preview.file) && preview.kind !== "text"), ok: () =>
+            View({ class: "grid gap-space-2 break-anywhere", attributes: { n: "network-response-file" } }, [
+              View({ attributes: { n: "network-response-file-name" } }, [computed(state.preview, preview => preview.file?.name || "")]),
+              View({ class: "text-muted text-sm", attributes: { n: "network-response-file-type" } }, [computed(state.preview, preview => preview.file?.type || "")]),
+              View({ class: "text-muted text-sm", attributes: { n: "network-response-file-size" } }, [computed(state.preview, preview =>
+                preview.file?.size_bytes == null ? "大小未知（上游未提供 Content-Length）" : `${preview.file.size_bytes.toLocaleString()} 字节`)]),
+            ]) }),
+          View({ class: "text-muted text-sm", attributes: { n: "network-response-message", role: "status" } }, [computed(state.preview, preview => preview.message)]),
+        ]),
         View({ class: "text-muted text-sm", attributes: { n: "network-body-size" } }, [
-          computed(state.result, result => result ? `已读取 ${result.body_bytes} 字节${result.truncated ? "，正文已截断" : ""}` : ""),
+          computed(state.result, result => result ? `已读取 ${result.body_bytes} 字节${result.truncated ? "，正文已截断" : ""}；文本预览最多 64KB，媒体预览最多 16MB` : ""),
         ]),
       ]) }),
     ]),

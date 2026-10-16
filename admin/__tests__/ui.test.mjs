@@ -12,6 +12,7 @@ import { AdminAgentModel, AdminAgentView } from "../components/admin_agent.js";
 import { ScriptAgentModel, ScriptAgentPanelView } from "../components/script_agent.js";
 import { AISettingsStore } from "../components/ai_settings.js";
 import { SnapshotSettingsModel } from "../components/snapshot_settings.model.js";
+import { CookiePushSettingsModel } from "../components/cookie_push_settings.model.js";
 import { AI_PROVIDER_PRESETS } from "../domain/preferences/ai_presets.js";
 import { PaginationModel, PaginationView } from "../components/pagination.js";
 import * as platform_helpers from "../components/discovery_platform.js";
@@ -38,6 +39,49 @@ function find(node, name) {
   for (const child of node?.children || []) { const result = find(child, name); if (result) return result; }
   return null;
 }
+
+test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使用对应颜色的标签", async () => {
+  const network_bundle = await build({
+    entryPoints: [fileURLToPath(new URL("../pages/network.js", import.meta.url))],
+    bundle: true, format: "iife", globalName: "NetworkTestModule", write: false,
+  });
+  Object.assign(context, { AbortController, Blob });
+  context.FindRSSAdminShell = { Page: (_, children) => ui.View({ attributes: { n: "network-test-page" } }, children) };
+  let status = 200;
+  const submitted = [];
+  context.FindRSSAdminAuth = { fetch: async (url, options) => {
+    if (url.endsWith("/cookie-domains")) return Response.json({ domains: [
+      { domain: ".example.com", count: 2 }, { domain: "other.example", count: 1 },
+    ] });
+    submitted.push(JSON.parse(options.body));
+    return Response.json({ status, body_kind: "file", elapsed_ms: 10,
+      requests: [{ status, url: "https://www.example.com/", elapsed_ms: 10 }] });
+  } };
+  vm.runInContext(network_bundle.outputFiles[0].text, context);
+  const root = context.NetworkTestModule.NetworkTestPage();
+  try {
+    find(root, "network-url").events.onInput({ target: { value: "https://www.example.com/" } });
+    await find(root, "network-cookies-refresh").events.onClick();
+    await new Promise(setImmediate);
+    assert.equal(find(root, "network-cookie-domain-.example.com").state.attributes["aria-checked"], "true");
+    assert.equal(find(root, "network-cookie-domain-other.example"), null);
+    for (const [code, color] of [[200, "success"], [204, "success"], [301, "warning"], [304, "warning"], [403, "danger"], [500, "danger"], [null, "danger"], [101, "link"]]) {
+      status = code;
+      await find(root, "network-test-start").events.onClick();
+      await new Promise(setImmediate);
+      for (const name of ["network-status", "network-trace-status"]) {
+        const badge = find(root, name);
+        assert.ok(badge, name);
+        assert.ok(badge.state.styleSet.includes("frui-badge-color-color-" + color), `${name}: ${code}`);
+        assert.equal(badge.children[0].state.value, code == null ? (name === "network-status" ? "未收到 HTTP 响应" : "无响应") : `HTTP ${code}`);
+      }
+    }
+    assert.deepEqual(submitted[0].cookie_domains, [".example.com"]);
+    find(root, "network-url").events.onInput({ target: { value: "https://unmatched.example/" } });
+    assert.equal(find(root, "network-cookie-domain-.example.com"), null);
+    assert.ok(find(root, "network-cookies-no-match"));
+  } finally { root.onUnmounted(); }
+});
 
 test("登录页只显示密码输入框，提交密码后跳转管理后台", async () => {
   const requests = [], redirects = [];
@@ -555,6 +599,12 @@ test("脚本模型设置使用原厂商/模型页；临时密钥用于连接测�
 });
 
 test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相同的厂商模型编辑器", async () => {
+  context.CookiePushSettingsModel = options => CookiePushSettingsModel({ ...options, request_json: async (url, options) => {
+    const response = await context.window.FindRSSAdminAuth.fetch(url, options || {});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error);
+    return result;
+  } });
   context.SnapshotSettingsModel = options => SnapshotSettingsModel({ ...options, request_json: async (url, request_options) => {
     const response = await context.window.FindRSSAdminAuth.fetch(url, request_options);
     const value = await response.json();
@@ -567,6 +617,7 @@ test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相
   let tokens = [];
   const token = { id: "settings-token", name: "设置页设备", note: "", token_hint: "frd_…1234", status: "active", created_at: 1, expires_at: null, last_used_at: null };
   let fail_read = true;
+  let cookie_settings = { uuid: "", configured: false };
   const provider = { id: "custom", name: "Custom", type: "openai_compat", enabled: true,
     base_url: "https://models.example/v1", api_key_secret_name: "",
     models: [{ id: "m", name: "Model", model: "m", enabled: true, options: {} }] };
@@ -576,6 +627,10 @@ test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相
       if (url.endsWith("/reveal")) return Response.json({ token: "settings-plaintext" });
       if (options.method === "POST") { tokens = [token]; return Response.json({ device_token: token }); }
       return Response.json({ device_tokens: tokens });
+    }
+    if (url === "/admin/api/settings/cookies" && !fail_read) {
+      if (options.method === "PUT") cookie_settings = { uuid: JSON.parse(options.body).uuid, configured: true };
+      return Response.json(cookie_settings);
     }
     return fail_read ? Response.json({ error: "读取失败" }, { status: 500 }) : Response.json({ providers: [provider], configured: true });
   } };
@@ -616,6 +671,16 @@ test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相
     await new Promise(setImmediate);
     assert.equal(requests.at(-1).url, "/admin/api/scripts/agent/settings");
     assert.equal(requests.at(-1).method, "PUT");
+    await find(root, "settings-cookie-retry").events.onClick();
+    await new Promise(setImmediate);
+    assert.ok(find(root, "settings-cookie-decryption"));
+    assert.equal(find(root, "settings-cookie-password").state.attributes.type, "text");
+    find(root, "settings-cookie-uuid").events.onInput({ target: { value: "123" } });
+    find(root, "settings-cookie-password").events.onInput({ target: { value: "cookie-secret" } });
+    await find(root, "settings-cookie-save").events.onClick();
+    await new Promise(setImmediate);
+    assert.deepEqual(requests.at(-1).body, { uuid: "123", password: "cookie-secret" });
+    assert.equal(find(root, "settings-cookie-password").state.value, "");
     route_handlers.hide();
     assert.equal(find(root, "settings-ai-form"), null);
     assert.equal(find(root, "device-token-created-dialog"), null);

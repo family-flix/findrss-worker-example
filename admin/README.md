@@ -27,7 +27,7 @@ Browser
 
 管理后台页面统一由 `components/shell.js` 承载：桌面端使用固定侧边栏，移动端切换为底部导航；各业务页面共用这套外壳、页头和组件样式。新增子页面时，先建立 `xx.js` 与 `xx.model.js`，再在 `store.js` 的 `routes_configure.admin.children` 中声明路径、页面、标题和图标，并让页面根 View 调用 `FindRSSAdminShell.Page({ page_id, title, description }, children)`，业务 View 作为 `children` 传入，并导出页面函数供路由绑定；页面不再通过 `window.FindRSSAdminPages` 注册或自行挂载。
 
-“网络测试”进入 `/admin/network`，通过管理员接口 `POST /admin/api/network-test` 直接从当前 Worker 发起 GET 请求。支持编辑网址、请求头 JSON 和 1–60 秒超时（默认 10 秒），展示逐跳重定向状态、每跳响应头耗时、总耗时、响应头及最多 64KB 正文预览；正文按纯文本显示。默认填入起点目录示例及相同请求头，便于复现脚本超时。目标及重定向均复用公网地址校验，仅允许 HTTP(S) 的 80 / 443 端口，最多跟随 5 次重定向；不会自动携带后台或站点 Cookie，跨域移除手动填写的认证头和 Cookie。部署后测量线上 Worker 出口，本地运行则测量本地出口。
+“网络测试”进入 `/admin/network`，通过管理员接口 `POST /admin/api/network-test` 直接从当前 Worker 发起 GET 请求。支持编辑网址、请求头 JSON 和 1–60 秒超时（默认 10 秒），展示逐跳重定向状态、每跳响应头耗时、总耗时和响应头。文本正文最多读取 64KB，在只读 CodeMirror 中按响应 Content-Type 格式化、高亮 HTML、JSON（包括 `+json`）、JS、CSS，其他文本不高亮；无效或截断的 JSON 保留原文，JSON 大整数不会被重写。图片、视频、音频改用媒体预览，读取同次请求返回的完整字节（最多 16MB），通过 multipart 将诊断 JSON 和媒体文件一并返回，再由浏览器 Blob URL 展示，切换请求或离开页面时释放；播放器不另行请求原网址。超过媒体上限、其他二进制类型或 `Content-Disposition: attachment` 响应只展示文件名、类型、大小，大小取自 Content-Length，未提供时显示未知；支持 UTF-8 `filename*`。默认填入起点目录示例及相同请求头，便于复现脚本超时。Cookie 区域按目标网址的域名筛选后台已保存的匹配域名（包含父域），默认勾选，支持手动取消；同域名下修改路径或刷新保留选择，切换域名重新默认勾选，提供刷新、读取失败重试及无 Cookie / 无匹配空态。最终响应及逐跳请求的状态码使用标签：2xx 绿色、3xx 黄色、4xx/5xx 与无响应红色，1xx 蓝色。`GET /admin/api/network-test/cookie-domains` 仅返回域名与数量，测试请求只提交 `cookie_domains`，Cookie 值由服务端读取；不接受手工 Cookie 请求头。离开页面清空勾选，返回时重新读取域名。目标及重定向均复用公网地址校验，仅允许 HTTP(S) 的 80 / 443 端口，最多跟随 5 次重定向；未勾选时匿名访问；每一跳根据所选域名、目标域、路径、hostOnly、Secure 和有效期重新匹配 Cookie，不会转发其他站点的 Cookie；跨域移除手动填写的认证头。部署后测量线上 Worker 出口，本地运行则测量本地出口。
 
 每张设备卡片通过“日志”按钮打开右侧抽屉，并调用 `/admin/api/devices/:device_id/logs` 查看最近 7 天的设备行为。连接、心跳、调用、响应和系统事件均以结构化日志保存；抽屉支持分类、自动刷新、向前分页和详情展开。敏感字段落库前会脱敏，超大详情会截断。
 
@@ -50,7 +50,22 @@ Browser
 
 调用计数存于 SQLite `discovery_source_calls`，从部署此功能后累计，DO 重启保留。通过鉴权、匹配到脚本的真实 RSS/Atom 请求按已登记且启用的源计数，包含缓存命中及后续失败；调试、管理预览、测试和后台刷新不计入。源身份沿用路由 pathname（忽略 host 和 RSS/Atom 前缀）加归一化 query，不包含 token；同一身份登记多个地址时，每个源都加一次，总次数为当前源计数之和。改名、编辑及停用保留计数，删除源同时删除计数。外部 RSS 源和未到达 Worker 的客户端/CDN 缓存请求无法统计。
 
-“Cookie 管理”进入 `/cookies`，按域名分组显示已提交的 Cookie 键值列表，值可逐条编辑保存，也可在组内添加键值对、删除已有条目。`GET /admin/api/cookies` 读取，`POST|PATCH|DELETE /admin/api/cookies` 按域名 + key + 路径只增改删目标 Cookie，修改值保留路径、过期时间等属性。同名但不同路径的 Cookie 分别显示；新增键值对默认路径 `/`。「导入 Cookies」弹窗支持填写域名并粘贴 `key=value; k2=v2`；默认使用当前域名，也可填写新域名，按 `/` 路径新增或更新同名条目，值中的等号保留。导入中断时保留已保存结果和剩余输入，可继续重试。操作复用推送校验和缓存失效流程，失败保留草稿；重新读取前确认放弃未保存的修改。接口由 Cloudflare API Worker 提供，原 `POST /admin/api/cookies/update` 全量推送接口保持兼容。
+“Cookie 管理”进入 `/cookies`，按域名分组显示已提交的 Cookie 键值列表，值可逐条编辑保存，也可在组内添加键值对、删除已有条目。`GET /admin/api/cookies` 读取，`POST|PATCH|DELETE /admin/api/cookies` 按域名 + key + 路径只增改删目标 Cookie，修改值保留路径、过期时间等属性。同名但不同路径的 Cookie 分别显示；新增键值对默认路径 `/`。「导入 Cookies」弹窗支持填写域名并粘贴 `key=value; k2=v2`；默认使用当前域名，也可填写新域名，按 `/` 路径新增或更新同名条目，值中的等号保留。导入中断时保留已保存结果和剩余输入，可继续重试。操作复用推送校验和缓存失效流程，失败保留草稿；重新读取前确认放弃未保存的修改。接口由 Cloudflare API Worker 提供，全量推送仍使用 `POST /admin/api/cookies/update` 或 `POST /api/cookies/update`。
+
+Cookie 全量推送请求统一使用 `data` 字符串，替代请求顶层的 `cookies`、`cookie_data` 和 `encrypted`。`crypto_type` 省略或为 `none` 时，对 `data` 执行 `JSON.parse`；解析内容支持 Cookie 数组、域名到 Cookie 数组的分组对象，以及原有的 `{ cookies: [...] }` / `{ cookie_data: {...} }` 内部结构。例如：
+
+```json
+{"crypto_type":"none","data":"[{\"name\":\"sid\",\"value\":\"example\",\"domain\":\".example.com\"}]"}
+```
+
+加密推送前，在后台「设置」→「Cookie 解密」填写与推送端相同的 UUID 和原始密码。`GET|PUT /admin/api/settings/cookies` 读取和保存配置，需要管理员身份；读取仅返回 UUID、是否已配置和更新时间。密码留空保留已有密钥；首次配置或更换 UUID 时必须填写密码。服务端计算 `MD5(uuid + "-" + password)` 小写十六进制摘要的前 16 个字符作为解密密钥，用 `ADMIN_PASSWORD` 派生的 AES-GCM 密钥加密保存，不保存或回显原始密码；更换 `ADMIN_PASSWORD` 后需要重新填写 Cookie 解密密码。已有环境变量凭据仅在无后台配置时自动导入一次，后续修改以后台为准。
+
+加密推送使用 `{"uuid":"已配置的 UUID","crypto_type":"aes-128-cbc-fixed","data":"Base64 密文"}`，校验后台保存的 UUID 后解密，再解析 JSON 并存储。两种加密模式共用这组凭据。支持的 `crypto_type`：
+
+- `aes-128-cbc-fixed`：AES-128-CBC，直接使用上述派生密钥的 16 字节 UTF-8 表示，IV 为全零的 16 字节。
+- `aes-256-cbc`（也接受 CookieCloud 的 `legacy`）：AES-256-CBC 兼容模式，`data` 是 OpenSSL/CryptoJS 格式的 Base64 字符串，解码后为 `Salted__` + 8 字节 salt + 密文。按 [CookieCloud 官方示例](https://github.com/easychen/CookieCloud/blob/master/examples/decrypt.py)使用 EVP_BytesToKey（MD5，1 次迭代）派生 32 字节密钥和 16 字节 IV。
+
+其他加密方式、无效密文、无效 JSON 或无效 Cookie 数据返回 400，保留已有存储。合法推送会全量替换 Cookie；`data` 为 `"[]"` 时清空存储。
 
 ## 构建与检查
 

@@ -1,16 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { register } from 'node:module';
+import { ServiceCookiePushSettings } from '../server/service/durable_object/cookie_push_settings.js';
+import { create_script_agent_credentials } from '../server/infra/script_agent_credentials.js';
 register('./support/quickjs_wasm_hook.js', import.meta.url);
 const { ServiceScript } = await import('../server/service/durable_object/scripts.js');
 function setup() {
-  let saved;
+  let saved, settings;
   const service = Object.create(ServiceScript.prototype);
   service.repo = { rss_cookies: { get: () => saved || [], put: cookies => { saved = cookies; } } };
+  service.app = { cookie_push_settings: new ServiceCookiePushSettings({
+    repo: { get: () => settings, put: (uuid, encrypted_key) => { settings = { uuid, encrypted_key }; } },
+    credentials: create_script_agent_credentials('test-admin'),
+  }) };
   service.invalidate_routes = () => {};
   return { service, saved: () => saved };
 }
-function request(cookies) { return new Request('https://local/api/cookies/update', { method: 'POST', body: JSON.stringify({ cookies, crypto_type: 'none' }) }); }
+function request(cookies) { return new Request('https://local/api/cookies/update', { method: 'POST', body: JSON.stringify({ data: JSON.stringify(cookies), crypto_type: 'none' }) }); }
 test('Cookie 管理读取需要管理员身份，读取和编辑复用已有存储', async () => {
   const { route } = await import('../durable_object_router.js');
   const { default: worker } = await import('../api.js');
@@ -32,7 +38,7 @@ test('Cookie 管理读取需要管理员身份，读取和编辑复用已有存�
   await ctx.service.update_rss_cookies(request([cookie]));
   let result = await worker.fetch(new Request(url, { headers }), env);
   assert.equal((await result.json()).cookies[0].value, 'submitted');
-  const update = { method: 'POST', headers, body: JSON.stringify({ cookies: [{ ...cookie, value: 'edited' }] }) };
+  const update = { method: 'POST', headers, body: JSON.stringify({ data: JSON.stringify([{ ...cookie, value: 'edited' }]) }) };
   assert.equal((await worker.fetch(new Request(url + '/update', update), env)).status, 200);
   result = await worker.fetch(new Request(url, { headers }), env);
   const saved = (await result.json()).cookies[0];
@@ -40,6 +46,29 @@ test('Cookie 管理读取需要管理员身份，读取和编辑复用已有存�
   assert.equal(saved.path, '/account');
   assert.equal(saved.secure, true);
   assert.equal((await worker.fetch(new Request('https://local/api/cookies'), env)).status, 404);
+});
+test('加密 data 解密后保存；无效请求不覆盖已有 Cookie 或使缓存失效', async () => {
+  const ctx = setup();
+  await ctx.service.app.cookie_push_settings.import_legacy('device', '0123456789abcdef');
+  let invalidations = 0;
+  ctx.service.invalidate_routes = () => invalidations++;
+  const cookie = { name: 'sid', value: 'encrypted', domain: '.example.com', path: '/', secure: true };
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('0123456789abcdef'), 'AES-CBC', false, ['encrypt']);
+  const send = body => ctx.service.update_rss_cookies(new Request('https://local/api/cookies/update', { method: 'POST', body: JSON.stringify(body) }));
+  const encrypt = async text => {
+    const encrypted = await crypto.subtle.encrypt({ name: 'AES-CBC', iv: new Uint8Array(16) }, key, new TextEncoder().encode(text));
+    return { uuid: 'device', crypto_type: 'aes-128-cbc-fixed', data: btoa(String.fromCharCode(...new Uint8Array(encrypted))) };
+  };
+  const body = await encrypt(JSON.stringify({ '.example.com': [cookie] }));
+  assert.equal((await send(body)).count, 1);
+  assert.deepEqual(ctx.saved(), [{ ...cookie, hostOnly: false, expirationDate: 0 }]);
+  for (const invalid of [{ cookies: [] }, { data: [] }, { data: '{' }, { data: 'null' },
+    { ...body, uuid: 'wrong' }, { ...body, data: 'invalid!' }, { data: '[]', crypto_type: 'unknown' },
+    await encrypt('{'), await encrypt(JSON.stringify({ cookie_data: { example: null } }))]) {
+    await assert.rejects(send(invalid), error => error.status === 400);
+    assert.equal(ctx.saved()[0].value, 'encrypted');
+  }
+  assert.equal(invalidations, 1);
 });
 test('浏览器无名 Cookie 被跳过，合法 Cookie 仍原样保存', async () => {
   const ctx = setup();

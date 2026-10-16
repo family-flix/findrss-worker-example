@@ -80,6 +80,8 @@ globalThis.window = {
     View(props, children) {
       return create_element("view", props, children);
     },
+    Video(props) { return create_element("video", props, []); },
+    Audio(props) { return create_element("audio", props, []); },
     For({ each, render }) {
       const node = create_element("view", {}, []);
       Object.defineProperty(node, "children", { get() {
@@ -547,11 +549,11 @@ test("二级 Tab 随 handler 返回的 kind 更新，分别渲染图片、MP4 �
     assert.ok(media, kind);
     if (kind === "img") assert.equal(media.props.src.value, endpoint + "?media=1");
     else {
-      assert.equal(media.props.as, kind);
-      assert.equal(media.props.attributes.src.value, endpoint + "?media=1");
-      assert.equal(media.props.attributes.controls, "");
-      assert.equal(media.props.attributes.preload, "metadata");
-      assert.equal(media.props.attributes.autoplay, undefined);
+      assert.equal(media.type, kind);
+      assert.equal(media.props.src.value, endpoint + "?media=1");
+      assert.equal(media.props.controls, true);
+      assert.equal(media.props.preload, "metadata");
+      assert.equal(media.props.autoplay, undefined);
     }
     assert.equal(find_node(root, "script-feed-preview"), undefined);
   }

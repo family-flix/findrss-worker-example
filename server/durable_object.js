@@ -63,6 +63,8 @@ import { ServiceTask } from "./service/durable_object/tasks.js";
 import { ServiceUser } from "./service/durable_object/users.js";
 import { RepositorySnapshotSettings } from "./repository/snapshot_settings.js";
 import { ServiceSnapshotSettings } from "./service/durable_object/snapshot_settings.js";
+import { RepositoryCookiePushSettings } from "./repository/cookie_push_settings.js";
+import { ServiceCookiePushSettings } from "./service/durable_object/cookie_push_settings.js";
 
 /**
  * @typedef {Object} Env
@@ -338,6 +340,7 @@ export const route = {
     /** 纯 SQL 存储层：每个聚合一个 RepositoryX，只回原始行/Set/数字。 */
     this.repo = {
       snapshot_settings: new RepositorySnapshotSettings({ sql: this.ctx.storage.sql }),
+      cookie_push_settings: new RepositoryCookiePushSettings({ sql: this.ctx.storage.sql }),
       access_tokens: new RepositoryAccessToken({ sql: this.ctx.storage.sql }),
       activity: new RepositoryActivity({ sql: this.ctx.storage.sql }),
       calls: new RepositoryCall({ sql: this.ctx.storage.sql }),
@@ -382,6 +385,8 @@ export const route = {
     /** 应用服务注册表：兄弟服务经 `this.app.<svc>.<method>` 互相调用。 */
     this.app = {};
     this.app.snapshot_settings = new ServiceSnapshotSettings({ repo: this.repo.snapshot_settings, schedule_alarm: ports.schedule_alarm });
+    this.app.cookie_push_settings = new ServiceCookiePushSettings({ repo: this.repo.cookie_push_settings,
+      credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || "") });
     this.app.statistics = new ServiceStatistics({ repo: this.repo });
     this.app.maintenance = new ServiceMaintenance({ repo: this.repo });
     this.app.activity = new ServiceActivity({ repo: this.repo, app: this.app });
@@ -401,7 +406,10 @@ export const route = {
     this.app.device_tokens = new ServiceDeviceToken({ repo: this.repo.device_tokens,
       credentials: create_device_token_credentials(env.ADMIN_PASSWORD || ""), app: this.app,
       schedule_alarm: ports.schedule_alarm });
-    this.ctx.blockConcurrencyWhile(() => this.app.device_tokens.import_legacy(env.DEVICE_TOKEN));
+    this.ctx.blockConcurrencyWhile(async () => {
+      await this.app.device_tokens.import_legacy(env.DEVICE_TOKEN);
+      await this.app.cookie_push_settings.import_legacy(cookie_push_uuid, cookie_push_key);
+    });
     this.app.auth = new ServiceAuth({
       repo: this.repo,
       storage: this.ctx.storage,
@@ -415,6 +423,7 @@ export const route = {
     this.app.users = new ServiceUser({ repo: this.repo, storage: this.ctx.storage });
     this.app.discovery = new ServiceDiscovery({
       snapshot_settings: () => this.app.snapshot_settings.settings(),
+      check_cookie_permissions: script_id => this.app.scripts.check_cookie_permissions(script_id),
       public_origin: feed_hostname_origin(env),
       statistics: this.app.statistics,
       repo: this.repo, route_cache: ports.route_cache, storage: this.ctx.storage,
@@ -428,8 +437,6 @@ export const route = {
       repo: this.repo,
       ports,
       app: this.app,
-      cookie_push_uuid,
-      cookie_push_key,
       public_origin: feed_hostname_origin(env),
     });
     this.app.script_agent = new ServiceScriptAgent({
