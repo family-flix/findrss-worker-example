@@ -65,6 +65,8 @@ import { RepositorySnapshotSettings } from "./repository/snapshot_settings.js";
 import { ServiceSnapshotSettings } from "./service/durable_object/snapshot_settings.js";
 import { RepositoryCookiePushSettings } from "./repository/cookie_push_settings.js";
 import { ServiceCookiePushSettings } from "./service/durable_object/cookie_push_settings.js";
+import { RepositoryWebhookSettings } from "./repository/webhook_settings.js";
+import { ServiceWebhookSettings } from "./service/durable_object/webhook_settings.js";
 
 /**
  * @typedef {Object} Env
@@ -341,6 +343,7 @@ export const route = {
     this.repo = {
       snapshot_settings: new RepositorySnapshotSettings({ sql: this.ctx.storage.sql }),
       cookie_push_settings: new RepositoryCookiePushSettings({ sql: this.ctx.storage.sql }),
+      webhook_settings: new RepositoryWebhookSettings({ sql: this.ctx.storage.sql }),
       access_tokens: new RepositoryAccessToken({ sql: this.ctx.storage.sql }),
       activity: new RepositoryActivity({ sql: this.ctx.storage.sql }),
       calls: new RepositoryCall({ sql: this.ctx.storage.sql }),
@@ -376,6 +379,7 @@ export const route = {
       transaction: callback => this.ctx.storage.transactionSync(callback),
       sockets: new DeviceSocketHub(ctx),
       schedule_alarm: () => this.schedule_alarm(),
+      wait_until: promise => this.ctx.waitUntil(promise),
       route_cache: new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, RSS_ROUTE_CACHE_MAX_ENTRIES, {
         store: this.repo.rss_route_cache,
         max_bytes: RSS_ROUTE_CACHE_MAX_BYTES,
@@ -384,6 +388,8 @@ export const route = {
     };
     /** 应用服务注册表：兄弟服务经 `this.app.<svc>.<method>` 互相调用。 */
     this.app = {};
+    this.app.webhook_settings = new ServiceWebhookSettings({ repo: this.repo.webhook_settings,
+      credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || "") });
     this.app.snapshot_settings = new ServiceSnapshotSettings({ repo: this.repo.snapshot_settings, schedule_alarm: ports.schedule_alarm });
     this.app.cookie_push_settings = new ServiceCookiePushSettings({ repo: this.repo.cookie_push_settings,
       credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || "") });

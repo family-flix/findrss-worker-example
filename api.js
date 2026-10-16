@@ -144,7 +144,7 @@ export default {
       if (url.pathname === "/admin/api/management-overview" && request.method === "GET") {
         return admin_management_overview(env);
       }
-      if (["/admin/api/settings/snapshots", "/admin/api/settings/cookies"].includes(url.pathname) && ["GET", "PUT"].includes(request.method)) {
+      if (["/admin/api/settings/snapshots", "/admin/api/settings/cookies", "/admin/api/settings/webhook"].includes(url.pathname) && ["GET", "PUT"].includes(request.method)) {
         return env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal" + url.pathname.replace("/admin/api/", "/_admin/"), request));
       }
       if (

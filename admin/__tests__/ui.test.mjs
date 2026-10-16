@@ -13,6 +13,7 @@ import { ScriptAgentModel, ScriptAgentPanelView } from "../components/script_age
 import { AISettingsStore } from "../components/ai_settings.js";
 import { SnapshotSettingsModel } from "../components/snapshot_settings.model.js";
 import { CookiePushSettingsModel } from "../components/cookie_push_settings.model.js";
+import { WebhookSettingsModel } from "../components/webhook_settings.model.js";
 import { AI_PROVIDER_PRESETS } from "../domain/preferences/ai_presets.js";
 import { PaginationModel, PaginationView } from "../components/pagination.js";
 import * as platform_helpers from "../components/discovery_platform.js";
@@ -676,6 +677,12 @@ test("脚本模型设置使用原厂商/模型页；临时密钥用于连接测�
 });
 
 test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相同的厂商模型编辑器", async () => {
+  context.WebhookSettingsModel = options => WebhookSettingsModel({ ...options, request_json: async (url, options) => {
+    const response = await context.window.FindRSSAdminAuth.fetch(url, options || {});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error);
+    return result;
+  } });
   context.CookiePushSettingsModel = options => CookiePushSettingsModel({ ...options, request_json: async (url, options) => {
     const response = await context.window.FindRSSAdminAuth.fetch(url, options || {});
     const result = await response.json();
@@ -695,6 +702,7 @@ test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相
   const token = { id: "settings-token", name: "设置页设备", note: "", token_hint: "frd_…1234", status: "active", created_at: 1, expires_at: null, last_used_at: null };
   let fail_read = true;
   let cookie_settings = { uuid: "", configured: false };
+  let webhook_settings = { url: "", token_configured: false, template: '{"text":"{{message}}"}' };
   const provider = { id: "custom", name: "Custom", type: "openai_compat", enabled: true,
     base_url: "https://models.example/v1", api_key_secret_name: "",
     models: [{ id: "m", name: "Model", model: "m", enabled: true, options: {} }] };
@@ -704,6 +712,13 @@ test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相
       if (url.endsWith("/reveal")) return Response.json({ token: "settings-plaintext" });
       if (options.method === "POST") { tokens = [token]; return Response.json({ device_token: token }); }
       return Response.json({ device_tokens: tokens });
+    }
+    if (url === "/admin/api/settings/webhook" && !fail_read) {
+      if (options.method === "PUT") {
+        const body = JSON.parse(options.body);
+        webhook_settings = { url: body.url, template: body.template, token_configured: Boolean(body.token) };
+      }
+      return Response.json(webhook_settings);
     }
     if (url === "/admin/api/settings/cookies" && !fail_read) {
       if (options.method === "PUT") cookie_settings = { uuid: JSON.parse(options.body).uuid, configured: true };
@@ -758,6 +773,17 @@ test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相
     await new Promise(setImmediate);
     assert.deepEqual(requests.at(-1).body, { uuid: "123", password: "cookie-secret" });
     assert.equal(find(root, "settings-cookie-password").state.value, "");
+    await find(root, "settings-webhook-retry").events.onClick();
+    await new Promise(setImmediate);
+    assert.ok(find(root, "settings-webhook"));
+    assert.equal(find(root, "settings-webhook-token").state.attributes.type, "password");
+    find(root, "settings-webhook-url").events.onInput({ target: { value: "https://notify.example/api" } });
+    find(root, "settings-webhook-token").events.onInput({ target: { value: "notify-secret" } });
+    find(root, "settings-webhook-template").events.onInput({ target: { value: '{"text":"{{error_text}}"}' } });
+    await find(root, "settings-webhook-save").events.onClick();
+    await new Promise(setImmediate);
+    assert.deepEqual(requests.at(-1).body, { url: "https://notify.example/api", token: "notify-secret", template: '{"text":"{{error_text}}"}' });
+    assert.equal(find(root, "settings-webhook-token").state.value, "");
     route_handlers.hide();
     assert.equal(find(root, "settings-ai-form"), null);
     assert.equal(find(root, "device-token-created-dialog"), null);

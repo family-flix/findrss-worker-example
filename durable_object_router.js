@@ -80,8 +80,9 @@ function translate(result) {
  */
 async function dispatch(request, app) {
   const url = new URL(request.url);
-  if (["/_admin/settings/snapshots", "/_admin/settings/cookies"].includes(url.pathname)) {
-    const settings = url.pathname.endsWith("/cookies") ? app.cookie_push_settings : app.snapshot_settings;
+  if (["/_admin/settings/snapshots", "/_admin/settings/cookies", "/_admin/settings/webhook"].includes(url.pathname)) {
+    const settings = url.pathname.endsWith("/webhook") ? app.webhook_settings
+      : url.pathname.endsWith("/cookies") ? app.cookie_push_settings : app.snapshot_settings;
     if (request.method === "GET") return settings.settings();
     if (request.method === "PUT") {
       if (Number(request.headers.get("Content-Length") || 0) > 16384) throw new DurableObjectError("request body is too large", 413);

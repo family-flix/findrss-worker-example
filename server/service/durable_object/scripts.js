@@ -97,6 +97,10 @@ export class ServiceScript {
   record_log(record) {
     if (!record_script_log(this.repo, record) || record.status !== "error") return;
     for (const send of this.message_listeners) send({ type: "messages.changed" });
+    if (this.app.webhook_settings?.settings().url) {
+      const message = this.list_messages(new URL("https://internal/_admin/messages?limit=1")).messages[0];
+      this.ports.wait_until(this.app.webhook_settings.push_message(message));
+    }
   }
 
   resolve_public_origin(request) {

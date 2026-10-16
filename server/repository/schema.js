@@ -28,6 +28,7 @@ export const API_TABLE_NAMES = Object.freeze([
   "overview_snapshot",
   "snapshot_settings",
   "cookie_push_settings",
+  "webhook_settings",
   "platforms",
   "tags",
   "rss_cookie_grants",
@@ -74,6 +75,13 @@ export const API_SCHEMA_SQL = `
     id INTEGER PRIMARY KEY CHECK (id = 1),
     uuid TEXT NOT NULL,
     encrypted_key TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS webhook_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    url TEXT NOT NULL,
+    encrypted_token TEXT NOT NULL,
+    template TEXT NOT NULL,
     updated_at INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS platforms (
