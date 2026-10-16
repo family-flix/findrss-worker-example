@@ -439,7 +439,7 @@ function FilterFormView({ store }) {
   const vm$ = store;
   return View(
     { class: "box-border grid rounded-card bg-surface max-760-align-items max-760-flex-direction max-760-display max-760-grid-template-columns", style: {
-      "grid-template-columns": "repeat(3, minmax(0, 1fr))",
+      "grid-template-columns": "repeat(3, minmax(0, 1fr)) auto",
       "gap": "13px",
       "margin-top": "16px",
       "padding": "16px",
@@ -483,6 +483,10 @@ function FilterFormView({ store }) {
           },
         }),
       ]),
+      Button({ loading: vm$.state.loading,
+        disabled: combine({ loading: vm$.state.loading, busy: vm$.state.bulk_busy }, value => value.loading || value.busy),
+        style: { "align-self": "end", "justify-self": "end" },
+        attributes: { n: "discovery-source-list-refresh" }, onClick: vm$.methods.refresh_list }, ["刷新"]),
     ],
   );
 }

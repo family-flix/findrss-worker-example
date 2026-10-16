@@ -510,6 +510,37 @@ test("订阅源表格使用 Link 与 CopyButton，复制实际地址并显示成
   failed_card.onUnmounted();
 });
 
+test("订阅源搜索区右侧可刷新列表，加载期间禁用按钮并保留筛选", async () => {
+  ui.DOM = {};
+  context.document = { querySelector: () => null };
+  let finish, calls = 0;
+  context.FindRSSAdminAuth = { fetch: async url => {
+    assert.equal(url, "/admin/api/discovery/sources"); calls++;
+    return new Promise(resolve => { finish = resolve; });
+  } };
+  vm.runInContext("(() => {\n" + page_source("discovery.js") +
+    "\nglobalThis.refresh_model = DiscoveryAdminViewModel(); globalThis.refresh_list = SourceListView({ store: refresh_model }); })();", context);
+  const root = context.refresh_list;
+  const model = context.refresh_model;
+  try {
+    const form = find(root, "discovery-source-filter-form");
+    const refresh = find(form, "discovery-source-list-refresh");
+    assert.equal(form.children.at(-1), refresh);
+    model.methods.set_filter("query", "更新");
+    model.methods.set_filter("status", "enabled");
+    const pending = refresh.events.onClick();
+    assert.equal(refresh.state.attributes.disabled, true);
+    finish(Response.json({ sources: [{ id: "one", title: "更新的源", enabled: true }] }));
+    await pending; await new Promise(setImmediate);
+    assert.equal(calls, 1);
+    assert.equal(refresh.state.attributes.disabled, undefined);
+    assert.equal(model.state.query.value, "更新");
+    assert.equal(model.state.filter_status.value, "enabled");
+    assert.equal(model.state.sources.value[0].title, "更新的源");
+    assert.ok(find(root, "discovery-source-row"));
+  } finally { root.onUnmounted(); }
+});
+
 test("订阅源表格选择控制批量菜单，启停后行内容和数量同步更新，空表保留列头", async () => {
   ui.DOM = {};
   context.document = { querySelector: () => null };

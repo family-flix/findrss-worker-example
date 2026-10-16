@@ -1935,7 +1935,7 @@ function ScriptListView({ store }) {
           class:
             "box-border grid rounded-card bg-surface max-760-align-items max-760-flex-direction max-760-display max-760-grid-template-columns",
           style: {
-            "grid-template-columns": "minmax(0, 1fr) minmax(120px, 200px)",
+            "grid-template-columns": "minmax(0, 1fr) minmax(120px, 200px) auto",
             gap: "13px",
             "margin-top": "16px",
             padding: "16px",
@@ -1988,6 +1988,8 @@ function ScriptListView({ store }) {
               }),
             ],
           ),
+          Button({ disabled: vm$.state.loading, style: { "align-self": "end", "justify-self": "end" },
+            attributes: { n: "script-list-refresh" }, onClick: vm$.methods.start }, ["刷新"]),
         ],
       ),
       Show({

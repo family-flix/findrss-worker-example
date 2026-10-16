@@ -1064,6 +1064,32 @@ function child_texts(node) {
   return (node.children || []).map((child) => (child && child.__is_ref ? child.value : child));
 }
 
+test("脚本搜索区右侧刷新列表，加载时禁用按钮并保留筛选条件", async () => {
+  const root = build_page([], false);
+  const form = find_node(root, "script-filter-form");
+  const refresh = find_node(form, "script-list-refresh");
+  assert.equal(form.children.at(-1), refresh);
+  assert.deepEqual(child_texts(refresh), ["刷新"]);
+  const query = find_node(root, "script-filter-query-input");
+  const status = find_node(root, "script-filter-status-select");
+  query.props.onInput({ target: { value: "刷新测试" } });
+  status.props.onChange({ target: { value: "enabled" } });
+  let finish, calls = 0;
+  fetch_handler = async url => {
+    assert.equal(url, "/admin/api/scripts"); calls++;
+    return new Promise(resolve => { finish = resolve; });
+  };
+  const pending = refresh.props.onClick();
+  assert.equal(refresh.props.disabled.value, true);
+  finish(Response.json({ scripts: [{ ...script_fixture, id: "refreshed", name: "刷新测试", enabled: true }] }));
+  await pending;
+  assert.equal(calls, 1);
+  assert.equal(refresh.props.disabled.value, false);
+  assert.equal(query.props.value.value, "刷新测试");
+  assert.equal(status.props.value.value, "enabled");
+  assert.deepEqual(child_texts(find_node(root, "script-card-title")), ["刷新测试"]);
+});
+
 test("脚本关键词与状态筛选组合生效，包含附加路由且保持返回顺序", () => {
   const root = build_page([
     { ...script_fixture, id: "new", name: "最新模块", enabled: false, created_at: 3 },
