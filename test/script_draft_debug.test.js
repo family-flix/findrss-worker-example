@@ -11,7 +11,7 @@ const { route } = await import("../durable_object_router.js");
 
 test("草稿路由预览编译起点类式多路由，只返回元数据，不调用 handler 或写日志", async () => {
   const { service, records, calls } = setup();
-  const source = readFileSync(new URL("../examples/rss/qidian_chapters.js", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../examples/scripts/rss/qidian.js", import.meta.url), "utf8");
   const preview = body => route(new Request("https://internal/_admin/scripts/routes", {
     method: "POST", body: JSON.stringify(body),
   }), { scripts: service });

@@ -3,6 +3,16 @@ import test from "node:test";
 import { discovery_platforms, discovery_platform_icon } from "../server/lib/discovery_platform.js";
 import { ScriptModel } from "../server/domain/script.js";
 import { ServiceDiscovery } from "../server/service/durable_object/discovery.js";
+import { discovery_platform_icon_url } from "../admin/components/discovery_platform.js";
+
+test("省略或留空平台图标时使用默认地球 SVG，自定义图标优先", () => {
+  for (const id of ["website", "Apple", "独立平台"]) {
+    assert.equal(discovery_platform_icon_url(id), "/platform-icons/website.svg");
+    assert.equal(discovery_platform_icon_url(id, [{ id, icon: "" }]), "/platform-icons/website.svg");
+    assert.equal(discovery_platform_icon_url(id, [{ id }]), "/platform-icons/website.svg");
+    assert.equal(discovery_platform_icon_url(id, [{ id, icon: "/custom.svg" }]), "/custom.svg");
+  }
+});
 
 test("默认只有网页，脚本名称和旧源平台合并去重，自定义平台使用通用图标", () => {
   assert.deepEqual(discovery_platforms(), [{ id: "website", label: "网页", icon: "" }]);
@@ -22,6 +32,8 @@ test("维护者对象完整往返，返回数据不会改写模型中的维护�
   assert.deepEqual(model.toValue().maintainers, maintainers);
   model.toValue().maintainers[0].nickname = "修改副本";
   assert.equal(model.maintainers[0].nickname, "甲");
+  const named = ScriptModel.fromRow({ metadata_json: JSON.stringify({ maintainers: [{ name: "丙", avatar: "https://example.com/c.png" }] }) });
+  assert.deepEqual(named.toValue().maintainers, [{ nickname: "丙", url: "", avatar: "https://example.com/c.png" }]);
 });
 
 test("没有订阅源也会提供脚本平台；新增源按路由推断平台，旧源平台继续可编辑", async () => {

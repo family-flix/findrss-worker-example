@@ -206,11 +206,11 @@ test("/debug 要求启用 Debug，沿用订阅鉴权，失败时即使未声明 
   assert.doesNotMatch(html, /<script>/);
 });
 
-test("统一 Worker 的 /debug/weibo/:uid 走真实脚本，保留长 HTML、上游诊断与函数输出", async () => {
+test("统一 Worker 的 /debug/weibo/u/:uid 走真实脚本，保留长 HTML、上游诊断与函数输出", async () => {
   const source = (await readFile(new URL('../examples/scripts/weibo.js', import.meta.url), 'utf8')).replace(/cookie_headers:\s*\{[^}]*\},?/g, '');
   const { service, cache, row } = setup(true, result_fixture_source(source));
   service.rss_address_is_public = () => true;
-  Object.assign(row(), { path: '/weibo/:uid', metadata_json: JSON.stringify({ path: '/weibo/:uid', name: '微博', debug: true }) });
+  Object.assign(row(), { path: '/weibo/u/:uid', metadata_json: JSON.stringify({ path: '/weibo/u/:uid', name: '微博', debug: true }) });
   const requests = [];
   const original_fetch = globalThis.fetch;
   globalThis.fetch = async url => {
@@ -222,7 +222,7 @@ test("统一 Worker 的 /debug/weibo/:uid 走真实脚本，保留长 HTML、上
     const worker = create_worker({ api: worker_router, admin: {}, discovery: {} });
     const env = { API: { getByName: () => ({ fetch: input => route(input, { scripts: service }) }) } };
     for (let index = 0; index < 2; index++) {
-      const response = await worker.fetch(new Request('https://feeds.example/debug/weibo/123'), env);
+      const response = await worker.fetch(new Request('https://feeds.example/debug/weibo/u/123'), env);
       assert.equal(response.status, 200);
       const html = await response.text();
       assert.match(html, /原始HTML末尾&lt;script/);

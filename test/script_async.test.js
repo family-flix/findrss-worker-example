@@ -7,8 +7,8 @@ register("./support/quickjs_wasm_hook.js", import.meta.url);
 import { ScriptCookieAccess } from "../server/infra/script_cookie_access.js";
 const { compile_script_module_inner, execute_script_inner: execute_anonymous } = await import("../server/infra/script_sandbox.js");
 const script = await readFile(new URL("../examples/scripts/weibo.js", import.meta.url), "utf8");
-const request_context = { method: "GET", pathname: "/rss/weibo/1992429663", params: { uid: "1992429663" }, query: {} };
-const metadata = { path: "/weibo/:uid", name: "微博用户列表", example: "/weibo/1992429663" };
+const request_context = { method: "GET", pathname: "/rss/weibo/u/1992429663", params: { uid: "1992429663" }, query: {} };
+const metadata = { path: "/weibo/u/:uid", name: "微博用户列表", example: "/weibo/u/1992429663" };
 // 为旧示例生成显式授权测试副本，示例文件保持原样。
 async function execute_script_inner(source, route_metadata, invoke, context, cookies, mock) {
   const permissions = { cookies: ["https://weibo.com", "https://www.douyin.com", "https://x.com"].map((origin, index) => ({
@@ -118,7 +118,7 @@ test("生产 QuickJS：微博应用壳读取列表后尝试 profile，失败仍�
 test("生产 QuickJS：微博多路由、正文图片改写与图片代理描述", async () => {
   const compiled = await compile_script_module_inner(script);
   assert.equal(compiled.error, "");
-  assert.deepEqual(compiled.metadata.routes.map(entry => entry.path), ["/weibo/:uid", "/img/weibo"]);
+  assert.deepEqual(compiled.metadata.routes.map(entry => entry.path), ["/weibo/u/:uid", "/img/weibo"]);
   const url = "https://wx1.sinaimg.cn/large/a.jpg";
   const public_origin = "https://feeds.example";
   const result = await with_fetch(async () => new Response('<script type="application/json">' +

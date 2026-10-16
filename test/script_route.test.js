@@ -92,7 +92,7 @@ test("/debug 统一显示所有路由返回值，不依赖订阅字段、不抓�
 });
 
 test("番茄正文直达 HTML、HEAD 无正文；解码转义、缓存、Debug 与停用生效", async () => {
-  const script = await readFile(new URL("../examples/scripts/fanqienovel_chapters.js", import.meta.url), "utf8");
+  const script = await readFile(new URL("../examples/scripts/rss/fanqienovel.js", import.meta.url), "utf8");
   const app = await setup(result_fixture_source(script));
   const previous = globalThis.fetch;
   let calls = 0;

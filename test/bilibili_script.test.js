@@ -14,6 +14,8 @@ const compiled = await compile_script_module(source);
 assert.equal(compiled.error, "");
 const fixtures = JSON.parse(await readFile(new URL("./fixtures/script_migration.json", import.meta.url)))
   .filter(fixture => fixture.file === "bilibili");
+// upload_video.har 中的成功请求，去掉 Cookie 和可变查询参数。
+const video_request = JSON.parse(await readFile(new URL("./fixtures/bilibili_video_request.json", import.meta.url)));
 const cookie_access = new ScriptCookieAccess({
   permissions: compiled.metadata.permissions,
   assert_grant() {},
@@ -44,6 +46,13 @@ for (const fixture of fixtures) test("Bilibili QuickJS 保留内容和媒体："
     calls++;
     const url = new URL(input);
     assert.equal(new Headers(options.headers).get("cookie"), "SESSDATA=test-cookie");
+    if (index) {
+      const headers = new Headers(options.headers);
+      for (const [name, value] of Object.entries(video_request.headers)) {
+        assert.equal(headers.get(name), name === "referer"
+          ? "https://space.bilibili.com/" + fixture.params.userid + "/upload/video" : value, name);
+      }
+    }
     if (url.pathname.includes("/feed/space")) {
       assert.equal(url.searchParams.get("host_mid"), fixture.params.userid);
       assert.equal(url.searchParams.get("offset"), "123456");
@@ -52,9 +61,15 @@ for (const fixture of fixtures) test("Bilibili QuickJS 保留内容和媒体："
       assert.equal(url.searchParams.get("mid"), fixture.params.userid);
       assert.equal(url.searchParams.get("pn"), "2");
       assert.equal(url.searchParams.get("ps"), "10");
+      for (const [name, value] of Object.entries(video_request.params)) {
+        assert.equal(url.searchParams.get(name), value, name);
+      }
+      assert.ok(Math.abs(Number(url.searchParams.get("wts")) - Date.now() / 1000) < 5);
       const signature = url.searchParams.get("w_rid");
-      url.searchParams.delete("w_rid");
-      assert.equal(signature, createHash("md5").update(url.searchParams.toString() + "ea1db124af3c7062474693fa704f4ff8").digest("hex"));
+      const query = [...url.searchParams].filter(([name]) => name !== "w_rid")
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, value]) => encodeURIComponent(name) + "=" + encodeURIComponent(value.replace(/[!'()*]/g, ""))).join("&");
+      assert.equal(signature, createHash("md5").update(query + "ea1db124af3c7062474693fa704f4ff8").digest("hex"));
     }
     const response = fixture.responses.find(response => input.includes(response.contains));
     assert.ok(response, input);

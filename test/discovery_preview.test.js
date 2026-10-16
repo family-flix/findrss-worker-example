@@ -64,7 +64,7 @@ test("添加微博订阅时，同源头像走内部图片代理并保留上游 R
     const env = { FINDRSS_HOSTNAME: origin, API: { getByName: () => ({ fetch(request) {
       const url = new URL(request.url);
       calls.push(url.pathname);
-      if (url.pathname === "/_admin/feed/rss/weibo/123") {
+      if (url.pathname === "/_admin/feed/rss/weibo/u/123") {
         return new Response(`<rss><channel><title>微博用户</title><image><url>${proxy_url}</url></image></channel></rss>`);
       }
       assert.equal(url.pathname, "/_public/feed/raw/img/weibo");
@@ -77,7 +77,7 @@ test("添加微博订阅时，同源头像走内部图片代理并保留上游 R
     } }) } };
     const response = await admin_discovery_preview(env, new Request(origin + "/admin/api/discovery/preview", {
       method: "POST", headers: { Cookie: "admin_session=private", Authorization: "Bearer private" },
-      body: JSON.stringify({ feed_url: "{{hostname}}/rss/weibo/123" }),
+      body: JSON.stringify({ feed_url: "{{hostname}}/rss/weibo/u/123" }),
     }));
     assert.equal(response.status, 200);
     const data = await response.json();
@@ -85,7 +85,7 @@ test("添加微博订阅时，同源头像走内部图片代理并保留上游 R
     assert.equal(data.defaults.avatar_url, proxy_url);
     assert.equal(data.avatar.content_type, "image/png");
     assert.deepEqual(Buffer.from(data.avatar.data, "base64"), Buffer.from(png));
-    assert.deepEqual(calls, ["/_admin/feed/rss/weibo/123", "/_public/feed/raw/img/weibo"]);
+    assert.deepEqual(calls, ["/_admin/feed/rss/weibo/u/123", "/_public/feed/raw/img/weibo"]);
   }
   assert.equal(upstream.length, 2);
 });
@@ -99,7 +99,7 @@ test("本地默认头像直接读取品牌图片，不请求回环网络", async
     `<rss><channel><title>微博</title><image><url>${origin}/findrss-logo.png</url></image></channel></rss>`,
   ) }) } };
   const response = await admin_discovery_preview(env, new Request(origin + "/admin/api/discovery/preview", {
-    method: "POST", body: JSON.stringify({ feed_url: "{{hostname}}/rss/weibo/123" }),
+    method: "POST", body: JSON.stringify({ feed_url: "{{hostname}}/rss/weibo/u/123" }),
   }));
   const data = await response.json();
   assert.equal(data.avatar_error, "");
@@ -135,10 +135,10 @@ test("脚本预览不依赖公开域名配置，透传参数并解析真实 RSS/
   let xml = '<rss><channel><title>用户文章</title><item><title>文章一</title><link>https://example.com/1</link><description>&lt;b&gt;简介&lt;/b&gt;</description></item></channel></rss>';
   const env = { API: { getByName() { return { fetch(request) { called = request; return new Response(xml); } }; } } };
   const request = () => new Request("https://api/admin/api/discovery/preview", { method: "POST",
-    body: JSON.stringify({ feed_url: "/rss/weibo/123?offset=a%26b", include_feed: true, script_id: "script-123" }) });
+    body: JSON.stringify({ feed_url: "/rss/weibo/u/123?offset=a%26b", include_feed: true, script_id: "script-123" }) });
   const result = await admin_discovery_preview(env, request());
   const data = await result.json();
-  assert.equal(called.url, "https://internal/_admin/feed/rss/weibo/123?offset=a%26b");
+  assert.equal(called.url, "https://internal/_admin/feed/rss/weibo/u/123?offset=a%26b");
   assert.equal(called.headers.get("X-RSS-Preview-Script-ID"), "script-123");
   assert.equal(data.feed.title, "用户文章");
   assert.equal(data.feed.articles[0].summary, "简介");
@@ -152,7 +152,7 @@ test("脚本预览不依赖公开域名配置，透传参数并解析真实 RSS/
   env.API.getByName = () => ({ fetch: () => new Response('{"error":"设备离线"}', { status: 503 }) });
   assert.equal((await admin_discovery_preview(env, request())).status, 503);
   const invalid = new Request("https://api/admin/api/discovery/preview", { method: "POST",
-    body: JSON.stringify({ feed_url: "/rss/weibo/123", include_feed: true, script_id: "bad\r\nheader" }) });
+    body: JSON.stringify({ feed_url: "/rss/weibo/u/123", include_feed: true, script_id: "bad\r\nheader" }) });
   assert.equal((await admin_discovery_preview(env, invalid)).status, 400);
 });
 

@@ -26,10 +26,15 @@ test("路由接受多位维护者对象、旧字符串和平台元数据；非�
   assert.equal(compiled.error, "");
   assert.deepEqual(compiled.metadata.platform, { name: "知乎", icon: "" });
   assert.deepEqual(compiled.metadata.maintainers, maintainers);
+  const named = await compile({ maintainers: [{ name: "  丙  ", avatar: "https://example.com/c.png" }] });
+  assert.equal(named.error, "");
+  assert.deepEqual(named.metadata.maintainers, [{ nickname: "丙", url: "", avatar: "https://example.com/c.png" }]);
   assert.deepEqual((await compile({})).metadata.platform, { name: "网页", icon: "" });
   for (const metadata of [{ platform: [] }, { platform: "" }, { platform: "all" }, { platform: "bad\nname" }, { platform: "a".repeat(65) },
     { maintainers: [{}] }, { maintainers: [{ nickname: "" }] }, { maintainers: [{ nickname: "甲", avatar: "javascript:alert(1)" }] },
-    { maintainers: [{ nickname: "甲", url: "https://user:password@example.com/" }] }, { maintainers: [null] }]) {
+    { maintainers: [{ nickname: "甲", url: "https://user:password@example.com/" }] }, { maintainers: [null] },
+    { maintainers: [{ name: "" }] }, { maintainers: [{ name: "a".repeat(129) }] },
+    { maintainers: [{ name: 123 }] }, { maintainers: [{ name: "丙", avatar: "javascript:alert(1)" }] }]) {
     assert.notEqual((await compile(metadata)).error, "", JSON.stringify(metadata));
   }
 });
@@ -169,12 +174,12 @@ test("公众号、微博及旧图片路由 GET/HEAD 强缓存 90 天；客户端
   const original = globalThis.fetch;
   try {
     for (const [file, path, target, referer] of [
-      ["wxmp_biz_msg_list", "/img/wxmp", "https://mmbiz.qpic.cn/a", "https://mp.weixin.qq.com/"],
-      ["wxmp_biz_msg_list", "/wxmpimgproxy", "https://mmbiz.qpic.cn/a", "https://mp.weixin.qq.com/"],
+      ["wxmp", "/img/wxmp", "https://mmbiz.qpic.cn/a", "https://mp.weixin.qq.com/"],
+      ["wxmp", "/wxmpimgproxy", "https://mmbiz.qpic.cn/a", "https://mp.weixin.qq.com/"],
       ["weibo", "/img/weibo", "https://wx4.sinaimg.cn/orj360/001YqBPrgy1ih705eegpfj63uw8ohnpv02.jpg", "https://weibo.com/"],
       ["weibo", "/img/weibo", "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/e1/201810_yueliang_mobile.png", "https://weibo.com/"],
     ]) {
-      const script = await readFile(new URL(`../examples/scripts/${file}.js`, import.meta.url), "utf8");
+      const script = await readFile(new URL(`../examples/scripts/rss/${file}.js`, import.meta.url), "utf8");
       const { service } = await setup(script);
       const env = { API: { getByName: () => ({ fetch: request => dispatch(request, { scripts: service }) }) } };
       globalThis.fetch = async (url, options) => {

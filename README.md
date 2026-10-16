@@ -56,18 +56,19 @@ RSS 是供阅读器获取更新的订阅格式。阅读器是用来集中查看�
 | 脚本（点击打开） | 采集内容 |
 | --- | --- |
 | <img src="public/platform-icons/bilibili.svg" width="24" height="24" alt=""> [哔哩哔哩](examples/scripts/rss/bilibili.js) | UP 主视频与动态 |
-| <img src="public/platform-icons/youtube.svg" width="24" height="24" alt=""> [YouTube](examples/scripts/rss/youtube.js) | 频道视频 |
+| <img src="public/platform-icons/youtube.svg" width="24" height="24" alt=""> [YouTube](examples/scripts/rss/youtube.js) | 频道视频、Shorts |
 | <img src="public/platform-icons/zhihu.svg" width="24" height="24" alt=""> [知乎](examples/scripts/rss/zhihu.js) | 动态、回答、文章、视频等 |
 | <img src="public/platform-icons/weibo.svg" width="24" height="24" alt=""> [微博](examples/scripts/rss/weibo.js) | 用户微博 |
-| <img src="public/platform-icons/x.svg" width="24" height="24" alt=""> [X](examples/scripts/rss/x_user.js) | 用户推文 |
-| <img src="public/platform-icons/douyin.svg" width="24" height="24" alt=""> [抖音](examples/scripts/rss/douyin_user.js) | 作者视频与图集 |
-| <img src="public/platform-icons/kuaishou.svg" width="24" height="24" alt=""> [快手](examples/scripts/rss/kuaishou_user.js) | 作者作品 |
-| <img src="public/platform-icons/xiaohongshu.svg" width="24" height="24" alt=""> [小红书](examples/scripts/rss/xiaohongshu_user.js) | 用户笔记 |
-| <img src="public/platform-icons/telegram.svg" width="24" height="24" alt=""> [Telegram](examples/scripts/rss/telegram_channel.js) | 公开频道消息 |
-| <img src="public/platform-icons/fanqienovel.svg" width="24" height="24" alt=""> [番茄小说](examples/scripts/rss/fanqienovel_chapters.js) | 章节目录与正文 |
-| <img src="public/platform-icons/qidian.svg" width="24" height="24" alt=""> [起点中文网](examples/scripts/rss/qidian_chapters.js) | 章节目录与正文 |
-| <img src="public/platform-icons/website.svg" width="24" height="24" alt=""> [69 书吧](examples/scripts/rss/69shuba_chapters.js) | 章节目录 |
-| <img src="public/platform-icons/website.svg" width="24" height="24" alt=""> [天天看书](examples/scripts/rss/ttk_chapters.js) | 章节目录 |
+| <img src="public/platform-icons/x.svg" width="24" height="24" alt=""> [X](examples/scripts/rss/x.js) | 用户推文 |
+| <img data-n="instagram-example-icon" src="public/platform-icons/instagram.svg" width="24" height="24" alt=""> [Instagram](examples/scripts/rss/instagram.js) | 用户图片、视频与多图作品 |
+| <img src="public/platform-icons/douyin.svg" width="24" height="24" alt=""> [抖音](examples/scripts/rss/douyin.js) | 作者视频与图集 |
+| <img src="public/platform-icons/kuaishou.svg" width="24" height="24" alt=""> [快手](examples/scripts/rss/kuaishou.js) | 作者作品 |
+| <img src="public/platform-icons/xiaohongshu.svg" width="24" height="24" alt=""> [小红书](examples/scripts/rss/xiaohongshu.js) | 用户笔记 |
+| <img src="public/platform-icons/telegram.svg" width="24" height="24" alt=""> [Telegram](examples/scripts/rss/telegram.js) | 公开频道消息 |
+| <img src="public/platform-icons/fanqienovel.svg" width="24" height="24" alt=""> [番茄小说](examples/scripts/rss/fanqienovel.js) | 章节目录与正文 |
+| <img src="public/platform-icons/qidian.svg" width="24" height="24" alt=""> [起点中文网](examples/scripts/rss/qidian.js) | 章节目录与正文 |
+| <img src="public/platform-icons/website.svg" width="24" height="24" alt=""> [69 书吧](examples/scripts/rss/69shuba.js) | 章节目录 |
+| <img src="public/platform-icons/website.svg" width="24" height="24" alt=""> [天天看书](examples/scripts/rss/ttk.js) | 章节目录 |
 | <img src="public/platform-icons/website.svg" width="24" height="24" alt=""> [Apple App Store](examples/scripts/rss/apple.js) | 应用版本更新 |
 
 也可以编写其他网站的采集规则。部分脚本需要登录账号或连接设备，具体要求见[示例说明](examples/scripts/README.md)。

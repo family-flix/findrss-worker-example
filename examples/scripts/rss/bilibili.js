@@ -378,15 +378,17 @@ export class BilibiliUserVideoRSS extends BilibiliRSS {
   }
   static headers(link) {
     return {
-      Accept: "application/json, text/plain, */*",
+      Accept: "*/*",
       "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
       "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+      Origin: "https://space.bilibili.com",
       Referer: link,
       "Cache-Control": "no-cache",
       Pragma: "no-cache",
+      Priority: "u=1, i",
       "sec-ch-ua":
-        '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
+        '"Google Chrome";v="155", "Chromium";v="155", "Not(A:Brand";v="24"',
       "sec-ch-ua-mobile": "?0",
       "sec-ch-ua-platform": '"macOS"',
       "sec-fetch-dest": "empty",
@@ -513,8 +515,22 @@ export class BilibiliUserVideoRSS extends BilibiliRSS {
         ps,
         order: "pubdate",
         tid: 0,
+        special_type: "",
+        index: 0,
+        keyword: "",
+        order_avoided: true,
         platform: "web",
-        web_location: "1550101",
+        web_location: "333.1387",
+        "x-bili-locale-json":
+          '{"c_locale":{"language":"zh","script":"Hans"},"always_translate":false}',
+        "x-bili-device-req-json":
+          '{"platform":"web","device":"pc","spmid":"333.1387","mobi_app":"web_cn"}',
+        // shortcut: 沿用成功 HAR 的设备指纹，上游校验变化时更新采样。
+        dm_img_list: "[]",
+        dm_img_str: "V2ViR0wgMS4wIChPcGVuR0wgRVMgMi4wIENocm9taXVtKQ",
+        dm_cover_img_str:
+          "QU5HTEUgKEFwcGxlLCBBTkdMRSBNZXRhbCBSZW5kZXJlcjogQXBwbGUgTTEgUHJvLCBVbnNwZWNpZmllZCBWZXJzaW9uKUdvb2dsZSBJbmMuIChBcHBsZS",
+        dm_img_inter: '{"ds":[],"wh":[4921,5252,61],"of":[216,432,216]}',
         wts: Math.floor(Date.now() / 1000),
       };
       const query = Object.keys(params)

@@ -1,0 +1,159 @@
+{
+  "metadata": {
+    "channelMetadataRenderer": {
+      "title": "Brooke Monk",
+      "externalId": "UC73sF-7Ihcs1HpnXEEXZ2ew",
+      "description": "SHOP DOTING BEAUTY NOW ",
+      "avatar": {
+        "thumbnails": [
+          {
+            "url": "https://yt3.googleusercontent.com/7QnpPqeHqvT62fzS5Sod1D73L8jkgb01WZqV8M5iQSj4aNgev6NVLZe4LqNAydaiAfUScRcB1Q=s900-c-k-c0x00ffffff-no-rj",
+            "width": 900,
+            "height": 900
+          }
+        ]
+      }
+    }
+  },
+  "contents": {
+    "twoColumnBrowseResultsRenderer": {
+      "tabs": [
+        {
+          "tabRenderer": {
+            "title": "Shorts",
+            "selected": true,
+            "content": {
+              "richGridRenderer": {
+                "contents": [
+                  {
+                    "richItemRenderer": {
+                      "content": {
+                        "shortsLockupViewModel": {
+                          "onTap": {
+                            "innertubeCommand": {
+                              "reelWatchEndpoint": {
+                                "videoId": "VwYzTp6BpqY"
+                              }
+                            }
+                          },
+                          "overlayMetadata": {
+                            "primaryText": {
+                              "content": "Wait for it…"
+                            },
+                            "secondaryText": {
+                              "content": "5.6万次观看"
+                            }
+                          },
+                          "thumbnailViewModel": {
+                            "thumbnailViewModel": {
+                              "image": {
+                                "sources": [
+                                  {
+                                    "url": "https://i.ytimg.com/vi/VwYzTp6BpqY/oar1.jpg?sqp=-oaymwEdCJUDENAFSFWQAgHyq4qpAwwIARUAAIhCcAHAAQY=&rs=AOn4CLBWPCltnBgVjtPBdRnzFtawI7AoXg&usqp=CCk",
+                                    "width": 405,
+                                    "height": 720
+                                  },
+                                  {
+                                    "url": "https://i.ytimg.com/vi/VwYzTp6BpqY/oar1.jpg?sqp=-oaymwEgCJUDEOAESFWQAgHyq4qpAw8IARUAAIhCcAHAAQbIAQE=&rs=AOn4CLD2q_S9JJYrJuOE8sf3kjByL-X5GQ&usqp=CCk",
+                                    "width": 405,
+                                    "height": 608
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "richItemRenderer": {
+                      "content": {
+                        "shortsLockupViewModel": {
+                          "onTap": {
+                            "innertubeCommand": {
+                              "reelWatchEndpoint": {
+                                "videoId": "bi6ptD31Uxc"
+                              }
+                            }
+                          },
+                          "overlayMetadata": {
+                            "primaryText": {
+                              "content": "Has this happened to you?"
+                            },
+                            "secondaryText": {
+                              "content": "21万次观看"
+                            }
+                          },
+                          "thumbnailViewModel": {
+                            "thumbnailViewModel": {
+                              "image": {
+                                "sources": [
+                                  {
+                                    "url": "https://i.ytimg.com/vi/bi6ptD31Uxc/oar2.jpg?sqp=-oaymwEdCJUDENAFSFWQAgHyq4qpAwwIARUAAIhCcAHAAQY=&rs=AOn4CLA0Ivj4XiklvbwYXBUNzi-Xp3MpKA&usqp=CCk",
+                                    "width": 405,
+                                    "height": 720
+                                  },
+                                  {
+                                    "url": "https://i.ytimg.com/vi/bi6ptD31Uxc/oar2.jpg?sqp=-oaymwEgCJUDEOAESFWQAgHyq4qpAw8IARUAAIhCcAHAAQbIAQE=&rs=AOn4CLCSm7FTPFQxPPsD407v5gQhlkip3g&usqp=CCk",
+                                    "width": 405,
+                                    "height": 608
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "richItemRenderer": {
+                      "content": {
+                        "shortsLockupViewModel": {
+                          "onTap": {
+                            "innertubeCommand": {
+                              "reelWatchEndpoint": {
+                                "videoId": "1K95o_PUYJM"
+                              }
+                            }
+                          },
+                          "overlayMetadata": {
+                            "primaryText": {
+                              "content": "This was fun to make"
+                            },
+                            "secondaryText": {
+                              "content": "9.4万次观看"
+                            }
+                          },
+                          "thumbnailViewModel": {
+                            "thumbnailViewModel": {
+                              "image": {
+                                "sources": [
+                                  {
+                                    "url": "https://i.ytimg.com/vi/1K95o_PUYJM/oar3.jpg?sqp=-oaymwEdCJUDENAFSFWQAgHyq4qpAwwIARUAAIhCcAHAAQY=&rs=AOn4CLD_8PLstBmKgkNHC9zb2o_uMP6Ubg&usqp=CCk",
+                                    "width": 405,
+                                    "height": 720
+                                  },
+                                  {
+                                    "url": "https://i.ytimg.com/vi/1K95o_PUYJM/oar3.jpg?sqp=-oaymwEgCJUDEOAESFWQAgHyq4qpAw8IARUAAIhCcAHAAQbIAQE=&rs=AOn4CLD2HslWaXnuGO4-2uNUF9pJ194Oqw&usqp=CCk",
+                                    "width": 405,
+                                    "height": 608
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

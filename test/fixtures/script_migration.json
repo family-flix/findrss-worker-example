@@ -1,6 +1,6 @@
 [
   {
-    "file": "69shuba_chapters",
+    "file": "69shuba",
     "params": {
       "book_id": "123"
     },
@@ -69,7 +69,7 @@
     ]
   },
   {
-    "file": "douyin_user",
+    "file": "douyin",
     "params": {
       "sec_uid": "MS4wLjABAAAAOE57npukdzs0SH_Fk5RHB-qfUlnZ5jQT2R_KPH4Sd8s"
     },
@@ -85,7 +85,7 @@
     ]
   },
   {
-    "file": "fanqienovel_chapters",
+    "file": "fanqienovel",
     "params": {
       "book_id": "123"
     },
@@ -105,7 +105,7 @@
     ]
   },
   {
-    "file": "kuaishou_user",
+    "file": "kuaishou",
     "params": {
       "user_id": "user_1"
     },
@@ -120,7 +120,7 @@
     ]
   },
   {
-    "file": "qidian_chapters",
+    "file": "qidian",
     "params": {
       "book_id": "1036526469"
     },
@@ -137,7 +137,7 @@
     ]
   },
   {
-    "file": "telegram_channel",
+    "file": "telegram",
     "params": {
       "username": "telegram"
     },
@@ -153,7 +153,7 @@
     ]
   },
   {
-    "file": "ttk_chapters",
+    "file": "ttk",
     "params": {
       "book_id": "example"
     },
@@ -189,7 +189,7 @@
     ]
   },
   {
-    "file": "wxchannels_contact_feed_list",
+    "file": "wxchannels",
     "params": {
       "account": "v2_abc@finder"
     },
@@ -246,7 +246,7 @@
     ]
   },
   {
-    "file": "wxmp_biz_msg_list",
+    "file": "wxmp",
     "params": {
       "account": "gh_example"
     },
@@ -302,7 +302,7 @@
     ]
   },
   {
-    "file": "x_user",
+    "file": "x",
     "params": {
       "username": "example"
     },
@@ -329,7 +329,7 @@
     ]
   },
   {
-    "file": "xiaohongshu_user",
+    "file": "xiaohongshu",
     "params": {
       "uid": "5d2aec020000000012037401"
     },
@@ -387,23 +387,7 @@
     ]
   },
   {
-    "file": "instagram_user",
-    "params": {
-      "username": "example"
-    },
-    "responses": [
-      {
-        "contains": "",
-        "body": "<script type=\"application/json\">{\"account\":{\"pk\":\"9007199254740993\",\"username\":\"example\",\"full_name\":\"博主\",\"biography\":\"介绍\",\"profile_pic_url\":\"https://s.cdninstagram.com/avatar.jpg\"}}</script><script type=\"application/json\">{\"separate\":{\"pk\":\"9007199254740993\",\"polaris_ordered_timeline_connection\":{\"edges\":[{\"node\":{\"pk\":\"9007199254740995\",\"code\":\"ABC_123\",\"media_type\":2,\"caption\":{\"text\":\"视频\\n介绍\"},\"display_uri\":\"https://s.cdninstagram.com/cover.jpg\"}},{\"node\":{\"pk\":\"9007199254740995\",\"code\":\"ABC_123\",\"media_type\":2,\"caption\":{\"text\":\"视频\\n介绍\"},\"display_uri\":\"https://s.cdninstagram.com/cover.jpg\"}}]}}}</script>"
-      }
-    ],
-    "kind": "hot",
-    "expected_ids": [
-      "instagram:post:9007199254740995"
-    ]
-  },
-  {
-    "file": "fanqienovel_chapters",
+    "file": "fanqienovel",
     "params": {
       "chapter_id": "9007199254740993"
     },
@@ -417,7 +401,7 @@
     "expect_body": "第1章 我的人生😀"
   },
   {
-    "file": "qidian_chapters",
+    "file": "qidian",
     "params": {
       "book_id": "1036526469",
       "chapter_id": "745825165"

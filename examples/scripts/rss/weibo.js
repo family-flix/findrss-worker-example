@@ -1012,11 +1012,11 @@ export class WeiboRSS extends RSSScript {
 const script = new WeiboRSS();
 export const routes = [
   {
-    path: "/weibo/:uid",
+    path: "/weibo/u/:uid",
     name: "微博用户列表",
     url: "weibo.com",
     maintainers: ["findrss"],
-    example: "/weibo/1992429663",
+    example: "/weibo/u/1992429663",
     parameters: {
       uid: "微博用户 UID，例如 1992429663",
     },

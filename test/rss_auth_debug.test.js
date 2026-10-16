@@ -16,10 +16,10 @@ test("Worker 诊断记录三种凭证来源和校验状态，原凭证不转发�
       forwarded = input;
       return Response.json({});
     } }) } };
-    const request = new Request("https://api.example/rss/weibo/123" + query, { headers: {
+    const request = new Request("https://api.example/rss/weibo/u/123" + query, { headers: {
       ...headers, Cookie: "private-session=browser-secret", "X-RSS-Credential-Status": "accepted",
     } });
-    await public_rss_route(env, request, "/weibo/123", "rss");
+    await public_rss_route(env, request, "/weibo/u/123", "rss");
     assert.equal(forwarded.headers.get("X-RSS-Credential-Sources"), source);
     assert.equal(forwarded.headers.get("X-RSS-Credential-Status"), expected);
     assert.equal(forwarded.headers.get("X-RSS-Browser-Credentials"), "present");

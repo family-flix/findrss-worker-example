@@ -5,6 +5,7 @@ import { register } from 'node:module';
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { DOUYIN_SDK_FILES } from '../server/infra/douyin_sdk.js';
+import { KUAISHOU_SDK_FILE } from '../server/infra/kuaishou_sdk.js';
 import { ScriptCookieAccess } from '../server/infra/script_cookie_access.js';
 import { FeedModel } from '../server/domain/feed_format.js';
 import { ScriptModel } from '../server/domain/script.js';
@@ -39,13 +40,13 @@ test('所有脚本按用户的 RSS 标记分类，保持路由并采用全局基
       "/zhihu/people/:user", "/zhihu/people/:user/answers", "/zhihu/people/:user/zvideos",
       "/zhihu/people/:user/asks", "/zhihu/people/:user/posts", "/zhihu/column/:column_id",
       "/zhihu/people/:user/pins", "/zhihu/collection/:collection_id",
-    ] : old.metadata.routes.map(route => route.path);
+    ] : name === "youtube.js" ? ["/youtube/:handle", "/youtube/:handle/shorts"] : old.metadata.routes.map(route => route.path);
     assert.deepEqual(compiled.metadata.routes.map(route => route.path), paths, name);
   }
   for (const kind of ['hot', 'rss']) assert.deepEqual((await readdir(new URL(kind + '/', base))).filter(name => name.endsWith('.js')).sort(), expected[kind]);
 });
 
-test('已保存的 70 个旧示例缺少 kind 和顶部标记时仍按用户分类展示', async () => {
+test('已保存的 69 个旧示例缺少 kind 和顶部标记时仍按用户分类展示', async () => {
   const counts = { hot: 0, rss: 0 };
   for (const name of (await readdir(new URL('scripts/', base))).filter(name => name.endsWith('.js'))) {
     const source = await read('scripts/' + name);
@@ -54,7 +55,7 @@ test('已保存的 70 个旧示例缺少 kind 和顶部标记时仍按用户分�
     assert.equal(legacy.kind, expected, name);
     counts[legacy.kind]++;
   }
-  assert.deepEqual(counts, { hot: 53, rss: 17 });
+  assert.deepEqual(counts, { hot: 52, rss: 17 });
 });
 
 for (const fixture of content_cases) test('迁移脚本保留内容与媒体：' + fixture.file + (fixture.route_index ? (fixture.file === 'zhihu' ? ' 回答' : fixture.file === 'bilibili' ? ' 视频' : ' 正文代理') : ''), async t => {
@@ -67,6 +68,7 @@ for (const fixture of content_cases) test('迁移脚本保留内容与媒体：'
   const metadata = { ...compiled.metadata, ...compiled.metadata.routes[fixture.route_index || 0] };
   const calls = [];
   globalThis.fetch = async (url, options) => {
+    if (url === KUAISHOU_SDK_FILE.url) return new Response(gunzipSync(await readFile(new URL('./fixtures/kuaishou/web-sdk.js.gz', import.meta.url))));
     const sdk_index = DOUYIN_SDK_FILES.findIndex(file => file.url === url);
     if (sdk_index >= 0) return new Response(gunzipSync(await readFile(new URL('./fixtures/douyin/' + ['bdms.js.gz','security.js.gz'][sdk_index], import.meta.url))));
     calls.push({ url, options });
@@ -107,10 +109,10 @@ for (const fixture of content_cases) test('迁移脚本保留内容与媒体：'
   }
   if (fixture.file === 'bilibili' && !fixture.route_index) assert.equal(items[0].images.length, 2);
   if (fixture.file === 'bilibili' && fixture.route_index === 1) assert.equal(items[0].enclosure.length, 456);
-  if (fixture.file === 'douyin_user') { assert.equal(items[1].images.length, 2); assert.equal(items[0].media_group, true); }
-  if (fixture.file === 'wxchannels_contact_feed_list') { assert.equal(items[0].live_photos[0].key, 'photo-key'); assert.equal(items[1].enclosure.key, 'key-1'); }
-  if (fixture.file === 'wxmp_biz_msg_list') assert.equal(items[0].live_photos[0].key, 'live-key');
-  if (fixture.file === 'x_user') assert.equal(items[0].enclosure.url, 'https://video.twimg.com/high.mp4');
+  if (fixture.file === 'douyin') { assert.equal(items[1].images.length, 2); assert.equal(items[0].media_group, true); }
+  if (fixture.file === 'wxchannels') { assert.equal(items[0].live_photos[0].key, 'photo-key'); assert.equal(items[1].enclosure.key, 'key-1'); }
+  if (fixture.file === 'wxmp') assert.equal(items[0].live_photos[0].key, 'live-key');
+  if (fixture.file === 'x') assert.equal(items[0].enclosure.url, 'https://video.twimg.com/high.mp4');
   if (fixture.file === 'weibo') { assert.ok(items[0].images[0].includes('/img/weibo?')); assert.doesNotMatch(items[0].content, /\[object Object\]/); }
 });
 
