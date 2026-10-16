@@ -14,6 +14,7 @@ test("Hot 默认脚本读取百度 HTML 榜单，输出 rank/heat，非法榜单
   assert.equal(compiled.error, "");
   assert.equal(compiled.metadata.path, "/baidu/hot");
   assert.equal(compiled.metadata.script_type, "hot");
+  assert.deepEqual(compiled.metadata.platform, { name: "网页", icon: "" });
   const title = '新闻 & "热榜"';
   const row = { card_title: title, index: "1", heat_score: "12345" };
   for (const html of [
@@ -44,6 +45,7 @@ test("RSS 默认脚本保留真实发布时间和正文，可渲染 RSS/Atom", a
   const compiled = await compile_script_module(DEFAULT_RSS_SCRIPT);
   assert.equal(compiled.error, "");
   assert.equal(compiled.metadata.script_type, "rss");
+  assert.deepEqual(compiled.metadata.platform, { name: "网页", icon: "" });
   globalThis.fetch = async url => {
     assert.equal(url, "https://www.solidot.org/index.rss");
     return new Response('<rss><channel><item><guid>article-1</guid><title>文章 &amp; 内容</title><link>https://www.solidot.org/story/1</link><pubDate>Wed, 14 Oct 2026 08:00:00 GMT</pubDate><content:encoded><![CDATA[<p>正文</p>]]></content:encoded></item></channel></rss>');
