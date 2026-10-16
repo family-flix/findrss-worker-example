@@ -77,6 +77,15 @@ test("接口请求、invoke 校验、设备错误和 Cookie 获取返回 Result�
   assert.equal(JSON.parse(status.output).code, 402);
 });
 
+test("fetchText 完整保留 NUL、引号和 Unicode，不把响应内容当代码执行", async t => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const text = '前缀\0"; throw new Error("executed"); //\n后缀😀\0';
+  globalThis.fetch = async () => new Response(text);
+  const result = await run('return await ctx.fetchText("https://example.com/stream");');
+  assert.equal(JSON.parse(result.output), text);
+});
+
 test("路由出口只展开一次 Result，错误保留代码、日志和堆栈，处理失败可返回回退结果", async () => {
   const ok = await run('return Result.Ok({ title: "feed", items: [] });');
   assert.deepEqual(JSON.parse(ok.output), { title: "feed", items: [] });

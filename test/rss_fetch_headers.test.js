@@ -18,6 +18,16 @@ test('微博 profile 请求头和 Cookie 派生 XSRF，跨 origin 时作为认�
   assert.throws(() => rss_cookie_headers({ cookie_headers: { 'x-xsrf-token': 'SUB' } }, 'SUB=private'));
 });
 
+test('Instagram CSRF 只从授权 csrftoken 派生，跨 origin 时作为认证头移除', () => {
+  const headers = rss_fetch_headers({ headers: { 'X-IG-App-ID': '936619743392459', 'X-FB-Friendly-Name': 'PolarisProfilePostsQuery' } });
+  assert.equal(headers['x-ig-app-id'], '936619743392459');
+  const options = { cookie_headers: { 'x-csrftoken': 'csrftoken' } };
+  assert.deepEqual(rss_cookie_headers(options, 'sessionid=private; csrftoken=fixture'), { 'x-csrftoken': 'fixture' });
+  assert.deepEqual(rss_cookie_headers(options, ''), {});
+  assert.ok(RSS_FETCH_CREDENTIAL_HEADERS.includes('x-csrftoken'));
+  assert.throws(() => rss_cookie_headers({ cookie_headers: { 'x-csrftoken': 'sessionid' } }, 'sessionid=private'));
+});
+
 test('临时 Cookie 头经过同样的类型、长度和换行校验', () => {
   assert.equal(rss_fetch_headers({ headers: { Cookie: 'SUB=fixture' } }).cookie, 'SUB=fixture');
   for (const cookie of [123, null, 'SUB=x\r\nHost: other.example', 'x'.repeat(4097)]) {

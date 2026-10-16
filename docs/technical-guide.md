@@ -209,7 +209,7 @@ export const route = {
 
 节点选择器沿用旧示例的轻量实现，只支持标签、ID、class、属性存在/等于/前缀/后缀、后代与直接子节点，属性值不支持空白；不是完整 DOM/CSS 或严格 XML 校验器。请求工具提供基础 Accept、Accept-Language、User-Agent，允许 headers 覆盖，Referer 和 Cookie 句柄需脚本显式提供，Cookie 授权仍由宿主验证。JSON 请求不猜测各网站业务错误字段，脚本需自行校验接口回包。
 
-[两个类示例](../examples/script-classes/) 已使用这个模块；70 个旧示例已按文件顶部 `/** RSS */` 标记重写到 [examples/rss](../examples/rss/)（17 个）和 [examples/hot](../examples/hot/)（53 个）。旧 `examples/scripts` 保持原样，新目录不会自动导入后台。
+[两个类示例](../examples/script-classes/) 已使用这个模块；69 个旧示例已按文件顶部 `/** RSS */` 标记重写到 [examples/rss](../examples/rss/)（17 个）和 [examples/hot](../examples/hot/)（52 个）。旧 `examples/scripts` 保持原样，新目录不会自动导入后台。
 
 ## 内置脚本基类
 
@@ -219,7 +219,7 @@ QuickJS 在编译、调试、Mock 测试和正式执行前将 `RSSScript`、`Hot
 
 `HotRankScript` 校验榜单和热度，置顶项在前。非置顶排名为上游正整数，未知时使用 `null`；全部排名已知时按排名排列，有未知排名时保留上游次序。热度缺失为 `null`，不从列表下标或采集时间伪造数据。返回 `{ kind: "hot_rank", observed_at, entries, ... }` 榜单 JSON；此结果不含 `items`，使用普通路由访问，不通过 RSS/Atom 包装器。
 
-管理页 `/admin/scripts` 用 Hot / RSS Tabs 作为标题，筛选、数量和列表按 `kind` 展示对应类型。列表接口支持 `GET /admin/api/scripts?kind=hot|rss`，省略时返回全部。新增 Hot 使用百度热榜 HTML 示例，新增 RSS 使用 Solidot RSS 示例。模块可导出 `kind = "hot" | "rss"`，兼容旧 `script_type`；未声明时优先读取顶部 `/** HOT */` / `/** RSS */` 标记，再识别基类。迁移前无标记的 NewsNow 和 Instagram 示例兼容归为 Hot，其余旧脚本默认 RSS。类型随草稿保存、发布、回退和列表响应保留；Hot 卡片提供普通路由地址。
+管理页 `/admin/scripts` 用 Hot / RSS Tabs 作为标题，筛选、数量和列表按 `kind` 展示对应类型。列表接口支持 `GET /admin/api/scripts?kind=hot|rss`，省略时返回全部。新增 Hot 使用百度热榜 HTML 示例，新增 RSS 使用 Solidot RSS 示例。模块可导出 `kind = "hot" | "rss"`，兼容旧 `script_type`；未声明时优先读取顶部 `/** HOT */` / `/** RSS */` 标记，再识别基类。迁移前无标记的 NewsNow 示例兼容归为 Hot，其余旧脚本默认 RSS。类型随草稿保存、发布、回退和列表响应保留；Hot 卡片提供普通路由地址。
 
 示例见 [百度热榜](../examples/script-classes/baidu_hot_rank.js) 和 [微信视频号](../examples/script-classes/wechat_channels_rss.js)。旧脚本仍可声明自己的同名局部类。
 

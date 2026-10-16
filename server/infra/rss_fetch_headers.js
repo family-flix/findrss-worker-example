@@ -6,15 +6,16 @@ const allowed_headers = new Set([
   "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-fetch-dest",
   "sec-fetch-mode", "sec-fetch-site", "sec-fetch-user", "upgrade-insecure-requests",
   "x-requested-with", "priority", "cookie",
-  "content-type", "origin", "authorization", "x-csrf-token",
+  "content-type", "origin", "authorization", "x-csrf-token", "x-csrftoken",
+  "x-ig-app-id", "x-fb-friendly-name",
   "x-twitter-active-user", "x-twitter-auth-type", "x-twitter-client-language",
   "kww", "profile_referer",
   "x-app-id", "x-app-token", "x-sdk-int", "x-sdk-locale",
   "x-app-version", "x-api-version", "x-app-code",
   "client-version", "server-version", "x-xsrf-token",
 ]);
-export const RSS_FETCH_CREDENTIAL_HEADERS = ["authorization", "x-csrf-token", "kww", "x-app-token", "x-xsrf-token"];
-const cookie_header_names = new Map([["uifid", "UIFID"], ["kww", "kwfv1"], ["x-csrf-token", "ct0"], ["x-xsrf-token", "XSRF-TOKEN"]]);
+export const RSS_FETCH_CREDENTIAL_HEADERS = ["authorization", "x-csrf-token", "x-csrftoken", "kww", "x-app-token", "x-xsrf-token"];
+const cookie_header_names = new Map([["uifid", "UIFID"], ["kww", "kwfv1"], ["x-csrf-token", "ct0"], ["x-csrftoken", "csrftoken"], ["x-xsrf-token", "XSRF-TOKEN"]]);
 export function rss_fetch_timeout(options) {
   const timeout_ms = options?.timeout_ms === undefined ? SCRIPT_FETCH_TIMEOUT_MS : options.timeout_ms;
   if (!Number.isInteger(timeout_ms) || timeout_ms < 1 || timeout_ms > SCRIPT_FETCH_TIMEOUT_MS) throw new Error("fetchText timeout_ms 必须为 1–10000 的整数");

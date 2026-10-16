@@ -506,7 +506,10 @@ export async function execute_script_inner(
         throw new Error("脚本上游响应超过 2MB 限制");
       }
       const text = rss_response_text(buffer, response.headers.get("Content-Type") || "");
-      return vm.newString(text);
+      // newString 使用 C 字符串，内嵌 NUL（如 X 的流式页面）会截断后续内容。
+      return text.includes("\0")
+        ? vm.unwrapResult(vm.evalCode(JSON.stringify(text), "fetch-response.js"))
+        : vm.newString(text);
     });
     vm.setProp(vm.global, "__fetchText", fetch_text);
     fetch_text.dispose();
