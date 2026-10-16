@@ -207,9 +207,12 @@ test("YouTube Shorts 解析真实页面样本，保留顺序、去重且不伪�
   tabs.unshift({ tabRenderer: { content: { richGridRenderer: { contents: [modern_video(0, [])] } } } });
   const cookies = [{ name: "SID", value: "fixture-sid", domain: ".youtube.com", path: "/", secure: true }];
   const { feed } = await run_html(t, async (url, options) => {
-    assert.equal(url, "https://www.youtube.com/@example/shorts");
     assert.equal(options.headers.Cookie, "SID=fixture-sid");
-    assert.equal(options.headers.referer, url);
+    assert.equal(options.headers.referer, "https://www.youtube.com/@example/shorts");
+    if (url !== "https://www.youtube.com/@example/shorts") {
+      assert.match(url, /^https:\/\/www\.youtube\.com\/shorts\/[\w-]{11}$/);
+      return new Response("<html>没有发布日期</html>");
+    }
     return new Response("<script>var ytInitialData = " + JSON.stringify(data) + ";</script>");
   }, cookies, 1);
   assert.equal(feed.id, "youtube:channel:UC73sF-7Ihcs1HpnXEEXZ2ew:shorts");
@@ -232,6 +235,70 @@ test("YouTube Shorts 解析真实页面样本，保留顺序、去重且不伪�
     assert.match(xml, /youtube:video:VwYzTp6BpqY/);
     assert.doesNotMatch(xml, /Invalid Date|NaN/);
   }
+});
+
+test("YouTube Shorts 从详情页补齐带时区的发布日期，兼容 uploadDate 并按日期排序", async t => {
+  const data = JSON.parse(await readFile(new URL("./fixtures/youtube_shorts.json", import.meta.url)));
+  const entries = data.contents.twoColumnBrowseResultsRenderer.tabs[0].tabRenderer.content.richGridRenderer.contents;
+  entries.push(structuredClone(entries[0]));
+  const pages = {
+    VwYzTp6BpqY: '<meta itemprop="datePublished" content="2026-10-15T18:00:32-07:00"><meta itemprop="uploadDate" content="2026-10-14">',
+    bi6ptD31Uxc: "<meta content='2026-10-16T12:00:00+08:00' itemprop='datePublished'>",
+    "1K95o_PUYJM": '<meta itemprop="uploadDate" content="2026-10-15">',
+  };
+  const calls = [];
+  const cookies = [{ name: "SID", value: "fixture-sid", domain: ".youtube.com", path: "/", secure: true }];
+  const { feed } = await run_html(t, async (url, options) => {
+    calls.push(url);
+    assert.equal(options.headers.Cookie, "SID=fixture-sid");
+    assert.equal(options.headers.referer, "https://www.youtube.com/@example/shorts");
+    if (url.includes("/@example/")) return new Response("<script>var ytInitialData = " + JSON.stringify(data) + ";</script>");
+    const id = url.split("/").at(-1);
+    assert.ok(Object.hasOwn(pages, id), url);
+    return new Response("<html><head>" + pages[id] + "</head></html>");
+  }, cookies, 1);
+  assert.equal(calls.length, 4, "去重后每条短视频只补查一次");
+  assert.deepEqual(feed.items.map(item => item.id), ["bi6ptD31Uxc", "VwYzTp6BpqY", "1K95o_PUYJM"].map(id => "youtube:video:" + id));
+  assert.deepEqual(feed.items.map(item => item.published), ["2026-10-16T04:00:00.000Z", "2026-10-16T01:00:32.000Z", "2026-10-15T00:00:00.000Z"]);
+  assert.equal(feed.updated, feed.items[0].published);
+  assert.match(FeedModel.fromValue(feed).render("rss"), /<pubDate>/);
+  assert.match(FeedModel.fromValue(feed).render("atom"), /<published>2026-10-16T04:00:00\.000Z<\/published>/);
+});
+
+test("YouTube Shorts 限制详情补查并发，保留失败条目且不覆盖已有发布时间", async t => {
+  const data = JSON.parse(await readFile(new URL("./fixtures/youtube_shorts.json", import.meta.url)));
+  const entries = Array.from({ length: 7 }, (_, index) => ({ reelItemRenderer: {
+    videoId: video_id(index), headline: { simpleText: "短视频 " + index },
+    ...(index === 0 ? { publishedTimeText: { simpleText: "1 day ago" } } : {}),
+  } }));
+  data.contents.twoColumnBrowseResultsRenderer.tabs[0].tabRenderer.content.richGridRenderer.contents = entries;
+  let active = 0, max_active = 0;
+  const calls = [];
+  const { feed, before, after } = await run_html(t, async url => {
+    if (url.includes("/@example/")) return new Response("<script>var ytInitialData = " + JSON.stringify(data) + ";</script>");
+    const id = url.split("/").at(-1);
+    calls.push(id);
+    max_active = Math.max(max_active, ++active);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    active--;
+    if (id === video_id(2)) return new Response(" unavailable ", { status: 503 });
+    if (id === video_id(3)) throw new Error("连接失败");
+    return new Response({
+      [video_id(1)]: '<meta itemprop="datePublished" content="invalid"><meta itemprop="uploadDate" content="invalid">',
+      [video_id(4)]: "<html>请完成验证</html>",
+      [video_id(5)]: '<meta itemprop="datePublished" content="invalid"><meta itemprop="uploadDate" content="2020-01-01T08:00:00+08:00">',
+      [video_id(6)]: '<meta itemprop="datePublished" content="1970-01-01T00:00:00Z">',
+    }[id]);
+  }, [], 1);
+  assert.equal(calls.length, 6);
+  assert.ok(!calls.includes(video_id(0)), "已有时间不补查");
+  assert.ok(max_active > 1 && max_active <= 4, "补查并发不超过 4");
+  assert.equal(feed.items.length, 7);
+  const timestamp = Date.parse(feed.items.find(item => item.id === "youtube:video:" + video_id(0)).published);
+  assert.ok(timestamp >= before - 86400000 && timestamp <= after - 86400000);
+  assert.equal(feed.items.find(item => item.id === "youtube:video:" + video_id(5)).published, "2020-01-01T00:00:00.000Z");
+  assert.ok(feed.items.filter(item => ![video_id(0), video_id(5)].some(id => item.id === "youtube:video:" + id)).every(item => item.published === undefined));
+  assert.equal(feed.updated, feed.items[0].published);
 });
 
 test("YouTube Shorts 兼容移动端 reelItemRenderer，保留空列表和验证页错误", async t => {

@@ -121,7 +121,9 @@ export class YoutubeRSS extends RSSScript {
             ? [YoutubeRSS.text_of(short.overlayMetadata?.secondaryText)]
             : modern
               ? metadata_parts.map(function (part) {
-                  return part.accessibilityLabel || YoutubeRSS.text_of(part.text);
+                  return (
+                    part.accessibilityLabel || YoutubeRSS.text_of(part.text)
+                  );
                 })
               : [
                   YoutubeRSS.text_of(video.descriptionSnippet),
@@ -154,7 +156,9 @@ export class YoutubeRSS extends RSSScript {
           const title =
             YoutubeRSS.text_of(
               short?.overlayMetadata?.primaryText ||
-              metadata?.title || video.title || video.headline,
+                metadata?.title ||
+                video.title ||
+                video.headline,
             ) || id;
           const image =
             YoutubeRSS.thumbnail_url(
@@ -191,13 +195,57 @@ export class YoutubeRSS extends RSSScript {
         }
       };
       walk(tab.content);
+      if (shorts) {
+        // Shorts 列表没有发布日期，从详情页补齐；限制并发以免占满上游连接。
+        for (let index = 0; index < items.length; index += 4) {
+          await Promise.all(
+            items.slice(index, index + 4).map(async function (item) {
+              if (item.published !== undefined) return;
+              const page = await YoutubeRSS.request_text(ctx, item.link, {
+                headers: YoutubeRSS.request_headers(link),
+              });
+              if (page.error) {
+                ctx.log("YouTube Shorts 发布时间获取失败", {
+                  link: item.link,
+                  error: page.error,
+                });
+                return;
+              }
+              const parsed = utils.document_nodes(page.data);
+              if (parsed.error) {
+                ctx.log("YouTube Shorts 发布时间解析失败", {
+                  link: item.link,
+                  error: parsed.error,
+                });
+                return;
+              }
+              for (const property of ["datePublished", "uploadDate"]) {
+                const published = Date.parse(
+                  utils.attribute(
+                    parsed.data,
+                    'meta[itemprop="' + property + '"]',
+                    "content",
+                  ),
+                );
+                if (Number.isFinite(published) && published > 0) {
+                  item.published = published;
+                  break;
+                }
+              }
+            }),
+          );
+        }
+      }
       items.sort(function (left, right) {
         return (right.published ?? -Infinity) - (left.published ?? -Infinity);
       });
       return Result.Ok({
-        id: "youtube:channel:" + (channel.externalId || handle) +
+        id:
+          "youtube:channel:" +
+          (channel.externalId || handle) +
           (shorts ? ":shorts" : ""),
-        title: author.name + (shorts ? " 的 YouTube Shorts" : " 的 YouTube 视频"),
+        title:
+          author.name + (shorts ? " 的 YouTube Shorts" : " 的 YouTube 视频"),
         link,
         description: String(channel.description || ""),
         language: "",
@@ -453,7 +501,7 @@ export const routes = ["videos", "shorts"].map(function (kind) {
       handle: "频道 handle，例如 @goldfishbrain（@ 可省略）",
     },
     description: shorts
-      ? "解析频道 /shorts 页面内嵌的短视频首屏列表，包含标题、封面、观看量及内嵌播放器；页面未提供发布时间时保留原有顺序，不估算日期。"
+      ? "解析频道 /shorts 页面内嵌的短视频首屏列表，包含标题、封面、观看量及内嵌播放器；发布时间缺失时从短视频详情页补齐，补查失败时保留条目，不估算日期。"
       : "解析频道 /videos 页面内嵌的视频首屏列表，包含标题、封面、作者、YouTube 播放地址及 content 内嵌播放器。发布时间根据页面中英文相对时间估算，月、年按 30、365 天计算。",
     handler: (ctx) => script.run(ctx),
   };
