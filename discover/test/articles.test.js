@@ -109,7 +109,7 @@ test("文章发布时间使用本地时区，兼容秒与毫秒并保留未知�
     ["2026-01-02 03:04", "2026-01-02 03:04", "时间未知"]);
 });
 
-test("SSR 时间在挂载后响应式切换到访客本地时区，不保留服务器文字", async () => {
+test("SSR 时间切换到访客本地时区时，保留链接与纯文字文章标题", async () => {
   const timestamp = new Date(2026, 0, 2, 3, 4, 59);
   const context = vm.createContext({ URL, URLSearchParams,
     setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
@@ -127,11 +127,25 @@ test("SSR 时间在挂载后响应式切换到访客本地时区，不保留服�
   }] };
   initialize_home(context, vm);
   const label = context.model.state.feeds.value[0].snapshot.articles[0].published_at;
-  const text = { nodeType: 3, textContent: timestamp.toISOString().slice(0, 16).replace("T", " ") };
-  context.Timeless.DOM.hydrate(context.Timeless.Text(label), { firstChild: text });
+  const { View, Link, DOM } = context.Timeless;
+  const element = (...children) => {
+    const node = { nodeType: 1, childNodes: children, addEventListener() {} };
+    children.forEach(child => { child.parentNode = node; });
+    return node;
+  };
+  const articles = [Link, View].map(Title => {
+    const title = { nodeType: 3, textContent: "文章" };
+    const text = { nodeType: 3, textContent: timestamp.toISOString().slice(0, 16).replace("T", " ") };
+    const body = element(element(title), element(text));
+    DOM.hydrate(View({}, [Title({ href: "https://example.com/article" }, ["文章"]), View({}, [label])]), { firstChild: body });
+    return { title, text };
+  });
   await context.model.methods.init();
   assert.equal(label.value, "2026-01-02 03:04");
-  assert.equal(text.textContent, "2026-01-02 03:04");
+  for (const { title, text } of articles) {
+    assert.equal(title.textContent, "文章");
+    assert.equal(text.textContent, "2026-01-02 03:04");
+  }
 });
 
 test("头像曝光前只渲染首字占位，没有头像 URL 时不发起加载", () => {
