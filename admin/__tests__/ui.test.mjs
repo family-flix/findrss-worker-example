@@ -40,6 +40,43 @@ function find(node, name) {
   return null;
 }
 
+test("存储实际视图加载用量和文件，支持分页及下载链接", async () => {
+  const storage_bundle = await build({
+    entryPoints: [fileURLToPath(new URL("../pages/storage.js", import.meta.url))],
+    bundle: true, format: "iife", globalName: "StorageModule", write: false,
+  });
+  const requests = [];
+  context.FindRSSAdminShell = { Page: (props, children) => ui.View({ attributes: { n: "storage-test-page" } }, [...props.actions, ...children]) };
+  context.FindRSSAdminAuth = { fetch: async url => {
+    requests.push(url);
+    if (url.endsWith("/usage")) return Response.json({ bytes: 1024, objects: 101, generated_at: Date.now() });
+    return Response.json({ objects: [{ key: url.includes("cursor=") ? "last.png" : "avatars/头像.png", size: 1024, uploaded: "2026-10-16T00:00:00Z" }],
+      truncated: !url.includes("cursor="), cursor: url.includes("cursor=") ? null : "next" });
+  } };
+  vm.runInContext(storage_bundle.outputFiles[0].text, context);
+  const root = context.StorageModule.StoragePage();
+  let usage_text, count_text;
+  find(root, "storage-usage").children[0].$elm = { setText(value) { usage_text = value; } };
+  find(root, "storage-count").children[0].$elm = { setText(value) { count_text = value; } };
+  find(root, "storage-page").onMounted();
+  await new Promise(setImmediate);
+  assert.equal(usage_text, "1.0 KB");
+  assert.equal(count_text, "101 个文件");
+  assert.equal(find(root, "storage-file-key").children[0].state.value, "avatars/头像.png");
+  const download = find(root, "storage-file-download");
+  assert.equal(download.t, "link");
+  assert.match(download.state.href, /download=1&key=avatars%2F/);
+  assert.equal(download.state.attributes.target, "_blank");
+  assert.equal(find(root, "storage-file-view").state.attributes.rel, "noopener");
+  await find(root, "storage-next").events.onClick();
+  await new Promise(setImmediate);
+  assert.equal(find(root, "storage-file-key").children[0].state.value, "last.png");
+  assert.equal(requests.filter(url => url.endsWith("/usage")).length, 1);
+  await find(root, "storage-previous").events.onClick();
+  await new Promise(setImmediate);
+  assert.equal(find(root, "storage-file-key").children[0].state.value, "avatars/头像.png");
+});
+
 test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使用对应颜色的标签", async () => {
   const network_bundle = await build({
     entryPoints: [fileURLToPath(new URL("../pages/network.js", import.meta.url))],

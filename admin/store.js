@@ -132,6 +132,7 @@ export const routes_configure = {
       scripts: { title: "脚本管理", pathname: "/admin/scripts", page: "Scripts", options: { short_title: "脚本", icon: "file-code", aliases: ["/admin/rss-scripts.html"] } },
       cookies: { title: "Cookie 管理", pathname: "/admin/cookies", page: "Cookies", options: { short_title: "Cookie", icon: "lock" } },
       tokens: { title: "Token", pathname: "/admin/tokens", page: "Tokens", options: { short_title: "Token", icon: "users" } },
+      storage: { title: "存储", pathname: "/admin/storage", page: "Storage", options: { short_title: "存储", icon: "hard-drive" } },
       network: { title: "网络测试", pathname: "/admin/network", page: "NetworkTest", options: { short_title: "网络测试", icon: "activity" } },
       settings: { title: "设置", pathname: "/admin/settings", page: "Settings", options: { short_title: "设置", icon: "settings" } },
       devices: { title: "设备管理", pathname: "/admin/devices", page: "Devices", options: { short_title: "设备", icon: "server", hidden: true, aliases: ["/admin/devices.html"] } },
@@ -182,6 +183,7 @@ export async function create_admin_store() {
     Discovery: (await import("./pages/discovery.js")).DiscoveryPage,
     Scripts: (await import("./pages/script.js")).ScriptPage,
     Cookies: (await import("./pages/cookies.js")).CookiesPage,
+    Storage: (await import("./pages/storage.js")).StoragePage,
     Settings: (await import("./pages/settings.js")).SettingsPage,
     Redemptions: (await import("./pages/redemptions.js")).RedemptionCardsPage,
   };

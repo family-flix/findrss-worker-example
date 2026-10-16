@@ -34,6 +34,7 @@ import {
 } from "./server/service/worker/discovery.js";
 import { public_rss_route } from "./server/service/worker/rss.js";
 import { admin_network_test, admin_network_cookie_domains } from "./server/service/worker/network_test.js";
+import { admin_storage_request } from "./server/service/worker/storage.js";
 
 /** @type {ExportedHandler<Env>} */
 export default {
@@ -70,6 +71,9 @@ export default {
     if (is_admin_route) {
       if (!admin_authorized(request, env)) {
         return admin_auth_required();
+      }
+      if (["/admin/api/storage", "/admin/api/storage/usage", "/admin/api/storage/file"].includes(url.pathname)) {
+        return admin_storage_request(request, env);
       }
       if (url.pathname === "/admin/api/network-test") return admin_network_test(request, env);
       if (url.pathname === "/admin/api/network-test/curl") return admin_network_test(request, env, true);
