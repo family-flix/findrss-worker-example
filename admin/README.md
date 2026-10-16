@@ -27,6 +27,8 @@ Browser
 
 管理后台页面统一由 `components/shell.js` 承载：桌面端使用固定侧边栏，移动端切换为底部导航；各业务页面共用这套外壳、页头和组件样式。新增子页面时，先建立 `xx.js` 与 `xx.model.js`，再在 `store.js` 的 `routes_configure.admin.children` 中声明路径、页面、标题和图标，并让页面根 View 调用 `FindRSSAdminShell.Page({ page_id, title, description }, children)`，业务 View 作为 `children` 传入，并导出页面函数供路由绑定；页面不再通过 `window.FindRSSAdminPages` 注册或自行挂载。
 
+“网络测试”进入 `/admin/network`，通过管理员接口 `POST /admin/api/network-test` 直接从当前 Worker 发起 GET 请求。支持编辑网址、请求头 JSON 和 1–60 秒超时（默认 10 秒），展示逐跳重定向状态、每跳响应头耗时、总耗时、响应头及最多 64KB 正文预览；正文按纯文本显示。默认填入起点目录示例及相同请求头，便于复现脚本超时。目标及重定向均复用公网地址校验，仅允许 HTTP(S) 的 80 / 443 端口，最多跟随 5 次重定向；不会自动携带后台或站点 Cookie，跨域移除手动填写的认证头和 Cookie。部署后测量线上 Worker 出口，本地运行则测量本地出口。
+
 每张设备卡片通过“日志”按钮打开右侧抽屉，并调用 `/admin/api/devices/:device_id/logs` 查看最近 7 天的设备行为。连接、心跳、调用、响应和系统事件均以结构化日志保存；抽屉支持分类、自动刷新、向前分页和详情展开。敏感字段落库前会脱敏，超大详情会截断。
 
 “消息”进入 `/admin/messages`，汇总所有脚本的错误，包括订阅请求、测试运行与保存校验。错误复用 `script_logs` 持久化并保留 7 天，`/admin/api/messages` 按 `before_id` 分页；`/admin/api/messages/ws` 实时通知后台加载新消息，断线自动重连并补拉记录。消息显示脚本名称、路由、源码行列、错误堆栈、实际传入的 params/query 与日志；敏感参数脱敏。旧日志的包装行号标为“沙箱行号”，没有位置的错误不猜测行号。默认打开“未读” Tab，标记已读后消息从未读列表移至“已读” Tab，两边分别显示空态与历史分页。未读徽标与“全部标记已读”使用当前浏览器的本地已读位置。Cloudflare Worker 和 Go API 均支持消息接口。
@@ -58,7 +60,7 @@ Browser
 
 脚本管理页面使用 `pages/script.js`、`pages/script.model.js` 和 `pages/script.default.js`，统一承载 RSS、热榜等脚本类型；页面地址为 `/admin/scripts`。
 
-Debug 以路由作为一级 Tab，每条路由独立保留调试地址、输出、上下文和日志，切换时取消尚未完成的请求。二级 Tab 根据 handler 实际返回值的 `kind` 更新：`rss` 提供「XML 预览 / 卡片预览」，`img`、`video`、`audio` 提供「预览」，分别渲染图片、MP4 视频和音频播放器；各类型均保留「输出 / 上下文 / 日志」。修改源码或版本会把各条路由的旧结果标记为待重新调试，实时调试跟随当前选中的路由。
+Debug 以路由作为一级 Tab，每条路由独立保留调试地址、输出、上下文和日志，切换时取消尚未完成的请求。二级 Tab 根据 handler 实际返回值的 `kind` 更新：`rss` 提供「XML 预览 / 预览」，`img`、`video`、`audio` 提供「预览」，分别渲染图片、MP4 视频和音频播放器；各类型均保留「输出 / 上下文 / 日志」。修改源码或版本会把各条路由的旧结果标记为待重新调试，实时调试跟随当前选中的路由。
 
 Debug 的卡片预览支持同一草稿内尚未发布的图片代理路由（需声明 `allowed_hosts`）。成功调试后，图标和封面通过管理员专用的短期预览入口读取，使用本次 Debug 的源码和 Cookie 授权；XML 与原始输出保留正式地址。预览不会发布脚本或写入公开图片缓存。草稿快照在当前 DO 内最多保留 16 份、有效期 15 分钟；过期、被淘汰或服务重启后，重新运行 Debug 即可。
 

@@ -223,4 +223,4 @@ Token 使用随机值，服务端保存 SHA-256 摘要用于鉴权，并用 `ADM
 
 已有部署升级时，**保留原 Worker 名，或先安排 DO 数据迁移**：修改 Worker 名会创建新的 DO 命名空间，原数据不会自动迁移。部署也不会自动删除旧 Worker 或旧 Pages 项目。
 
-构建入口为 `scripts/build.js`，其他构建与维护工具也集中在 `scripts/`。`npm run build` 从 `public/` 复制公共资源，从 `admin/`、`discover/` 构建前后台业务文件，原子生成 `dist/assets/`；`npm run dev` 使用独立的 `dist/assets.dev/`，避免生产构建覆盖正在使用的开发资源。Wrangler 在 dev、deploy 和 dry-run 时直接从 `index.js` 打包主 Worker 与 QuickJS WASM，避免预先打包同一份服务端代码。静态资源来自对应的产物目录；产物由构建生成，不直接编辑。
+构建入口为 `scripts/build.js`，其他构建与维护工具也集中在 `scripts/`。`npm run build` 从 `public/` 复制公共资源，从 `admin/`、`discover/` 构建前后台业务文件，原子生成 `dist/assets/`；`npm run dev` 使用独立的 `dist/assets.dev/`，避免生产构建覆盖正在使用的开发资源。开发构建保留静态资源根目录、只替换目录内容，确保 Wrangler 的资源监听在首次构建后继续生效。Wrangler 在 dev、deploy 和 dry-run 时直接从 `index.js` 打包主 Worker 与 QuickJS WASM，避免预先打包同一份服务端代码。静态资源来自对应的产物目录；产物由构建生成，不直接编辑。

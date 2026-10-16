@@ -33,6 +33,7 @@ import {
   public_discovery_sources,
 } from "./server/service/worker/discovery.js";
 import { public_rss_route } from "./server/service/worker/rss.js";
+import { admin_network_test } from "./server/service/worker/network_test.js";
 
 /** @type {ExportedHandler<Env>} */
 export default {
@@ -70,6 +71,7 @@ export default {
       if (!admin_authorized(request, env)) {
         return admin_auth_required();
       }
+      if (url.pathname === "/admin/api/network-test") return admin_network_test(request);
       if (
         (["/admin/api/messages", "/admin/api/messages/ws"].includes(
           url.pathname,

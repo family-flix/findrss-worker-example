@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SITE_CSP, SITE_HEADERS } from "../server/lib/site_security.js";
 import { admin_dev_import_map_hash } from "./admin_dev.js";
-import { admin_dev, build_assets, build_stage } from "./build_paths.js";
+import { admin_dev, build_assets, build_stage, finalize_assets } from "./build_paths.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const stage = build_stage;
@@ -38,6 +38,5 @@ if (admin_dev) {
   static_headers.push("  Cache-Control: no-store", "/server/*", "  Cache-Control: no-store");
 }
 writeFileSync(join(stage, "_headers"), static_headers.join("\n") + "\n");
-rmSync(build_assets, { recursive: true, force: true });
-renameSync(stage, build_assets);
+finalize_assets(stage, build_assets, admin_dev);
 console.log("FindRSS frontend assets built; Wrangler bundles index.js and QuickJS WASM");

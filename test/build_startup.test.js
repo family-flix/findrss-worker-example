@@ -1,9 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run_build } from "../scripts/build.js";
+import { finalize_assets } from "../scripts/build_paths.js";
+
+test("开发构建保留被 Wrangler 监听的目录，清除旧文件；生产构建仍切换完整目录", t => {
+  const root = mkdtempSync(join(tmpdir(), "findrss-assets-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const development of [true, false]) {
+    const assets = join(root, development ? "dev" : "production"), stage = assets + ".tmp";
+    mkdirSync(assets);
+    const original_inode = statSync(assets).ino;
+    writeFileSync(join(assets, "obsolete.js"), "old");
+    for (const content of ["first build", "rebuild"]) {
+      mkdirSync(join(stage, "admin"), { recursive: true });
+      writeFileSync(join(stage, "admin/index.html"), content);
+      const stage_inode = statSync(stage).ino;
+      finalize_assets(stage, assets, development);
+      assert.equal(statSync(assets).ino, development ? original_inode : stage_inode);
+      assert.equal(readFileSync(join(assets, "admin/index.html"), "utf8"), content);
+      assert.equal(existsSync(join(assets, "obsolete.js")), false);
+      assert.equal(existsSync(stage), false);
+    }
+  }
+});
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "findrss-build-"));

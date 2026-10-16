@@ -272,7 +272,7 @@ test("草稿调试输入仅含路径，提交时固定添加 /debug，展示完�
   assert.match(child_texts(find_node(root, "script-debug-summary")).join(""), /HTTP 200.*已调用设备/);
   const tabs = find_node(root, "script-debug-tabs");
   assert.deepEqual(tabs.props.items.map(({ id, label }) => [id, label]),
-    [["output", "输出"], ["context", "上下文"], ["logs", "日志"], ["xml", "XML预览"], ["feed", "卡片预览"]]);
+    [["output", "输出"], ["context", "上下文"], ["logs", "日志"], ["xml", "XML预览"], ["feed", "预览"]]);
   const panels = tabs.props.items.map(item => item.content[0]);
   assert.ok(find_node(panels[0], "script-debug-output-content"));
   assert.equal(find_node(panels[0], "script-debug-request-content"), undefined);

@@ -375,7 +375,7 @@ function ScriptDebugResultContentView({ store: vm$, kind, preview }) {
             context: "调试上下文",
             logs: "调试日志",
             xml: "XML 预览",
-            feed: "卡片预览",
+            feed: "预览",
             preview: "媒体预览",
           }[name],
         },
@@ -617,7 +617,7 @@ function ScriptDebugResultContentView({ store: vm$, kind, preview }) {
               },
             },
             {
-              id: "feed", label: "卡片预览", panel_id: "script-debug-feed-panel",
+              id: "feed", label: "预览", panel_id: "script-debug-feed-panel",
               get content() {
                 return [panel("feed", [ScriptFeedPreviewView(Timeless, { preview: feed_preview })])];
               },

@@ -306,7 +306,6 @@ const FindRSSAdminShell = (function create_admin_shell() {
           }, attributes: { n: "admin-shell-content" } },
           content,
         ),
-        window.FindRSSAdminAgent?.View() || null,
       ].filter(Boolean),
     );
   }
