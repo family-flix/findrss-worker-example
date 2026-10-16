@@ -1,3 +1,4 @@
+import { format_datetime as format_time } from "../../server/lib/datetime.js";
 import { PaginationView } from "../components/pagination.js";
 import { PollPolicyView, poll_policy_label } from "../components/poll_policy.js";
 import { discovery_platform_label, discovery_platform_icon_url } from "../components/discovery_platform.js";
@@ -16,7 +17,7 @@ if (!window.FindRSSAdminAuth) {
 if (!window.FindRSSAdminShell) {
   throw new Error("订阅源管理页无法启动：管理 Shell 未加载");
 }
-const { Badge, Button, CopyButton, Dialog, For, FilePicker, FeedAddressEditor, Field, Img, Input, Icon, Link, Select, Show, Textarea, View, combine, computed, ref, refarr } = Timeless;
+const { Badge, Button, CopyButton, Dialog, DropdownMenu, For, FilePicker, FeedAddressEditor, Field, Img, Input, Icon, Link, Select, Show, Switch, TableField, Textarea, View, combine, computed, ref } = Timeless;
 
 const avatar_accept = "image/png,image/jpeg,image/webp,image/gif";
 
@@ -34,21 +35,13 @@ function source_value(value) {
 }
 
 function PlatformOptionView(id, platforms, label) {
-  return View({ class: "inline-flex items-center", style: { gap: "6px" } }, [
+  return View({ class: "inline-flex items-center", style: { gap: "6px" }, attributes: { n: "discovery-platform-option" } }, [
     Img({ class: "block flex-none object-fit-contain", style: { width: "18px", height: "18px" },
       src: combine({ id: typeof id === "string" ? ref(id) : id, platforms },
         values => discovery_platform_icon_url(values.id, values.platforms)),
-      attributes: { alt: "", "aria-hidden": "true", width: "18", height: "18" } }),
+      attributes: { n: "discovery-platform-icon", alt: "", "aria-hidden": "true", width: "18", height: "18" } }),
     label,
   ]);
-}
-
-function format_time(value) {
-  if (!value) return "未知";
-  const date = new Date(Number(value));
-  if (Number.isNaN(date.getTime())) return "未知";
-  const pad = value => String(value).padStart(2, "0");
-  return `${String(date.getFullYear()).padStart(4, "0")}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function format_bytes(value) {
@@ -406,7 +399,7 @@ function SourceFormView({ store: vm$ }) {
               "line-height": "1.5"
             }, attributes: { n: "discovery-source-order-hint" } }, ["数值越小，展示越靠前。"]),
           ]),
-          FieldView({ semantic_name: "discovery-source-poll-policy-field", label: "快照抓取规则" }, [
+          FieldView({ semantic_name: "discovery-source-poll-policy-field", label: "抓取规则" }, [
             PollPolicyView(vm$.poll_editor, { name: "discovery-source-poll", disabled: vm$.state.saving }),
             View({ class: "text-muted" }, ["公开源自动更新 XML 和广场预览；私密自有源自动更新 XML，仍需凭证访问且不发布预览。选择仅手动可停止自动抓取。外部私密源的快照由上游管理。"]),
           ]),
@@ -424,6 +417,18 @@ function SourceFormView({ store: vm$ }) {
               "自有源关闭此项后可公开访问；外部源遵循原站权限。",
             ]),
           ]),
+          Show({ when: vm$.state.draft_require_token, ok() {
+            return FieldView({ semantic_name: "discovery-source-credit-cost-field", label: "每次访问消耗积分" }, [
+              Input({ class: "box-border", value: vm$.state.draft_credit_cost, disabled: vm$.state.saving,
+                attributes: { n: "discovery-source-credit-cost-input", type: "number", min: "0", max: "1000000000", step: "1",
+                  required: true, "aria-label": "每次访问消耗积分" },
+                onInput(event) { vm$.methods.set_draft("credit_cost", event.target.value); },
+              }),
+              View({ class: "text-muted", attributes: { n: "discovery-source-credit-cost-hint" } }, [
+                "自有源每次成功访问（含缓存命中）按此值扣费，默认 1；0 表示免费，仍需 token。外部源遵循原站计费。",
+              ]),
+            ]);
+          } }),
         ]),
       ]),
     ]),
@@ -448,7 +453,7 @@ function FilterFormView({ store }) {
     [
       FieldView({ semantic_name: "discovery-source-filter-query-field", label: "搜索" }, [
         Input({class: "box-border",
-          value: vm$.state.query,
+          value: vm$.state.query, disabled: vm$.state.bulk_busy,
           placeholder: "名称、简介或 URL",
           attributes: { n: "discovery-source-filter-query-input", "aria-label": "搜索" },
           onInput(event) {
@@ -458,7 +463,7 @@ function FilterFormView({ store }) {
       ]),
       FieldView({ semantic_name: "discovery-source-filter-platform-field", label: "平台" }, [
         Select({class: "box-border",
-          value: vm$.state.filter_platform,
+          value: vm$.state.filter_platform, disabled: vm$.state.bulk_busy,
           options: vm$.state.filter_platform_options,
           attributes: { n: "discovery-source-filter-platform-select", "aria-label": "筛选平台" },
           render_option: ({ value, label }) => PlatformOptionView(value, vm$.state.platforms, label),
@@ -470,7 +475,7 @@ function FilterFormView({ store }) {
       ]),
       FieldView({ semantic_name: "discovery-source-filter-status-field", label: "状态" }, [
         Select({class: "box-border",
-          value: vm$.state.filter_status,
+          value: vm$.state.filter_status, disabled: vm$.state.bulk_busy,
           options: filter_status_options,
           attributes: { n: "discovery-source-filter-status-select", "aria-label": "筛选状态" },
           onChange(event) {
@@ -482,273 +487,205 @@ function FilterFormView({ store }) {
   );
 }
 
-function SourceCardView({ store, source }) {
-  const vm$ = store;
+function SourceCellView(name, children) {
+  return View({ class: "box-border min-w-0", style: {
+    padding: "14px 12px", "border-bottom": "1px solid var(--frui-color-border-soft)",
+  }, attributes: { n: "discovery-source-cell-" + name, role: "cell" } }, children);
+}
+
+function SourceAddressView({ store, source, kind }) {
+  const address = kind === "website" ? source.website || source.feed_url : source.feed_url;
+  const name = "discovery-source-row-";
+  return View({ class: "box-border flex items-center min-w-0 gap-space-1", attributes: { n: name + kind + "-address" } }, [
+    is_template_feed_url(address)
+      ? View({ class: "block min-w-0 text-muted break-anywhere", style: { "font-size": "11px" },
+        attributes: { n: name + (kind === "feed" ? "feed-value" : "website") } }, [address])
+      : Link({ class: "block min-w-0 text-link text-left break-anywhere", style: { "font-size": "11px" },
+        href: address, target: "_blank", rel: "noopener noreferrer",
+        attributes: { n: name + (kind === "feed" ? "feed-link" : "website"), title: kind === "feed" ? "打开 RSS/Atom 地址" : "打开网站" } }, [address]),
+    CopyButton({ size: "small", label: kind === "feed" ? "复制 RSS/Atom 地址" : "复制网站地址",
+      attributes: { n: name + "copy-" + kind }, onCopy() { return store.methods.copy_url(address); } }),
+  ]);
+}
+
+function SourceSnapshotView({ source }) {
+  const cache = source.cache;
+  return TableField({
+    class: "text-muted",
+    style: { "grid-template-columns": "64px minmax(0, 1fr)", "line-height": "1.6" },
+    attributes: { n: "discovery-source-row-metadata" },
+    labelProps: { class: "whitespace-nowrap" },
+    items: [
+      ...(cache ? [{ key: "xml", label: "XML", value:
+        View({ class: "flex flex-wrap items-center min-w-0 gap-space-2", attributes: { n: "discovery-source-xml-details" } }, [
+          Badge({ tone: cache.status === "empty" ? "neutral" : "success", attributes: { n: "discovery-source-xml-state" } },
+            [cache.status === "empty" ? "未生成" : "已生成"]),
+          ...(cache.refreshing ? [Badge({ tone: "brand", attributes: { n: "discovery-source-xml-refreshing" } }, ["正在生成"])] : []),
+        ]),
+      }, ...(cache.saved_at ? [
+        { key: "xml-saved-at", label: "XML 抓取", value: format_time(cache.saved_at) },
+        { key: "xml-size", label: "XML 大小", value: format_bytes(cache.bytes) },
+        { key: "xml-storage", label: "XML 存储", value: cache.persistent ? "已持久化" : "仅内存" },
+      ] : [])] : []),
+      { key: "snapshot", label: "广场快照", value:
+        View({ class: "flex flex-wrap items-center min-w-0 gap-space-2", attributes: { n: "discovery-source-snapshot-details" } }, [
+          source.require_token ? "不生成公开快照" : source.snapshot.saved_at
+            ? format_time(source.snapshot.saved_at) : source.snapshot.error ? "" : "等待生成",
+          ...(!source.require_token && source.snapshot.error ? [
+            View({ class: "text-warning break-anywhere min-w-0", attributes: { n: "discovery-source-snapshot-warning" } }, [source.snapshot.saved_at
+              ? "更新失败，保留上次内容" : "生成失败：" + source.snapshot.error]),
+          ] : []),
+        ]),
+      },
+      { key: "poll-rule", label: "抓取规则", value: poll_policy_label(source.poll_policy)
+        + (source.poll_policy.mode === "inherit" && source.poll_effective ? "（" + poll_policy_label(source.poll_effective) + "）" : "") },
+      ...(source.enabled && (!source.require_token || is_managed_rss_url(source.feed_url_template || source.feed_url)) ? [
+        { key: "next-snapshot", label: "下次抓取", value: source.next_snapshot_at === null
+          ? "仅手动抓取" : source.next_snapshot_at <= Date.now() ? "等待调度" : format_time(source.next_snapshot_at) },
+      ] : []),
+      ...(source.require_token && source.snapshot.error ? [
+        { key: "xml-error", label: "XML 错误", value: View({ class: "text-danger break-anywhere",
+          attributes: { n: "discovery-source-xml-error", role: "alert" } }, [source.snapshot.error]) },
+      ] : []),
+    ],
+  });
+}
+
+function SourceRowView({ store: vm$, source }) {
   const initial = String(source.title || "?").trim().charAt(0).toUpperCase() || "?";
   const avatar_failed_ = ref(false);
-  const avatar_visible_ = computed(avatar_failed_, (failed) => source.avatar_url !== "" && !failed);
-  return View(
-    {
-      class: "box-border grid rounded-card bg-surface-raised min-w-0", style: {
-        "gap": "11px",
-        "padding": "15px",
-        "border": "1px solid var(--frui-color-border)",
-        "grid-template-columns": "minmax(0, 1fr)"
-      },
-      attributes: { n: "discovery-source-card" },
-      dataset: { sourceId: source.id },
-    },
-    [
-      View(
-        { class: "box-border flex items-flex-start justify-between", style: {
-          "gap": "15px"
-        }, attributes: { n: "discovery-source-card-header" } },
-        [
-          Show({
-            when: avatar_visible_,
-            ok() {
-              return Img({
-                class: "box-border flex-none rounded-card bg-selected object-cover", style: {
-                  "width": "40px",
-                  "height": "40px"
-                },
-                attributes: { n: "discovery-source-card-avatar", alt: "", loading: "lazy", decoding: "async" },
-                src: source.avatar_url,
-                onError() {
-                  avatar_failed_.as(true);
-                },
-              });
-            },
-            else() {
-              return View(
-                {
-                  class: "box-border flex-none rounded-card object-cover grid place-items-center", style: {
-                    "width": "40px",
-                    "height": "40px",
-                    "background": "linear-gradient(135deg, var(--frui-color-selected), var(--frui-color-danger-bg))",
-                    "font-weight": "700"
-                  },
-                  attributes: { n: "discovery-source-card-initial", "aria-hidden": "true" },
-                },
-                [initial],
-              );
-            },
-          }),
-          View(
-            { class: "box-border flex-1 min-w-0", attributes: { n: "discovery-source-card-identity" } },
-            [
-              // 与订阅广场一致：来源类型单独提到标题上方当 eyebrow。
-              View(
-                {
-                  class: "box-border inline-flex items-center text-muted", style: {
-                    "gap": "4px",
-                    "margin-bottom": "3px",
-                    "font-size": "11px",
-                    "font-weight": "700",
-                    "letter-spacing": ".04em"
-                  },
-                  attributes: { n: "discovery-source-card-type" },
-                },
-                [
-                  Img({ class: "box-border block flex-none object-fit-contain", style: {
-                    "width": "16px",
-                    "height": "16px"
-                  }, src: computed(vm$.state.platforms, platforms => discovery_platform_icon_url(source.source_type, platforms)),
-                    attributes: { n: "discovery-source-card-type-icon", alt: "", "aria-hidden": "true", width: "16", height: "16" } }),
-                  computed(vm$.state.platforms, platforms => discovery_platform_label(source.source_type, platforms)),
-                ],
-              ),
-              View(
-                { class: "box-border m-0", style: {
-                  "font-size": "17px"
-                }, attributes: { n: "discovery-source-card-title" } },
-                [source.title],
-              ),
-              View({ class: "box-border flex items-center min-w-0", style: {
-                "gap": "6px"
-              }, attributes: { n: "discovery-source-card-website-address" } }, [
-                is_template_feed_url(source.website || source.feed_url)
-                  ? View({ class: "box-border block min-w-0 m-0 text-muted break-anywhere", style: {
-                    "font-size": "11px"
-                  }, attributes: { n: "discovery-source-card-website" } }, [source.website || source.feed_url])
-                  : Link({ class: "box-border block min-w-0 w-fit-content m-0 p-0 bg-transparent text-link break-anywhere text-left", style: {
-                    "font-size": "11px"
-                  }, href: source.website || source.feed_url,
-                    target: "_blank", rel: "noopener noreferrer",
-                    attributes: { n: "discovery-source-card-website", title: "打开网站" } }, [source.website || source.feed_url]),
-                CopyButton({class: "box-border",  size: "small", label: "复制网站地址", attributes: { n: "discovery-source-card-copy-website" },
-                  onCopy() { return vm$.methods.copy_url(source.website || source.feed_url); } }),
-              ]),
-            ],
-          ),
-          View({ class: "box-border flex flex-col flex-none items-end gap-space-1" }, [
-            View(
-              {
-                class: "box-border " + ("flex-none rounded-pill " + (!source.enabled ? "bg-surface-raised text-muted" : "bg-selected text-link")), style: {
-                  "padding": "5px 9px",
-                  "font-size": "11px"
-                },
-                attributes: { n: "discovery-source-status" },
-              },
-              [source.enabled ? "启用" : "停用"],
-            ),
-            Show({
-              // 自有路由源始终展示公开性；其它地址只在勾了「需要 token 访问」时给出提示。
-              when: is_managed_rss_url(source.feed_url) || source.require_token === true,
-              ok() {
-                return Badge({ tone: source.require_token ? "warning" : "success",
-                  attributes: { n: "discovery-source-access-badge" } }, [source.require_token ? "需 token" : "公开"]);
-              },
+  const row_busy = combine({ bulk: vm$.state.bulk_busy, updating: vm$.state.source_updating },
+    ({ bulk, updating }) => bulk || updating.includes(source.id));
+  return View({ class: computed(vm$.state.selected_ids, ids => "box-border grid hover-background-color-surface-hover " + (ids.includes(source.id) ? "bg-selected" : "")),
+    style: { "grid-template-columns": "var(--discovery-source-columns)" },
+    attributes: { n: "discovery-source-row", role: "row", "aria-selected": computed(vm$.state.selected_ids, ids => String(ids.includes(source.id))) },
+    dataset: { sourceId: source.id },
+  }, [
+    SourceCellView("selection", [Input({ disabled: vm$.state.bulk_busy,
+      attributes: { n: "discovery-source-select", type: "checkbox", "aria-label": "选择订阅源“" + source.title + "”",
+        checked: computed(vm$.state.selected_ids, ids => ids.includes(source.id)) },
+      onChange() { vm$.methods.toggle_selection(source.id); },
+    })]),
+    SourceCellView("identity", [
+      View({ class: "flex items-start min-w-0 gap-space-3", attributes: { n: "discovery-source-row-identity" } }, [
+        Show({ when: computed(avatar_failed_, failed => Boolean(source.avatar_url) && !failed),
+          ok() { return Img({ class: "flex-none rounded-card object-cover bg-selected", style: { width: "36px", height: "36px" }, src: source.avatar_url,
+            attributes: { n: "discovery-source-row-avatar", alt: "", loading: "lazy", decoding: "async" }, onError() { avatar_failed_.set(true); } }); },
+          else() { return View({ class: "flex-none rounded-card bg-selected grid place-items-center", style: { width: "36px", height: "36px", "font-weight": "700" },
+            attributes: { n: "discovery-source-row-initial", "aria-hidden": "true" } }, [initial]); },
+        }),
+        View({ class: "grid min-w-0 gap-space-1", attributes: { n: "discovery-source-row-details" } }, [
+          View({ class: "flex flex-wrap items-center gap-space-2", attributes: { n: "discovery-source-row-heading" } }, [
+            View({ class: "text-text break-anywhere", style: { "font-size": "14px", "font-weight": "650" }, attributes: { n: "discovery-source-row-title" } }, [source.title]),
+            PlatformOptionView(source.source_type, vm$.state.platforms,
+              computed(vm$.state.platforms, platforms => discovery_platform_label(source.source_type, platforms))),
+          ]),
+          View({ class: "text-muted", style: { "font-size": "12px", overflow: "hidden", "text-overflow": "ellipsis", "white-space": "nowrap" },
+            attributes: { n: "discovery-source-row-description", title: source.description } }, [source.description || "暂无简介"]),
+          SourceAddressView({ store: vm$, source, kind: "website" }),
+          SourceAddressView({ store: vm$, source, kind: "feed" }),
+          View({ class: "flex flex-wrap gap-space-1 min-w-0", attributes: { n: "discovery-source-row-tags", role: "list", "aria-label": "订阅源标签" } },
+            source.tags.map(tag => Badge({ attributes: { n: "discovery-source-row-tag", role: "listitem" } }, [tag]))),
+        ]),
+      ]),
+    ]),
+    SourceCellView("status", [
+      View({ class: "grid gap-space-2", attributes: { n: "discovery-source-row-status" } }, [
+        Switch({ size: "small", label: "启用", checked: source.enabled, disabled: row_busy,
+          attributes: { n: "discovery-source-enabled", "aria-label": "启用订阅源“" + source.title + "”" },
+          onChange(enabled) { vm$.methods.toggle_source(source.id, enabled); },
+        }),
+        Switch({ size: "small", label: "公开", checked: !source.require_token, disabled: row_busy,
+          attributes: { n: "discovery-source-public", "aria-label": "公开订阅源“" + source.title + "”" },
+          onChange(is_public) { vm$.methods.set_source_public(source.id, is_public); },
+        }),
+        ...(source.sort_order ? [View({ class: "text-muted tabular-nums", attributes: { n: "discovery-source-row-order" } }, ["排序 " + source.sort_order])] : []),
+      ]),
+    ]),
+    SourceCellView("snapshot", [SourceSnapshotView({ source })]),
+    SourceCellView("actions", [
+      View({ class: "grid gap-space-2", attributes: { n: "discovery-source-row-actions" } }, [
+        View({ class: "flex flex-wrap gap-space-1", attributes: { n: "discovery-source-row-action-buttons" } }, [
+          Button({ size: "small", variant: "ghost", disabled: row_busy, attributes: { n: "discovery-source-edit-button" },
+            onClick() { vm$.methods.edit_source(source.id); } }, ["编辑"]),
+          Button({ size: "small", variant: "ghost",
+            disabled: combine({ ids: vm$.state.snapshot_refreshing, busy: row_busy }, ({ ids, busy }) => busy || (source.require_token && !source.cache) || ids.includes(source.id)),
+            attributes: { n: "discovery-source-refresh-snapshot" }, onClick() { return vm$.methods.refresh_snapshot(source.id); },
+          }, [computed(vm$.state.snapshot_refreshing, ids => ids.includes(source.id) ? "生成中…" : "刷新快照")]),
+          Button({ size: "small", disabled: row_busy, attributes: { n: "discovery-source-delete-button" },
+            onClick() { return vm$.methods.remove_source(source.id); } }, ["删除"]),
+        ]),
+        View({ class: "text-danger whitespace-pre-wrap break-anywhere", attributes: { n: "discovery-source-snapshot-error", role: "alert" } }, [
+          computed(vm$.state.snapshot_errors, errors => errors.get(source.id) || ""),
+        ]),
+      ]),
+    ]),
+  ]);
+}
+
+function SourceBulkActionsView({ store: vm$ }) {
+  const disabled = combine({ busy: vm$.state.bulk_busy, loading: vm$.state.loading, selected: vm$.state.selected_ids, updating: vm$.state.source_updating },
+    ({ busy, loading, selected, updating }) => busy || loading || updating.length > 0 || !selected.length);
+  return View({ class: "flex flex-wrap items-center justify-between gap-space-3", style: { "margin-block": "16px" },
+    attributes: { n: "discovery-source-bulk-toolbar" } }, [
+    View({ class: "flex flex-wrap items-center gap-space-3", attributes: { n: "discovery-source-bulk-controls" } }, [
+      DropdownMenu({ disabled, attributes: { n: "discovery-source-bulk-menu", "aria-label": "批量操作" },
+        trigger: props => Button({ ...props, disabled }, ["批量操作", Icon("chevron-down", 14)]),
+        items: [
+          { id: "discovery-bulk-enable", label: "批量启用", onClick: () => vm$.methods.bulk_action("enable") },
+          { id: "discovery-bulk-disable", label: "批量停用", onClick: () => vm$.methods.bulk_action("disable") },
+          { id: "discovery-bulk-refresh", label: "批量刷新快照", onClick: () => vm$.methods.bulk_action("refresh") },
+          { id: "discovery-bulk-delete", label: "批量删除", danger: true, onClick: () => vm$.methods.bulk_action("delete") },
+        ],
+      }),
+      View({ class: "text-muted tabular-nums", attributes: { n: "discovery-source-selection-summary", role: "status" } }, [
+        computed(vm$.state.selected_ids, ids => "已选择 " + ids.length + " 项"),
+      ]),
+      Button({ size: "small", variant: "ghost", disabled, attributes: { n: "discovery-source-clear-selection" },
+        onClick: vm$.methods.clear_selection }, ["清空选择"]),
+    ]),
+    View({ class: "text-muted", style: { "font-size": "12px" }, attributes: { n: "discovery-source-selection-hint" } }, ["支持跨页选择，切换筛选后清空"]),
+    Show({ when: computed(vm$.state.bulk_message, Boolean), ok() {
+      return View({ class: "text-muted whitespace-pre-wrap", style: { width: "100%" },
+        attributes: { n: "discovery-source-bulk-message", role: "status" } }, [vm$.state.bulk_message]);
+    } }),
+  ]);
+}
+
+function SourceTableView({ store: vm$ }) {
+  return View({ class: "box-border min-w-0 overflow-auto rounded-card bg-surface", style: { border: "1px solid var(--frui-color-border)", "margin-top": "12px" },
+    attributes: { n: "discovery-source-table-scroll", role: "region", "aria-label": "订阅源表格", tabindex: "0" } }, [
+    View({ class: "box-border", style: { width: "100%", "min-width": "1000px", "font-size": "12px",
+      "--discovery-source-columns": "44px minmax(280px, 1fr) 110px 280px 170px" },
+      attributes: { n: "discovery-source-table", role: "table", "aria-label": "订阅源列表", "aria-busy": computed(vm$.state.loading, String) } }, [
+      View({ class: "bg-surface-raised text-muted", attributes: { n: "discovery-source-table-header", role: "rowgroup" } }, [
+        View({ class: "grid", style: { "grid-template-columns": "var(--discovery-source-columns)" }, attributes: { n: "discovery-source-table-header-row", role: "row" } }, [
+          View({ style: { padding: "12px", "box-sizing": "border-box" }, attributes: { n: "discovery-source-selection-header", role: "columnheader" } }, [
+            Input({ disabled: combine({ busy: vm$.state.bulk_busy, loading: vm$.state.loading, rows: vm$.paged_sources }, ({ busy, loading, rows }) => busy || loading || !rows.length),
+              attributes: { n: "discovery-source-select-page", type: "checkbox",
+                "aria-label": computed(vm$.page_selection, selection => selection.some && !selection.all ? "选择本页全部订阅源（本页部分已选）" : "选择本页全部订阅源"),
+                checked: computed(vm$.page_selection, selection => selection.all) },
+              onChange: vm$.methods.toggle_page_selection,
             }),
           ]),
-        ],
-      ),
-      View(
-        { class: "box-border m-0 text-muted", style: {
-          "font-size": "13px",
-          "line-height": "1.55"
-        }, attributes: { n: "discovery-source-card-description" } },
-        [source.description || "暂无简介"],
-      ),
-      Show({
-        when: source.tags.length > 0,
-        ok() {
-          return View({ class: "box-border flex flex-wrap gap-space-2 min-w-0", attributes: { n: "discovery-source-card-tags", role: "list", "aria-label": "订阅源标签" } }, [
-            For({ each: refarr(source.tags), render(tag_value) {
-              return Badge({ class: "box-border max-w-full break-anywhere", style: {
-                "line-height": "1.5"
-              }, attributes: { n: "discovery-source-card-tag", role: "listitem" } },
-                [source_value(tag_value)]);
-            } }),
-          ]);
-        },
-      }),
-      View(
-        { class: "box-border grid min-w-0 text-muted", style: {
-          "gap": "var(--frui-space-2)",
-          "padding-top": "var(--frui-space-3)",
-          "border-top": "1px solid var(--frui-color-border-soft)",
-          "font-size": "12px",
-          "line-height": "1.6"
-        }, attributes: { n: "discovery-source-card-metadata" } },
-        [
-          Show({
-            when: source.sort_order !== 0,
-            ok() {
-              return View({ class: "box-border tabular-nums", attributes: { n: "discovery-source-card-order" } }, ["排序 " + source.sort_order]);
-            },
-          }),
-          View({ class: "box-border flex flex-wrap items-center gap-space-1", attributes: { n: "discovery-source-card-updated" } }, [
-            "更新于",
-            View({ class: "text-text tabular-nums whitespace-nowrap" }, [format_time(source.updated_at)]),
-          ]),
-          Show({
-            when: Boolean(source.cache),
-            ok() {
-              const cache = source.cache;
-              return View({ class: "box-border grid items-start min-w-0 gap-space-2", style: {
-                "grid-template-columns": "64px minmax(0, 1fr)"
-              }, attributes: { n: "discovery-source-cache-status" } }, [
-                View({ class: "whitespace-nowrap" }, ["XML 快照"]),
-                View({ class: "flex flex-wrap items-center min-w-0 gap-space-2" }, [
-                  Badge({ tone: cache.status === "fresh" ? "success" : cache.status === "expired" ? "warning" : "neutral" },
-                    [cache.status === "fresh" ? "有效" : cache.status === "expired" ? "待更新" : "未生成"]),
-                  ...(cache.refreshing ? [Badge({ tone: "brand" }, ["正在生成"])] : []),
-                  ...(cache.saved_at ? [
-                    View({ class: "tabular-nums whitespace-nowrap" }, ["抓取于 " + format_time(cache.saved_at)]),
-                    View({ class: "tabular-nums whitespace-nowrap" }, [format_bytes(cache.bytes)]),
-                    View({ class: "whitespace-nowrap" }, [cache.persistent ? "已持久化" : "仅内存"]),
-                  ] : []),
-                ]),
-              ]);
-            },
-          }),
-          View({ class: "box-border grid items-start min-w-0 gap-space-2", style: {
-            "grid-template-columns": "64px minmax(0, 1fr)"
-          }, attributes: { n: "discovery-source-snapshot-status" } }, [
-            View({ class: "whitespace-nowrap" }, ["广场快照"]),
-            View({ class: "flex flex-wrap items-center min-w-0 gap-space-2" }, [
-              source.require_token ? "不生成公开快照" : source.snapshot.saved_at
-                ? View({ class: "text-text tabular-nums whitespace-nowrap" }, [format_time(source.snapshot.saved_at)])
-                : source.snapshot.error ? "" : "等待生成",
-              ...(!source.require_token && source.snapshot.error ? [
-                View({ class: "text-warning break-anywhere min-w-0" }, [source.snapshot.saved_at
-                  ? "更新失败，保留上次内容" : "生成失败：" + source.snapshot.error]),
-              ] : []),
-            ]),
-          ]),
-          View({ class: "box-border grid min-w-0 gap-space-2", attributes: { n: "discovery-source-poll-status" } }, [
-            View({ class: "text-muted break-anywhere" }, ["抓取规则：" + poll_policy_label(source.poll_policy)
-              + (source.poll_policy.mode === "inherit" && source.poll_effective ? "（" + poll_policy_label(source.poll_effective) + "）" : "")]),
-            ...(source.enabled && (!source.require_token || is_managed_rss_url(source.feed_url_template || source.feed_url)) ? [View({ class: "text-muted break-anywhere" }, [source.next_snapshot_at === null
-              ? "仅手动抓取" : "下次抓取：" + (source.next_snapshot_at <= Date.now() ? "等待调度" : format_time(source.next_snapshot_at))])] : []),
-            ...(source.require_token && source.snapshot.error ? [View({ class: "text-danger break-anywhere", attributes: { role: "alert" } }, ["XML 更新失败：" + source.snapshot.error])] : []),
-          ]),
-        ],
-      ),
-      View({ class: "box-border flex items-center min-w-0", style: {
-        "gap": "6px"
-      }, attributes: { n: "discovery-source-card-feed-address" } }, [
-        // 模板地址尚未展开时只显示文本，仍可复制。
-        is_template_feed_url(source.feed_url)
-          ? View({ class: "box-border block min-w-0 m-0 text-muted break-anywhere", style: {
-            "font-size": "11px"
-          }, attributes: { n: "discovery-source-card-feed-value" } }, [source.feed_url])
-          : Link({ class: "box-border block min-w-0 w-fit-content m-0 p-0 bg-transparent text-link break-anywhere text-left", style: {
-            "font-size": "11px"
-          }, href: source.feed_url, target: "_blank", rel: "noopener noreferrer",
-            attributes: { n: "discovery-source-card-feed-link", title: "打开 RSS/Atom 地址" } }, [source.feed_url]),
-        CopyButton({class: "box-border",  size: "small", label: "复制 RSS/Atom 地址", attributes: { n: "discovery-source-card-copy-feed" },
-          onCopy() { return vm$.methods.copy_url(source.feed_url); } }),
+          ...[["identity", "订阅源"], ["status", "状态"], ["snapshot", "抓取与快照"], ["actions", "操作"]].map(([name, label]) =>
+            View({ style: { padding: "12px", "text-align": "left", "font-weight": "500", "box-sizing": "border-box" },
+              attributes: { n: "discovery-source-header-" + name, role: "columnheader" } }, [label])),
+        ]),
       ]),
-      View(
-        { class: "box-border flex flex-wrap", style: {
-          "gap": "7px"
-        }, attributes: { n: "discovery-source-card-actions" } },
-        [
-          Button({
-            class: "box-border flex-none justify-self-center",
-            disabled: computed(vm$.state.snapshot_refreshing, ids => source.require_token && !source.cache || ids.includes(source.id)),
-            attributes: { n: "discovery-source-refresh-snapshot", type: "button" },
-            onClick() { return vm$.methods.refresh_snapshot(source.id); },
-          }, [computed(vm$.state.snapshot_refreshing, ids => ids.includes(source.id) ? "生成中…" : "强制刷新快照")]),
-          Button(
-            {
-              class: "box-border flex-none justify-self-center",
-              attributes: { n: "discovery-source-edit-button" },
-              onClick() {
-                vm$.methods.edit_source(source.id);
-              },
-            },
-            ["编辑"],
-          ),
-          Button(
-            {
-              class: "box-border flex-none justify-self-center",
-              attributes: { n: "discovery-source-toggle-button" },
-              onClick() {
-                return vm$.methods.toggle_source(source.id);
-              },
-            },
-            [source.enabled ? "停用" : "启用"],
-          ),
-          Button(
-            {
-              class: "box-border flex-none",
-              attributes: { n: "discovery-source-delete-button" },
-              onClick() {
-                return vm$.methods.remove_source(source.id);
-              },
-            },
-            ["删除"],
-          ),
-        ],
-      ),
-      View({ class: "box-border text-danger whitespace-pre-wrap break-anywhere", attributes: { n: "discovery-source-snapshot-error", role: "alert" } }, [
-        computed(vm$.state.snapshot_errors, errors => errors.get(source.id) || ""),
+      View({ attributes: { n: "discovery-source-list", role: "rowgroup" } }, [
+        Show({ when: combine({ loading: vm$.state.loading, rows: vm$.paged_sources }, ({ loading, rows }) => loading || !rows.length),
+          ok() { return View({ attributes: { n: "discovery-source-table-state-row", role: "row" } }, [
+            View({ class: "text-muted text-center", style: { padding: "32px" }, attributes: { n: "discovery-source-table-state", role: "cell", "aria-colspan": "5", "aria-live": "polite" } },
+              [computed(vm$.state.loading, loading => loading ? "正在加载订阅源…" : "没有匹配的订阅源。")]),
+          ]); },
+        }),
+        Show({ when: computed(vm$.state.loading, loading => !loading), ok() {
+          return For({ each: vm$.paged_sources, render(raw) { return SourceRowView({ store: vm$, source: source_value(raw) }); } });
+        } }),
       ]),
-    ],
-  );
+    ]),
+  ]);
 }
 
 function SourceListView({ store }) {
@@ -763,59 +700,19 @@ function SourceListView({ store }) {
         }, attributes: { n: "discovery-source-list-message", role: "status" } }, [vm$.state.form_message]);
       } }),
       FilterFormView({ store: vm$ }),
-      Button({
-        class: "box-border flex-none justify-self-center", attributes: { n: "discovery-source-refresh-status-button" },
-        onClick() { return vm$.methods.refresh_list(); },
-      }, ["刷新列表与快照状态"]),
+      SourceBulkActionsView({ store: vm$ }),
       Show({
         when: computed(vm$.state.list_error, Boolean),
         ok() {
           return View(
-            { class: "box-border text-danger", style: {
+            { class: "box-border text-danger whitespace-pre-wrap", style: {
               "margin": "12px 0 0"
             }, attributes: { n: "discovery-source-list-error", role: "alert" } },
             [vm$.state.list_error],
           );
         },
       }),
-      View({ class: "box-border grid", style: {
-        "gap": "14px",
-        "margin-top": "16px"
-      }, attributes: { n: "discovery-source-list" } }, [
-        Show({
-          when: vm$.state.loading,
-          ok() {
-            return View(
-              { class: "box-border m-0 rounded-card text-muted text-center", style: {
-                "padding": "22px"
-              }, attributes: { n: "discovery-source-list-loading" } },
-              ["正在加载订阅源…"],
-            );
-          },
-        }),
-        Show({
-          when: combine(
-            { loading: vm$.state.loading, visible: vm$.visible_sources },
-            (deps) => !deps.loading && deps.visible.length === 0,
-          ),
-          ok() {
-            return View(
-              { class: "box-border m-0 rounded-card text-muted text-center", style: {
-                "padding": "22px"
-              }, attributes: { n: "discovery-source-list-empty" } },
-              ["没有匹配的订阅源。"],
-            );
-          },
-        }),
-        For({
-          key: "id",
-          each: vm$.paged_sources,
-          render(source_value_) {
-            const source = source_value(source_value_);
-            return SourceCardView({ store: vm$, source });
-          },
-        }),
-      ]),
+      SourceTableView({ store: vm$ }),
       PaginationView(Timeless, { model: vm$.pagination, name: "discovery-pagination", label: "订阅源列表分页" }),
     ],
   );
@@ -885,7 +782,7 @@ function DiscoveryApplicationView(embedded = false) {
         detach_agent = window.FindRSSAdminAgent?.register_page("/admin/discovery", {
           read_context: () => ({ filters: { query: vm$.state.query.value, source_type: vm$.state.filter_platform.value, status: vm$.state.filter_status.value },
             selected_source_id: vm$.state.editing_id.value, form_open: vm$.state.form_open.value,
-            ...(vm$.state.form_open.value ? { unsaved_draft: { title: vm$.state.draft_title.value, feed_url: vm$.state.draft_feed_url.value, website: vm$.state.draft_website.value, description: vm$.state.draft_description.value, tags: vm$.state.draft_tags.value, enabled: vm$.state.draft_enabled.value, require_token: vm$.state.draft_require_token.value, sort_order: vm$.state.draft_sort_order.value, source_type: vm$.state.draft_source_type.value } } : {}) }),
+            ...(vm$.state.form_open.value ? { unsaved_draft: { title: vm$.state.draft_title.value, feed_url: vm$.state.draft_feed_url.value, website: vm$.state.draft_website.value, description: vm$.state.draft_description.value, tags: vm$.state.draft_tags.value, enabled: vm$.state.draft_enabled.value, require_token: vm$.state.draft_require_token.value, credit_cost: vm$.state.draft_credit_cost.value, sort_order: vm$.state.draft_sort_order.value, source_type: vm$.state.draft_source_type.value } } : {}) }),
           async on_change(event) {
             await vm$.methods.refresh_list();
             if (event.action === "delete" && vm$.state.editing_id.value === event.source_id) vm$.methods.close_form();
@@ -905,12 +802,12 @@ function DiscoveryApplicationView(embedded = false) {
     count: combine({ sources: vm$.state.sources, visible: vm$.visible_sources },
       ({ sources, visible }) => visible.length === sources.length ? String(sources.length) : visible.length + " / " + sources.length),
     actions: [Button({ attributes: { n: "discovery-source-import-button" },
-      disabled: combine({ loading: vm$.state.loading, saving: vm$.state.saving }, values => values.loading || values.saving),
+      disabled: combine({ loading: vm$.state.loading, saving: vm$.state.saving, bulk_busy: vm$.state.bulk_busy }, values => values.loading || values.saving || values.bulk_busy),
       onClick: vm$.methods.open_import }, ["导入 JSON"]),
       Button({class: "box-border",  variant: "secondary", attributes: { n: "discovery-source-export-button", title: "导出所有订阅源，包括停用源，不受分页和筛选影响" },
       disabled: combine({ loading: vm$.state.loading, sources: vm$.state.sources }, ({ loading, sources }) => loading || sources.length === 0),
       onClick: vm$.methods.export_sources }, ["导出 JSON"]), Button({class: "box-border",  attributes: { n: "discovery-source-create-button" },
-      disabled: vm$.state.saving, onClick: vm$.methods.create_source }, ["新增订阅源"])],
+      disabled: combine({ saving: vm$.state.saving, bulk_busy: vm$.state.bulk_busy }, values => values.saving || values.bulk_busy), onClick: vm$.methods.create_source }, ["新增订阅源"])],
   };
   return embedded
     ? window.FindRSSAdminShell.Page(page_options, [content])

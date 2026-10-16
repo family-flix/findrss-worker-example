@@ -58,7 +58,7 @@ export function SnapshotSettingsModel({
           });
           if (current !== generation) return;
           editor.methods.reset(result.policy);
-          message.set("快照抓取规则已保存");
+          message.set("订阅源抓取规则已保存");
         } catch (failure) {
           if (current === generation) error.set(failure.message);
         } finally {

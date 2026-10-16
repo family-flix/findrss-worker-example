@@ -104,6 +104,7 @@ function normalize_source(source) {
     ],
     enabled: source.enabled === true,
     require_token: source.require_token === true,
+    credit_cost: Number(source.credit_cost ?? 1),
     sort_order: Number(source.sort_order || 0),
     source_type: String(source.source_type || "website"),
     poll_policy: source.poll_policy || { mode: "inherit" },
@@ -137,6 +138,7 @@ async function request_json(url, options = {}) {
 function DiscoveryAdminViewModel() {
   const poll_editor = PollPolicyModel({ ui: Timeless });
   const sources_ = refarr([]);
+  const source_updating_ = ref([]);
   const platforms_ = ref(discovery_platforms());
   const tags_ = ref([]);
   const snapshot_refreshing_ = ref([]);
@@ -155,6 +157,7 @@ function DiscoveryAdminViewModel() {
   const draft_sort_order_ = ref("0");
   const draft_enabled_ = ref(true);
   const draft_require_token_ = ref(false);
+  const draft_credit_cost_ = ref("1");
   const draft_source_type_ = ref("website");
   // 手改过「平台」之后就不再按地址自动预判（否则用户的选择会被下一次输入覆盖）。
   const source_type_touched_ = ref(false);
@@ -165,6 +168,9 @@ function DiscoveryAdminViewModel() {
   const editing_id_ = ref("");
   const form_open_ = ref(false);
   const loading_ = ref(false);
+  const selected_ids_ = ref([]);
+  const bulk_busy_ = ref(false);
+  const bulk_message_ = ref("");
   const saving_ = ref(false);
   const previewing_ = ref(false);
   const preview_avatar_ = ref("");
@@ -183,6 +189,7 @@ function DiscoveryAdminViewModel() {
 
   const state = {
     sources: sources_,
+    source_updating: source_updating_,
     platforms: platforms_,
     tags: tags_,
     platform_options: computed(platforms_, (platforms) =>
@@ -208,11 +215,15 @@ function DiscoveryAdminViewModel() {
     draft_sort_order: draft_sort_order_,
     draft_enabled: draft_enabled_,
     draft_require_token: draft_require_token_,
+    draft_credit_cost: draft_credit_cost_,
     draft_source_type: draft_source_type_,
     avatar_file: avatar_file_,
     editing_id: editing_id_,
     form_open: form_open_,
     loading: loading_,
+    selected_ids: selected_ids_,
+    bulk_busy: bulk_busy_,
+    bulk_message: bulk_message_,
     saving: saving_,
     previewing: previewing_,
     preview_avatar: preview_avatar_,
@@ -241,6 +252,7 @@ function DiscoveryAdminViewModel() {
             normalize_source,
           ),
         );
+        selected_ids_.set(selected_ids_.value.filter(id => sources_.value.some(source => source.id === id)));
         platforms_.set(
           Array.isArray(payload.platforms)
             ? payload.platforms.map(({ id, name, label, icon }) => ({
@@ -284,6 +296,10 @@ function DiscoveryAdminViewModel() {
 
   function draft_payload() {
     const sort_order = Number(draft_sort_order_.value);
+    const credit_cost = Number(draft_credit_cost_.value);
+    if (!draft_credit_cost_.value.trim() || !Number.isInteger(credit_cost) || credit_cost < 0 || credit_cost > 1_000_000_000) {
+      throw new Error("每次访问消耗积分必须为 0 到 1000000000 的整数");
+    }
     return {
       title: draft_title_.value.trim(),
       feed_url: draft_feed_url_.value.trim(),
@@ -296,6 +312,7 @@ function DiscoveryAdminViewModel() {
         .filter((tag) => tag !== ""),
       enabled: draft_enabled_.value === true,
       require_token: draft_require_token_.value === true,
+      credit_cost,
       sort_order: Number.isInteger(sort_order) ? sort_order : 0,
       source_type: draft_source_type_.value || "website",
       poll_policy: poll_editor.methods.value(),
@@ -307,6 +324,33 @@ function DiscoveryAdminViewModel() {
     sources_.as(
       sources_.value.map((item) => (item.id === source.id ? source : item)),
     );
+  }
+
+  async function set_source_flag(source_id, field, value) {
+    const source = sources_.value.find(item => item.id === source_id);
+    if (!source || source_updating_.value.includes(source_id)) return false;
+    if (source[field] === value) return true;
+    source_updating_.set([...source_updating_.value, source_id]);
+    list_error_.set("");
+    try {
+      const result = await request_json("/admin/api/discovery/sources/" + encodeURIComponent(source_id), {
+        method: "PATCH", body: JSON.stringify({ [field]: value }),
+      });
+      const updated = normalize_source(result.source);
+      apply_source(updated);
+      form_message_.set(updated.title + (field === "enabled"
+        ? updated.enabled ? " 已启用。" : " 已停用。"
+        : updated.require_token ? " 已设为需要 token 访问。" : " 已设为公开。"));
+      return true;
+    } catch (error) {
+      // 重建当前行，使 Switch 恢复服务端已保存的状态。
+      const current = sources_.value.find(item => item.id === source_id);
+      if (current) apply_source({ ...current });
+      list_error_.set(error instanceof Error ? error.message : String(error));
+      return false;
+    } finally {
+      source_updating_.set(source_updating_.value.filter(id => id !== source_id));
+    }
   }
 
   /**
@@ -394,7 +438,7 @@ function DiscoveryAdminViewModel() {
 
   const methods = {
     open_import() {
-      if (loading_.value || saving_.value || import_busy_.value) return;
+      if (loading_.value || saving_.value || import_busy_.value || bulk_busy_.value) return;
       import_generation++;
       import_text_.set("");
       import_error_.set("");
@@ -479,6 +523,7 @@ function DiscoveryAdminViewModel() {
               "tags",
               "enabled",
               "require_token",
+              "credit_cost",
               "sort_order",
               "source_type",
               "poll_policy",
@@ -598,7 +643,7 @@ function DiscoveryAdminViewModel() {
         (source.require_token && !source.cache) ||
         snapshot_refreshing_.value.includes(source_id)
       )
-        return;
+        return false;
       snapshot_refreshing_.set([...snapshot_refreshing_.value, source_id]);
       snapshot_errors_.set(new Map(snapshot_errors_.value).set(source_id, ""));
       try {
@@ -631,6 +676,7 @@ function DiscoveryAdminViewModel() {
             result.snapshot.error || "",
           ),
         );
+        return !result.snapshot.error;
       } catch (error) {
         snapshot_errors_.set(
           new Map(snapshot_errors_.value).set(
@@ -638,6 +684,7 @@ function DiscoveryAdminViewModel() {
             error.message || "快照更新失败",
           ),
         );
+        return false;
       } finally {
         snapshot_refreshing_.set(
           snapshot_refreshing_.value.filter((id) => id !== source_id),
@@ -645,7 +692,7 @@ function DiscoveryAdminViewModel() {
       }
     },
     create_source() {
-      if (saving_.value) return;
+      if (saving_.value || bulk_busy_.value) return;
       methods.reset_draft();
       form_open_.set(true);
       load_scripts();
@@ -751,6 +798,9 @@ function DiscoveryAdminViewModel() {
       load();
     },
     set_filter(name, value) {
+      if (bulk_busy_.value) return;
+      selected_ids_.set([]);
+      bulk_message_.set("");
       pagination.reset();
       if (name === "query") query_.set(String(value));
       if (name === "platform") filter_platform_.set(String(value));
@@ -782,6 +832,7 @@ function DiscoveryAdminViewModel() {
       }
       if (name === "sort_order") draft_sort_order_.set(String(value));
       if (name === "require_token") draft_require_token_.set(value === true);
+      if (name === "credit_cost") draft_credit_cost_.set(String(value));
       if (name === "source_type") {
         source_type_touched_.set(true);
         draft_source_type_.set(String(value));
@@ -817,6 +868,7 @@ function DiscoveryAdminViewModel() {
       draft_sort_order_.set(String(source.sort_order));
       draft_enabled_.set(source.enabled);
       draft_require_token_.set(source.require_token);
+      draft_credit_cost_.set(String(source.credit_cost ?? 1));
       draft_source_type_.set(source.source_type || "website");
       poll_editor.methods.reset(source.poll_policy);
       source_type_touched_.set(false);
@@ -842,6 +894,7 @@ function DiscoveryAdminViewModel() {
       draft_sort_order_.set("0");
       draft_enabled_.set(true);
       draft_require_token_.set(false);
+      draft_credit_cost_.set("1");
       draft_source_type_.set("website");
       poll_editor.methods.reset();
       source_type_touched_.set(false);
@@ -872,35 +925,74 @@ function DiscoveryAdminViewModel() {
     save_source() {
       return save_source();
     },
-    async toggle_source(source_id) {
-      const source = sources_.value.find((item) => item.id === source_id);
-      if (!source) return;
+    toggle_selection(source_id) {
+      if (bulk_busy_.value || loading_.value || !sources_.value.some(source => source.id === source_id)) return;
+      selected_ids_.set(selected_ids_.value.includes(source_id)
+        ? selected_ids_.value.filter(id => id !== source_id)
+        : [...selected_ids_.value, source_id]);
+      bulk_message_.set("");
+    },
+    toggle_page_selection() {
+      if (bulk_busy_.value || loading_.value) return;
+      const page_ids = paged_sources.value.map(source => source.id);
+      const all_selected = page_ids.length > 0 && page_ids.every(id => selected_ids_.value.includes(id));
+      selected_ids_.set(all_selected
+        ? selected_ids_.value.filter(id => !page_ids.includes(id))
+        : [...new Set([...selected_ids_.value, ...page_ids])]);
+      bulk_message_.set("");
+    },
+    clear_selection() {
+      if (bulk_busy_.value) return;
+      selected_ids_.set([]);
+    },
+    async bulk_action(action) {
+      if (bulk_busy_.value || loading_.value || source_updating_.value.length || !["enable", "disable", "refresh", "delete"].includes(action)) return;
+      const selected = sources_.value.filter(source => selected_ids_.value.includes(source.id));
+      if (!selected.length) return;
+      if (action === "delete" && !window.confirm("删除选中的 " + selected.length + " 个订阅源？此操作无法撤销。")) return;
+      bulk_busy_.set(true);
+      bulk_message_.set("");
+      list_error_.set("");
+      let succeeded = 0, skipped = 0;
+      const errors = [];
       try {
-        const result = await request_json(
-          "/admin/api/discovery/sources/" + encodeURIComponent(source_id),
-          {
-            method: "PATCH",
-            body: JSON.stringify({ enabled: !source.enabled }),
-          },
-        );
-        const updated = normalize_source(result.source);
-        sources_.as(
-          sources_.value.map((item) =>
-            item.id === updated.id ? updated : item,
-          ),
-        );
-        form_message_.set(
-          updated.title + (updated.enabled ? " 已启用。" : " 已停用。"),
-        );
-      } catch (error) {
-        list_error_.set(error instanceof Error ? error.message : String(error));
+        for (const source of selected) {
+          if (action === "refresh" && ((source.require_token && !source.cache) || snapshot_refreshing_.value.includes(source.id))) {
+            skipped++;
+            continue;
+          }
+          const success = action === "refresh" ? await methods.refresh_snapshot(source.id)
+            : action === "delete" ? await methods.remove_source(source.id, false)
+            : await methods.toggle_source(source.id, action === "enable");
+          if (success) {
+            succeeded++;
+            selected_ids_.set(selected_ids_.value.filter(id => id !== source.id));
+          } else {
+            errors.push(source.title + "：" + (action === "refresh" ? snapshot_errors_.value.get(source.id) : list_error_.value));
+          }
+          bulk_message_.set("已处理 " + (succeeded + errors.length + skipped) + " / " + selected.length + " 个订阅源…");
+        }
+      } finally {
+        bulk_busy_.set(false);
+        form_message_.set("");
+        bulk_message_.set("批量操作完成：成功 " + succeeded + " 个，失败 " + errors.length + " 个，跳过 " + skipped + " 个。"
+          + (skipped ? "外部私密源或正在刷新的源已跳过。" : ""));
+        list_error_.set(errors.join("\n"));
       }
     },
-    async remove_source(source_id) {
+    toggle_source(source_id, enabled) {
       const source = sources_.value.find((item) => item.id === source_id);
-      if (!source) return;
-      if (!window.confirm("删除订阅源“" + source.title + "”？此操作无法撤销。"))
-        return;
+      return set_source_flag(source_id, "enabled", enabled ?? !source?.enabled);
+    },
+    set_source_public(source_id, is_public) {
+      if (bulk_busy_.value) return false;
+      return set_source_flag(source_id, "require_token", !is_public);
+    },
+    async remove_source(source_id, confirm = true) {
+      const source = sources_.value.find((item) => item.id === source_id);
+      if (!source) return false;
+      if (confirm && !window.confirm("删除订阅源“" + source.title + "”？此操作无法撤销。"))
+        return false;
       try {
         await request_json(
           "/admin/api/discovery/sources/" + encodeURIComponent(source_id),
@@ -909,10 +1001,13 @@ function DiscoveryAdminViewModel() {
           },
         );
         sources_.as(sources_.value.filter((item) => item.id !== source_id));
+        selected_ids_.set(selected_ids_.value.filter(id => id !== source_id));
         if (editing_id_.value === source_id) methods.reset_draft();
         form_message_.set(source.title + " 已删除。");
+        return true;
       } catch (error) {
         list_error_.set(error instanceof Error ? error.message : String(error));
+        return false;
       }
     },
   };
@@ -959,6 +1054,10 @@ function DiscoveryAdminViewModel() {
         (page.page + 1) * page.page_size,
       ),
   );
+  const page_selection = combine({ sources: paged_sources, selected: selected_ids_ }, ({ sources, selected }) => ({
+    all: sources.length > 0 && sources.every(source => selected.includes(source.id)),
+    some: sources.some(source => selected.includes(source.id)),
+  }));
 
   // 编辑态下用于回显当前头像（`?v=` 带版本号，换图后地址会变）。
   const editing_source = computed(
@@ -972,6 +1071,7 @@ function DiscoveryAdminViewModel() {
     poll_editor,
     visible_sources,
     paged_sources,
+    page_selection,
     pagination,
     editing_source,
   };

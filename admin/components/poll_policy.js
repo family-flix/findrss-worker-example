@@ -2,7 +2,6 @@ const labels = {
   inherit: "继承默认",
   interval: "按间隔",
   adaptive: "智能刷新",
-  daily: "每天指定时间",
   times: "多个时间点",
   windows: "分时段",
   cron: "自定义 Cron",
@@ -77,17 +76,14 @@ export function PollPolicyView(
           ),
         ]),
       ),
-      when(["daily"], () =>
-        field("time", "每天抓取时间", undefined, { type: "time" }),
-      ),
       when(["times"], () =>
         field(
           "times",
           "抓取时间点",
-          "使用 24 小时制，逗号分隔，例如 08:00, 12:30, 18:00。",
+          "可填写一个或多个时间点。使用 24 小时制，逗号分隔，例如 08:00, 12:30, 18:00。",
         ),
       ),
-      when(["daily", "times"], () =>
+      when(["times"], () =>
         field("days", "星期", "0 为周日，1 至 6 为周一至周六，逗号分隔。"),
       ),
       when(["windows"], () =>
@@ -121,7 +117,7 @@ export function PollPolicyView(
           "五段：分 时 日 月 星期。例如 0 8 * * 1-5 表示工作日 08:00。",
         ),
       ),
-      when(["interval", "adaptive", "daily", "times", "windows", "cron"], () =>
+      when(["interval", "adaptive", "times", "windows", "cron"], () =>
         field("timezone", "时区", "例如 Asia/Shanghai 或 UTC。"),
       ),
       View(

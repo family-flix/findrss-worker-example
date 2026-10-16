@@ -363,6 +363,21 @@ test("真实 Select 回调保持后台事件形状，Checkbox 点击回传 check
   checkbox.onUnmounted();
 });
 
+test("抓取规则不再提供每天指定时间，单时间点显示在多个时间点中", () => {
+  const model = PollPolicyModel({ ui });
+  model.methods.reset({ mode: "times", times: ["08:30"], days: [0,1,2,3,4,5,6], timezone: "UTC" });
+  const root = PollPolicyView(model);
+  try {
+    assert.ok(find(root, "poll-policy-times"));
+    assert.equal(find(root, "poll-policy-time"), null);
+    find(root, "poll-policy-mode").events.onClick();
+    assert.ok(find(root, "poll-policy-mode-option-times"));
+    assert.equal(find(root, "poll-policy-mode-option-daily"), null);
+  } finally {
+    root.onUnmounted();
+  }
+});
+
 test("TableField 复用阅读器组件，参数名和说明使用共享两列布局", () => {
   assert.ok(Object.keys(bundle.metafile.inputs).some(path => path.endsWith("frui/table-field.js")));
   const table = ui.TableField({ attributes: { n: "route-parameters" }, items: [
@@ -424,14 +439,14 @@ test("所有 HTML 入口先加载共享 UI 与 CSS，再加载页面；旧 Timel
   }
 });
 
-test("订阅源卡片使用 Link 与 CopyButton，复制实际地址并显示成功或失败状态", async () => {
+test("订阅源表格使用 Link 与 CopyButton，复制实际地址并显示成功或失败状态", async () => {
   ui.DOM = {};
   context.document = { querySelector: () => null };
   context.FindRSSAdminAuth = { fetch() {} };
   context.FindRSSAdminShell = {};
   context.FindRSSAdminPages = {};
   vm.runInContext("(() => {\n" + page_source("discovery.js") +
-    "\nglobalThis.discovery_model = DiscoveryAdminViewModel(); globalThis.discovery_card = source => SourceCardView({ store: discovery_model, source: normalize_source(source) }); globalThis.discovery_list = () => SourceListView({ store: discovery_model }); })();", context);
+    "\nglobalThis.discovery_model = DiscoveryAdminViewModel(); globalThis.discovery_card = source => SourceRowView({ store: discovery_model, source: normalize_source(source) }); globalThis.discovery_list = () => SourceListView({ store: discovery_model }); })();", context);
   const list = context.discovery_list();
   assert.equal(list.state.styleSet.includes("frui-card"), false);
   assert.equal(find(list, "card-body"), null);
@@ -443,12 +458,12 @@ test("订阅源卡片使用 Link 与 CopyButton，复制实际地址并显示成
   context.navigator = { clipboard: { async writeText(url) { copied.push(url); } } };
   const card = context.discovery_card(source);
   for (const [kind, name, url] of [["website", "website", source.website], ["feed", "feed-link", source.feed_url]]) {
-    const link = find(card, "discovery-source-card-" + name);
+    const link = find(card, "discovery-source-row-" + name);
     assert.equal(link.t, ui.Link({ href: url }).t);
     assert.equal(link.state.href, url);
     assert.equal(link.state.target, "_blank");
     assert.equal(link.state.rel, "noopener noreferrer");
-    const copy = find(card, "discovery-source-card-copy-" + kind);
+    const copy = find(card, "discovery-source-row-copy-" + kind);
     assert.ok(copy.state.styleSet.includes("display-inline-flex"));
     await click_copy(copy);
     assert.equal(copy.state.attributes["aria-label"], "已复制");
@@ -457,16 +472,16 @@ test("订阅源卡片使用 Link 与 CopyButton，复制实际地址并显示成
   card.onUnmounted();
 
   const template_card = context.discovery_card({ ...source, website: "", feed_url: source.feed_url_template });
-  assert.equal(find(template_card, "discovery-source-card-feed-link"), null);
-  assert.ok(find(template_card, "discovery-source-card-feed-value"));
-  await click_copy(find(template_card, "discovery-source-card-copy-website"));
-  await click_copy(find(template_card, "discovery-source-card-copy-feed"));
+  assert.equal(find(template_card, "discovery-source-row-feed-link"), null);
+  assert.ok(find(template_card, "discovery-source-row-feed-value"));
+  await click_copy(find(template_card, "discovery-source-row-copy-website"));
+  await click_copy(find(template_card, "discovery-source-row-copy-feed"));
   assert.deepEqual(copied.slice(-2), [source.feed_url_template, source.feed_url_template]);
   template_card.onUnmounted();
 
   context.navigator.clipboard.writeText = async () => { throw new Error("denied"); };
   const failed_card = context.discovery_card(source);
-  const failed_copy = find(failed_card, "discovery-source-card-copy-feed");
+  const failed_copy = find(failed_card, "discovery-source-row-copy-feed");
   await click_copy(failed_copy);
   assert.equal(failed_copy.state.attributes["aria-label"], "复制 RSS/Atom 地址");
   assert.match(context.discovery_model.state.list_error.value, /复制失败/);
@@ -476,7 +491,109 @@ test("订阅源卡片使用 Link 与 CopyButton，复制实际地址并显示成
   failed_card.onUnmounted();
 });
 
-test("刷新快照的完整错误响应显示在对应卡片按钮下方，重试成功后清除", async () => {
+test("订阅源表格选择控制批量菜单，启停后行内容和数量同步更新，空表保留列头", async () => {
+  ui.DOM = {};
+  context.document = { querySelector: () => null };
+  const sources = [{ id: "one", title: "源一", enabled: true }, { id: "two", title: "源二", enabled: true }];
+  context.FindRSSAdminAuth = { fetch: async (url, options) => options.method === "PATCH"
+    ? Response.json({ source: { ...sources.find(source => url.endsWith("/" + source.id)), ...JSON.parse(options.body) } })
+    : Response.json({ sources }) };
+  vm.runInContext("(() => {\n" + page_source("discovery.js") +
+    "\nglobalThis.table_model = DiscoveryAdminViewModel(); globalThis.table_list = SourceListView({ store: table_model }); })();", context);
+  const root = context.table_list;
+  const model = context.table_model;
+  try {
+    assert.equal(find(root, "discovery-source-table").state.attributes.role, "table");
+    assert.equal(find(root, "discovery-source-refresh-status-button"), null);
+    assert.ok(find(root, "discovery-source-table-state"));
+    await model.methods.refresh_list();
+    await new Promise(setImmediate);
+    assert.ok(find(root, "discovery-source-row"));
+    assert.equal(find(root, "discovery-source-bulk-menu").state.attributes.disabled, true);
+    find(root, "discovery-source-select").events.onClick({});
+    assert.equal(model.state.selected_ids.value.length, 1);
+    assert.equal(find(root, "discovery-source-select").state.attributes["aria-checked"], "true");
+    assert.equal(find(root, "discovery-source-bulk-menu").state.attributes.disabled, undefined);
+    find(root, "discovery-source-select-page").events.onClick({});
+    assert.equal(model.state.selected_ids.value.length, 2);
+    await model.methods.bulk_action("disable");
+    await new Promise(setImmediate);
+    assert.equal(find(root, "discovery-source-row"), null);
+    assert.ok(find(root, "discovery-source-header-identity"));
+    assert.ok(find(root, "discovery-source-table-state"));
+    model.methods.set_filter("status", "all");
+    await new Promise(setImmediate);
+    assert.equal(find(root, "discovery-source-enabled-control").state.attributes["aria-checked"], "false");
+    assert.equal(find(root, "discovery-source-public-control").state.attributes["aria-checked"], "true");
+    assert.equal(find(root, "discovery-source-toggle-button"), null);
+    assert.equal(find(root, "discovery-source-header-platform"), null);
+    assert.ok(find(find(root, "discovery-source-cell-identity"), "discovery-platform-option"));
+    const metadata = find(root, "discovery-source-row-metadata");
+    assert.ok(metadata.state.styleSet.includes("display-grid"));
+    assert.equal(metadata.state.style["grid-template-columns"], "64px minmax(0, 1fr)");
+    assert.ok(find(metadata, "discovery-source-row-metadata-snapshot-label"));
+    assert.ok(find(metadata, "discovery-source-row-metadata-poll-rule-value"));
+    assert.equal(find(root, "discovery-source-row-updated"), null);
+    assert.equal(model.state.selected_ids.value.length, 0);
+  } finally { root.onUnmounted(); }
+});
+
+test("启用与公开 Switch 直接保存明确状态，请求中禁用，失败恢复原开关", async () => {
+  ui.DOM = {};
+  context.document = { querySelector: () => null };
+  let saved = { id: "switch", title: "开关测试", enabled: true, require_token: false, credit_cost: 7 };
+  const writes = [];
+  let finish;
+  context.FindRSSAdminAuth = { fetch: async (_url, options) => {
+    if (options.method !== "PATCH") return Response.json({ sources: [saved] });
+    const body = JSON.parse(options.body);
+    writes.push(body);
+    return new Promise(resolve => { finish = error => {
+      if (error) return resolve(Response.json({ error }, { status: 500 }));
+      saved = { ...saved, ...body };
+      resolve(Response.json({ source: saved }));
+    }; });
+  } };
+  vm.runInContext("(() => {\n" + page_source("discovery.js") +
+    "\nglobalThis.switch_model = DiscoveryAdminViewModel(); switch_model.methods.set_filter('status', 'all'); globalThis.switch_list = SourceListView({ store: switch_model }); })();", context);
+  const root = context.switch_list;
+  const model = context.switch_model;
+  try {
+    await model.methods.refresh_list();
+    await new Promise(setImmediate);
+    find(root, "discovery-source-public-control").events.onClick();
+    assert.deepEqual(writes, [{ require_token: true }]);
+    assert.equal(find(root, "discovery-source-enabled-control").state.attributes["aria-disabled"], "true");
+    find(root, "discovery-source-enabled-control").events.onClick();
+    find(root, "discovery-source-public-control").events.onClick();
+    assert.equal(writes.length, 1);
+    finish("保存失败");
+    await new Promise(setImmediate);
+    assert.equal(find(root, "discovery-source-public-control").state.attributes["aria-checked"], "true");
+    assert.equal(find(root, "discovery-source-public-control").state.attributes["aria-disabled"], "false");
+    assert.equal(model.state.list_error.value, "保存失败");
+    find(root, "discovery-source-public-control").events.onClick();
+    finish();
+    await new Promise(setImmediate);
+    assert.equal(find(root, "discovery-source-public-control").state.attributes["aria-checked"], "false");
+    assert.equal(model.state.sources.value[0].require_token, true);
+    assert.equal(model.state.sources.value[0].credit_cost, 7);
+    assert.equal(model.state.list_error.value, "");
+    find(root, "discovery-source-public-control").events.onClick();
+    finish();
+    await new Promise(setImmediate);
+    assert.deepEqual(writes.at(-1), { require_token: false });
+    assert.equal(find(root, "discovery-source-public-control").state.attributes["aria-checked"], "true");
+    find(root, "discovery-source-enabled-control").events.onClick();
+    finish();
+    await new Promise(setImmediate);
+    assert.deepEqual(writes.at(-1), { enabled: false });
+    assert.equal(find(root, "discovery-source-enabled-control").state.attributes["aria-checked"], "false");
+    assert.equal(find(root, "discovery-source-toggle-button"), null);
+  } finally { root.onUnmounted(); }
+});
+
+test("刷新快照的完整错误响应显示在对应行操作按钮下方，重试成功后清除", async () => {
   ui.DOM = {};
   context.document = { querySelector: () => null };
   let fail = true;
@@ -486,15 +603,15 @@ test("刷新快照的完整错误响应显示在对应卡片按钮下方，重�
   context.FindRSSAdminShell = {};
   context.FindRSSAdminPages = {};
   vm.runInContext("(() => {\n" + page_source("discovery.js") +
-    "\nglobalThis.snapshot_model = DiscoveryAdminViewModel(); globalThis.snapshot_card = source => SourceCardView({ store: snapshot_model, source: normalize_source(source) }); })();", context);
+    "\nglobalThis.snapshot_model = DiscoveryAdminViewModel(); globalThis.snapshot_card = source => SourceRowView({ store: snapshot_model, source: normalize_source(source) }); })();", context);
   const source = { id: "one", title: "示例", feed_url: "https://example.com/feed", enabled: true };
   context.snapshot_model.state.sources.as([source]);
   const card = context.snapshot_card(source);
   const other_card = context.snapshot_card({ ...source, id: "two" });
   try {
     const error = find(card, "discovery-source-snapshot-error");
-    const actions = find(card, "discovery-source-card-actions");
-    assert.equal(card.children.indexOf(error), card.children.indexOf(actions) + 1);
+    const actions = find(card, "discovery-source-row-actions");
+    assert.equal(actions.children.indexOf(error), 1);
     assert.equal(error.state.attributes.role, "alert");
     let displayed = error.children[0].state.value;
     error.children[0].$elm = { setText(value) { displayed = value; } };

@@ -1,3 +1,4 @@
+import { format_datetime } from "../../server/lib/datetime.js";
 import {
   parse_poll_policy,
   default_poll_policy,
@@ -11,7 +12,6 @@ export function PollPolicyModel({ ui, inherit = true } = {}) {
     interval: "60",
     min_interval: "15",
     max_interval: "720",
-    time: "08:00",
     times: "08:00, 18:00",
     days: "0,1,2,3,4,5,6",
     cron: "0 8 * * *",
@@ -32,11 +32,7 @@ export function PollPolicyModel({ ui, inherit = true } = {}) {
     },
     reset(policy = inherit ? { mode: "inherit" } : default_poll_policy()) {
       for (const [key, value] of Object.entries(initial)) state[key].set(value);
-      state.mode.set(
-        policy.mode === "times" && policy.times.length === 1
-          ? "daily"
-          : policy.mode,
-      );
+      state.mode.set(policy.mode);
       if (policy.timezone) state.timezone.set(policy.timezone);
       for (const key of [
         "interval",
@@ -48,10 +44,7 @@ export function PollPolicyModel({ ui, inherit = true } = {}) {
       }
       if (policy.cron) state.cron.set(policy.cron);
       if (policy.days) state.days.set(policy.days.join(","));
-      if (policy.times) {
-        state.times.set(policy.times.join(", "));
-        state.time.set(policy.times[0]);
-      }
+      if (policy.times) state.times.set(policy.times.join(", "));
       if (policy.windows)
         state.windows.set(
           policy.windows
@@ -65,7 +58,7 @@ export function PollPolicyModel({ ui, inherit = true } = {}) {
     value() {
       const mode = state.mode.value;
       const policy = {
-        mode: mode === "daily" ? "times" : mode,
+        mode,
         timezone: state.timezone.value.trim(),
       };
       if (mode === "interval")
@@ -75,12 +68,9 @@ export function PollPolicyModel({ ui, inherit = true } = {}) {
         policy.max_interval = Number(state.max_interval.value) * 60;
       }
       if (mode === "cron") policy.cron = state.cron.value.trim();
-      if (mode === "times" || mode === "daily") {
+      if (mode === "times") {
         policy.days = days(state.days.value);
-        policy.times =
-          mode === "daily"
-            ? [state.time.value]
-            : state.times.value.split(/[,，\s]+/).filter(Boolean);
+        policy.times = state.times.value.split(/[,，\s]+/).filter(Boolean);
       }
       if (mode === "windows") {
         policy.outside_interval = Number(state.outside_interval.value) * 60;
@@ -114,11 +104,7 @@ export function PollPolicyModel({ ui, inherit = true } = {}) {
         const at = next_policy_at(policy, Date.now());
         return (
           "计划预览：" +
-          new Intl.DateTimeFormat("zh-CN", {
-            timeZone: policy.timezone,
-            dateStyle: "medium",
-            timeStyle: "short",
-          }).format(at) +
+          format_datetime(at, { timezone: policy.timezone }) +
           "（" +
           policy.timezone +
           "）"

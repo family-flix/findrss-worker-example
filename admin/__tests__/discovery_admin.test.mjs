@@ -8,16 +8,144 @@ import * as platform_helpers from "../components/discovery_platform.js";
 import { RssRoutePatternModel } from "../../server/domain/rss_route.js";
 import { PollPolicyModel } from "../components/poll_policy.model.js";
 
-function modal_model(fetch) {
+function modal_model(fetch, { confirm = () => true } = {}) {
   const ref = value => ({ value, set(next) { this.value = next; }, as(next) { this.value = next; } });
   const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, PaginationModel, PaginationView, URL, File, document: { querySelector: () => null }, window: {
-    FindRSSAdminUI: { DOM: {}, ref, refarr: ref, computed: () => ({}), combine: () => ({}) },
-    FindRSSAdminShell: {}, FindRSSAdminPages: {}, FindRSSAdminAuth: { fetch },
+    FindRSSAdminUI: { DOM: {}, ref, refarr: ref, computed: (source, map) => ({ get value() { return map(source.value); } }), combine: (sources, map) => ({ get value() { return map(Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.value]))); } }) },
+    confirm, FindRSSAdminShell: {}, FindRSSAdminPages: {}, FindRSSAdminAuth: { fetch },
   } });
   vm.runInContext(page_source("discovery.js") + "\nglobalThis.model = DiscoveryAdminViewModel();", context);
   assert.deepEqual(JSON.parse(JSON.stringify(context.model.state.platforms.value)), [{ id: "website", label: "网页", icon: "" }]);
   return context.model;
 }
+
+test("表格选择支持本页全选和跨页保留，筛选与刷新清理过期选择", async () => {
+  let sources = Array.from({ length: 25 }, (_, index) => ({ id: String(index), title: "源 " + index, enabled: true }));
+  const model = modal_model(async () => Response.json({ sources }));
+  await model.methods.refresh_list();
+  model.methods.toggle_selection("missing");
+  assert.equal(model.state.selected_ids.value.length, 0);
+  model.methods.toggle_page_selection();
+  assert.equal(model.state.selected_ids.value.length, 20);
+  assert.equal(model.page_selection.value.all, true);
+  model.pagination.set_page(1);
+  assert.equal(model.page_selection.value.all, false);
+  model.methods.toggle_selection("20");
+  assert.equal(model.page_selection.value.some, true);
+  model.methods.toggle_page_selection();
+  assert.equal(model.state.selected_ids.value.length, 25);
+  model.methods.toggle_page_selection();
+  assert.equal(model.state.selected_ids.value.length, 20);
+  model.methods.set_filter("query", "源");
+  assert.equal(model.state.selected_ids.value.length, 0);
+  model.methods.toggle_selection("0");
+  model.methods.toggle_selection("1");
+  sources = sources.slice(1);
+  await model.methods.refresh_list();
+  assert.deepEqual(Array.from(model.state.selected_ids.value), ["1"]);
+  model.methods.clear_selection();
+  assert.equal(model.state.selected_ids.value.length, 0);
+});
+
+test("批量启停设置明确状态，保留失败项，重复提交与处理中修改选择被阻止", async () => {
+  const sources = [{ id: "one", title: "源一", enabled: true }, { id: "two", title: "源二", enabled: false }];
+  const writes = [];
+  let finish, fail = true;
+  const model = modal_model(async (url, options) => {
+    if (options.method !== "PATCH") return Response.json({ sources });
+    const id = url.split("/").at(-1);
+    writes.push([id, JSON.parse(options.body)]);
+    if (id === "one") await new Promise(resolve => { finish = resolve; });
+    if (id === "two" && fail) return Response.json({ error: "写入失败" }, { status: 500 });
+    return Response.json({ source: { ...sources.find(source => source.id === id), ...JSON.parse(options.body) } });
+  });
+  await model.methods.refresh_list();
+  model.methods.set_filter("status", "all");
+  model.methods.toggle_page_selection();
+  const pending = model.methods.bulk_action("disable");
+  assert.equal(model.state.bulk_busy.value, true);
+  await model.methods.bulk_action("delete");
+  model.methods.clear_selection();
+  model.methods.toggle_selection("one");
+  model.methods.set_filter("status", "disabled");
+  model.methods.create_source();
+  model.methods.open_import();
+  assert.equal(model.state.selected_ids.value.length, 2);
+  assert.equal(model.state.filter_status.value, "all");
+  assert.equal(model.state.form_open.value, false);
+  assert.equal(model.state.import_open.value, false);
+  finish();
+  await pending;
+  assert.deepEqual(writes, [["one", { enabled: false }]]);
+  assert.equal(model.state.bulk_busy.value, false);
+  assert.match(model.state.bulk_message.value, /成功 2 个，失败 0 个/);
+
+  model.methods.set_filter("status", "all");
+  model.methods.toggle_page_selection();
+  const enable = model.methods.bulk_action("enable");
+  finish();
+  await enable;
+  assert.deepEqual(writes.slice(1), [["one", { enabled: true }], ["two", { enabled: true }]]);
+  assert.deepEqual(Array.from(model.state.selected_ids.value), ["two"]);
+  assert.match(model.state.bulk_message.value, /成功 1 个，失败 1 个/);
+  assert.match(model.state.list_error.value, /源二：写入失败/);
+  fail = false;
+  await model.methods.bulk_action("enable");
+  assert.equal(model.state.selected_ids.value.length, 0);
+  assert.equal(model.state.list_error.value, "");
+});
+
+test("批量删除只确认一次，取消不写入，失败保留以便重试", async () => {
+  let confirmed = false;
+  const confirmations = [], deleted = [];
+  const model = modal_model(async (url, options) => {
+    if (options.method === "DELETE") {
+      deleted.push(url.split("/").at(-1));
+      return deleted.at(-1) === "two" ? Response.json({ error: "删除失败" }, { status: 500 }) : Response.json({});
+    }
+    return Response.json({ sources: ["one", "two"].map(id => ({ id, title: id, enabled: true })) });
+  }, { confirm: text => { confirmations.push(text); return confirmed; } });
+  await model.methods.refresh_list();
+  model.methods.toggle_page_selection();
+  await model.methods.bulk_action("delete");
+  assert.deepEqual(deleted, []);
+  assert.equal(model.state.selected_ids.value.length, 2);
+  confirmed = true;
+  await model.methods.bulk_action("delete");
+  assert.equal(confirmations.length, 2);
+  assert.match(confirmations[1], /2 个订阅源/);
+  assert.deepEqual(deleted, ["one", "two"]);
+  assert.deepEqual(Array.from(model.state.sources.value, source => source.id), ["two"]);
+  assert.deepEqual(Array.from(model.state.selected_ids.value), ["two"]);
+  assert.match(model.state.list_error.value, /two：删除失败/);
+});
+
+test("批量刷新更新 XML 和快照，跳过外部私密源，失败保留选择与原内容", async () => {
+  const calls = [];
+  const model = modal_model(async (url, options) => {
+    if (options.method === "POST") {
+      const id = url.split("/").at(-2);
+      calls.push(id);
+      return id === "failed" ? Response.json({ error: "上游离线" }, { status: 502 })
+        : Response.json({ snapshot: { saved_at: 100, articles: [], error: "" }, cache: { status: "fresh" } });
+    }
+    return Response.json({ sources: [
+      { id: "public", title: "公开源", enabled: true },
+      { id: "managed", title: "自有私密源", enabled: true, require_token: true, cache: { status: "empty" } },
+      { id: "external", title: "外部私密源", enabled: true, require_token: true },
+      { id: "failed", title: "失败源", enabled: true, snapshot: { saved_at: 10, articles: [{ title: "旧文章" }] } },
+    ] });
+  });
+  await model.methods.refresh_list();
+  model.methods.toggle_page_selection();
+  await model.methods.bulk_action("refresh");
+  assert.deepEqual(calls, ["public", "managed", "failed"]);
+  assert.equal(model.state.sources.value[1].cache.status, "fresh");
+  assert.equal(model.state.sources.value[3].snapshot.saved_at, 10);
+  assert.deepEqual(Array.from(model.state.selected_ids.value), ["external", "failed"]);
+  assert.match(model.state.bulk_message.value, /成功 2 个，失败 1 个，跳过 1 个/);
+  assert.match(model.state.list_error.value, /失败源：上游离线/);
+});
 
 test("后台可选标签使用脚本目录，匹配路由预填且手动修改保留，草稿和源标签不进入选项", async () => {
   let tags = ["科技", "视频", "无源标签"];
@@ -65,12 +193,12 @@ test("JSON 导入兼容导出格式，保留配置和模板，跳过已有及重
   await model.methods.refresh_list();
   model.methods.open_import();
   const source = { id: "ignored", title: "导入源", feed_url: "https://old.example/rss/test", feed_url_template: "{{hostname}}/rss/test",
-    tags: ["标签"], enabled: false, require_token: true, source_type: "website", sort_order: 3, avatar_url: "/old-avatar", snapshot: { saved_at: 1 }, poll_policy: { mode: "manual" } };
+    tags: ["标签"], enabled: false, require_token: true, credit_cost: 7, source_type: "website", sort_order: 3, avatar_url: "/old-avatar", snapshot: { saved_at: 1 }, poll_policy: { mode: "manual" } };
   model.methods.set_import_text(JSON.stringify({ sources: [
     { title: "已有", feed_url: "https://example.com/existing" }, source, source,
   ] }));
   await model.methods.import_sources();
-  assert.deepEqual(writes, [{ title: "导入源", feed_url: "{{hostname}}/rss/test", tags: ["标签"], enabled: false, require_token: true, source_type: "website", sort_order: 3, poll_policy: { mode: "manual" } }]);
+  assert.deepEqual(writes, [{ title: "导入源", feed_url: "{{hostname}}/rss/test", tags: ["标签"], enabled: false, require_token: true, credit_cost: 7, source_type: "website", sort_order: 3, poll_policy: { mode: "manual" } }]);
   assert.equal(model.state.sources.value.length, 2);
   assert.match(model.state.import_message.value, /已导入 1 个.*跳过重复地址 2 个/);
   assert.equal(model.state.import_text.value, "");
@@ -86,6 +214,37 @@ test("JSON 导入先检查结构与必填项，格式错误不发请求", async 
     assert.match(model.state.import_error.value, /JSON 格式错误/);
   }
   assert.equal(writes, 0);
+});
+
+test("访问积分新增默认 1，编辑回填并保存配置，空值和非法金额不提交，零积分可保存", async () => {
+  const writes = [];
+  const model = modal_model(async (url, options) => {
+    if (!options?.body) return Response.json({ sources: [{ id: "paid", title: "付费源", feed_url: "{{hostname}}/rss/demo", enabled: true, require_token: true, credit_cost: 5 }] });
+    const body = JSON.parse(options.body);
+    writes.push(body);
+    return Response.json({ source: { ...body, id: "paid" } });
+  });
+  await model.methods.refresh_list();
+  model.methods.create_source();
+  assert.equal(model.state.draft_credit_cost.value, "1");
+  model.methods.close_form();
+  model.methods.edit_source("paid");
+  assert.equal(model.state.draft_credit_cost.value, "5");
+  model.methods.set_draft("credit_cost", "7");
+  await model.methods.save_source();
+  assert.equal(writes[0].credit_cost, 7);
+  model.methods.edit_source("paid");
+  for (const value of ["", " ", "-1", "1.5", "1000000001", "nope"]) {
+    model.methods.set_draft("credit_cost", value);
+    await model.methods.save_source();
+    assert.match(model.state.form_error.value, /消耗积分必须/);
+    assert.equal(writes.length, 1);
+  }
+  model.methods.set_draft("credit_cost", "0");
+  await model.methods.save_source();
+  assert.equal(writes[1].credit_cost, 0);
+  model.methods.create_source();
+  assert.equal(model.state.draft_credit_cost.value, "1");
 });
 
 test("JSON 导入中断保留结果与剩余条目，重复提交被阻止，重试不重复新增", async () => {
@@ -501,7 +660,7 @@ test("读取订阅源信息失败时展示具体错误描述，清除读取中�
   context.window.FindRSSAdminUI = context.window.Timeless;
   vm.runInContext(page_source("discovery.js") + "\nglobalThis.model = DiscoveryAdminViewModel();", context);
   const model = context.model;
-  model.methods.set_draft("feed_url", "{{hostname}}/rss/xiaohongshu/user/5756ecbb5e87e74222938eac");
+  model.methods.set_draft("feed_url", "{{hostname}}/rss/xiaohongshu/user/profile/5756ecbb5e87e74222938eac");
   await model.methods.preview_feed();
   assert.equal(model.state.form_error.value, message);
   assert.equal(model.state.form_message.value, "");
@@ -564,7 +723,7 @@ test("后台编辑将旧分类带入标签，保存不再设置分类，新增�
   model.methods.set_draft("feed_url", "{{hostname}}/atom/douyin/user/a");
   assert.equal(model.state.draft_source_type.value, "douyin");
   model.methods.set_draft("source_type", "zhihu");
-  model.methods.set_draft("feed_url", "{{hostname}}/rss/x/user/a");
+  model.methods.set_draft("feed_url", "{{hostname}}/rss/x/a");
   assert.equal(model.state.draft_source_type.value, "zhihu");
 });
 

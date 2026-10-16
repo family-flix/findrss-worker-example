@@ -121,7 +121,7 @@ function SettingsPage({ view } = {}) {
           attributes: { n: "settings-snapshots" },
         },
         [
-          View({ as: "h2", class: "box-border m-0 text-sm" }, ["快照抓取"]),
+          View({ as: "h2", class: "box-border m-0 text-sm", attributes: { n: "settings-fetch-title" } }, ["订阅源抓取"]),
           View({ class: "text-muted" }, [
             "默认每 1 小时抓取一次，单个订阅源可覆盖。公开源同时更新 XML 和广场预览；私密自有源按规则更新 XML，订阅访问仍需有效凭证，不发布文章预览。",
           ]),
