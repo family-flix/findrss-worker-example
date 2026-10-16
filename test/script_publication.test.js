@@ -51,7 +51,7 @@ test("发布、修改与删除脚本均保留自身及其他源的 XML", async (
   service.repo.script_logs = { delete_for_route() {} };
   await service.delete_script(id);
   assert.equal(cache.inspect(own_key).status, "fresh");
-  assert.equal(cache.resolve(key, Date.now()).rendered.get("rss\n"), "快手 XML");
+  assert.equal((await cache.resolve(key, Date.now())).rendered.get("rss\n"), "快手 XML");
 });
 
 test("正式发布必填三段递增版本，绑定源码哈希，草稿保留上次正式版本", async () => {

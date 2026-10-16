@@ -20,9 +20,9 @@ function is_xml_key(key) {
 }
 
 /**
- * @typedef {object} RouteCacheStore L2：同步接口，便于 `run` 在任何 await 之前完成查找。
- * @property {(key: string) => { output_json: string, invoked: number, expires_at: number } | null} read
- * @property {(entry: { key: string, output_json: string, invoked: number, expires_at: number, created_at: number }) => void} write
+ * @typedef {object} RouteCacheStore L2：SQLite 正文或 R2 指针的同步读写接口。
+ * @property {(key: string) => { output_json: string, invoked: number, expires_at: number, saved_at?: number, rendered?: [string, string][], object_key?: string, bytes?: number } | null} read
+ * @property {(entry: { key: string, output_json: string, invoked: number, expires_at: number, created_at: number, saved_at?: number, rendered?: [string, string][], object_key?: string, bytes?: number }) => void} write
  * @property {(now: number) => void} delete_expired
  * @property {() => void} clear
  * @property {() => number} count
@@ -74,6 +74,7 @@ export class RssRouteCache {
    * @param {number} max_entries
    * @param {{
    *   store?: RouteCacheStore | null,
+   *   object_store?: any,
    *   max_bytes?: number,
    *   persist_max_bytes?: number,
    * }} [options]
@@ -81,11 +82,13 @@ export class RssRouteCache {
   constructor(
     ttl_ms = 600_000,
     max_entries = DEFAULT_MAX_ENTRIES,
-    { store = null, max_bytes = DEFAULT_MAX_BYTES, persist_max_bytes = DEFAULT_PERSIST_MAX_BYTES, clock = Date.now } = {},
+    { store = null, object_store = null, max_bytes = DEFAULT_MAX_BYTES, persist_max_bytes = DEFAULT_PERSIST_MAX_BYTES, clock = Date.now } = {},
   ) {
     this.ttl_ms = ttl_ms;
     this.max_entries = max_entries;
     this.store = store;
+    this.object_store = object_store;
+    this.loading = new Map();
     this.max_bytes = max_bytes;
     this.persist_max_bytes = persist_max_bytes;
     this.clock = clock;
@@ -124,15 +127,41 @@ export class RssRouteCache {
    * L1 → L2。L2 命中时把条目回填 L1（**沿用 L2 的 `expires_at`**，不续期）。
    * @param {string} key
    * @param {number} now
-   * @returns {{ output: string, invoked: boolean } | null}
+   * @returns {Promise<{ output: string, invoked: boolean } | null>}
    */
-  resolve(key, now) {
+  async resolve(key, now) {
     const hit = this.lookup(key, now);
     if (hit !== null) return hit;
-    const stored = this.store === null ? null : this.store.read(key);
+    let stored = this.store === null ? null : this.store.read(key);
     if (stored === null || stored === undefined) return null;
     const xml = is_xml_key(key);
     if (!xml && Number(stored.expires_at) <= now) return null;
+    if (stored.object_key) {
+      if (!this.object_store?.available) throw new Error("RSS snapshot storage is unavailable");
+      const object_key = stored.object_key;
+      let pending = this.loading.get(object_key);
+      if (!pending) {
+        pending = this.object_store.get(object_key)
+          .then(async object => {
+            if (!object) return null;
+            const snapshot = JSON.parse(await object.text());
+            if (!snapshot || typeof snapshot.output_json !== "string" || !Array.isArray(snapshot.rendered)
+              || snapshot.rendered.some(pair => !Array.isArray(pair) || pair.length !== 2 || pair.some(value => typeof value !== "string"))) {
+              throw new Error("RSS snapshot is invalid");
+            }
+            return snapshot;
+          })
+          .finally(() => this.loading.delete(object_key));
+        this.loading.set(object_key, pending);
+      }
+      const snapshot = await pending;
+      // 读取期间刷新可能已切换指针并删除旧对象，不能把旧正文回填内存。
+      if (this.store.read(key)?.object_key !== object_key) return this.resolve(key, now);
+      const current = this.lookup(key, now);
+      if (current !== null) return current;
+      if (!snapshot) return null;
+      stored = { ...stored, output_json: snapshot.output_json, rendered: snapshot.rendered };
+    }
     this.l2_hits += 1;
     this.put(key, {
       output: stored.output_json,
@@ -154,29 +183,31 @@ export class RssRouteCache {
    * @returns {Promise<{ output: string, invoked: boolean, cached: boolean }>}
    */
   async run(key, now, produce, { force = false } = {}) {
-    const hit = force ? null : this.resolve(key, now);
+    const generation = this.generation;
+    const hit = force ? null : await this.resolve(key, now);
     if (hit !== null) return { ...hit, cached: true };
     this.misses += 1;
-    let pending = this.inflight.get(key);
+    const invalidated = generation !== this.generation && !is_xml_key(key);
+    let pending = invalidated ? undefined : this.inflight.get(key);
     if (pending === undefined) {
       this.executions += 1;
       pending = Promise.resolve()
         .then(produce)
-        .then((result) => {
+        .then(async (result) => {
           // 失效发生在执行期间时（如脚本刚被更新）不回填，避免旧内容重新进入缓存。
           if (this.inflight.get(key) === pending) {
             const completed_at = this.clock();
             const value = { ...result, saved_at: completed_at, expires_at: is_xml_key(key) ? 0 : completed_at + this.ttl_ms };
             // 先持久化再替换内存；刷新失败时仍可读取旧快照。
-            this.persist(key, value);
-            this.put(key, value, completed_at);
+            await this.persist(key, value);
+            if (this.inflight.get(key) === pending) this.put(key, value, completed_at);
           }
           return result;
         })
         .finally(() => {
           if (this.inflight.get(key) === pending) this.inflight.delete(key);
         });
-      this.inflight.set(key, pending);
+      if (!invalidated) this.inflight.set(key, pending);
     }
     const result = await pending;
     return { output: result.output, invoked: result.invoked, cached: false,
@@ -238,7 +269,7 @@ export class RssRouteCache {
       status: !exists ? "empty" : xml || expires_at > now ? "fresh" : "expired",
       saved_at: exists ? memory?.saved_at ?? stored?.saved_at ?? expires_at - this.ttl_ms : 0,
       ...(!xml ? { expires_at } : {}),
-      bytes: memory?.bytes ?? (stored ? stored.output_json.length + (stored.rendered || []).reduce((total, [, body]) => total + body.length, 0) : 0),
+      bytes: memory?.bytes ?? stored?.bytes ?? (stored ? stored.output_json.length + (stored.rendered || []).reduce((total, [, body]) => total + body.length, 0) : 0),
       persistent: Boolean(stored && (xml || Number(stored.expires_at) === expires_at)),
       refreshing: this.inflight.has(key),
     };
@@ -269,15 +300,15 @@ export class RssRouteCache {
   }
 
   /**
-   * XML 快照全部落 L2（仓储分块）；普通脚本结果仍按 persist_max_bytes 限制。
+   * XML 快照写入 R2，SQLite 只保留指针；无绑定时兼容旧存储。
    * @param {string} key
    * @param {{ output: string, invoked: boolean, expires_at: number, rendered?: Map<string, string> }} result
-   * @returns {void}
+   * @returns {Promise<void>}
    */
-  persist(key, result) {
+  async persist(key, result) {
     if (this.store === null) return;
     if (!result.rendered && result.output.length > this.persist_max_bytes) return;
-    this.store.write({
+    const entry = {
       key,
       output_json: result.output,
       invoked: result.invoked ? 1 : 0,
@@ -285,7 +316,23 @@ export class RssRouteCache {
       saved_at: result.saved_at,
       created_at: result.saved_at,
       ...(result.rendered ? { rendered: [...result.rendered] } : {}),
-    });
+    };
+    if (is_xml_key(key) && result.rendered && this.object_store?.available) {
+      const previous = this.store.read(key);
+      const object_key = "rss/snapshots/" + crypto.randomUUID() + ".json";
+      await this.object_store.put(object_key, JSON.stringify({ output_json: entry.output_json, rendered: entry.rendered }),
+        { httpMetadata: { contentType: "application/json; charset=utf-8" } });
+      try {
+        this.store.write({ ...entry, output_json: "", rendered: undefined, object_key,
+          bytes: result.output.length + entry.rendered.reduce((total, [, body]) => total + body.length, 0) });
+      } catch (error) {
+        await this.object_store.delete_many([object_key], { best_effort: true });
+        throw error;
+      }
+      await this.object_store.delete_many([previous?.object_key], { best_effort: true });
+    } else {
+      this.store.write(entry);
+    }
     const total = this.store.count();
     if (total > this.max_entries) this.store.delete_oldest(this.max_entries);
   }

@@ -1079,7 +1079,7 @@ export class ServiceScript {
     }
     if (snapshot && feed_public && refresh) this.repo.rss_route_cache.public_attempt(cache_key, Date.now());
     if (snapshot && !refresh && request_url.pathname.startsWith("/_public/feed/")) {
-      const stored = this.ports.route_cache.resolve(cache_key, Date.now());
+      const stored = await this.ports.route_cache.resolve(cache_key, Date.now());
       const body = stored?.rendered?.get(format + "\n");
       if (body === undefined) {
         if (!this.xml_tasks.has(cache_key)) {

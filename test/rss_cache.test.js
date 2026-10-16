@@ -310,11 +310,11 @@ test("配置失效保留公开和私密 XML 及其生成任务，普通缓存和
   release();
   await Promise.all(jobs);
   for (const key of ["public-snapshot:/saved", "private-snapshot:/saved", "public-snapshot:/keep", "private-snapshot:/keep"]) {
-    assert.equal(cache.resolve(key, Date.now()).output, key);
+    assert.equal((await cache.resolve(key, Date.now())).output, key);
     assert.ok(store.read(key));
   }
   for (const key of ["/drop", "/saved-drop"]) {
-    assert.equal(cache.resolve(key, Date.now()), null);
+    assert.equal(await cache.resolve(key, Date.now()), null);
     assert.equal(store.read(key), null);
   }
   assert.equal(cache.stats().bytes, [...cache.entries.values()].reduce((total, entry) => total + entry.bytes, 0));

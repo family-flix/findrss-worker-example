@@ -1,6 +1,6 @@
 // rss_route_cache 表（`RssRouteCache` 的 L2）的读写：按 key 取条目、upsert、过期/超量清理。
 //
-// XML 永久保存；普通脚本缓存的 TTL 由 infra/rss_cache.js 判定。
+// XML 永久保存，正文在 R2 时只保存指针；兼容旧 SQLite 正文与分块。
 //
 // `read` / `write` / `delete_expired` / `count` / `delete_oldest` 这组方法名**就是**
 // infra 侧约定的 store 接口，所以组合根（`server/durable_object.js`）可以把本对象直接
@@ -21,7 +21,7 @@ export class RepositoryRssRouteCache {
 
   /**
    * @param {string} key
-   * @returns {{ output_json: string, invoked: number, expires_at: number } | null}
+   * @returns {{ output_json: string, invoked: number, expires_at: number, saved_at?: number, rendered?: [string, string][], object_key?: string, bytes?: number } | null}
    */
   read(key) {
     const row = (
@@ -38,9 +38,11 @@ export class RepositoryRssRouteCache {
     }
     if (row.output_json.startsWith(snapshot_prefix)) {
       const snapshot = JSON.parse(row.output_json.slice(snapshot_prefix.length));
-      row.output_json = snapshot.output;
+      row.output_json = snapshot.output ?? "";
       row.rendered = snapshot.rendered;
       row.saved_at = snapshot.saved_at;
+      row.object_key = snapshot.object_key;
+      row.bytes = snapshot.bytes;
     }
     return row;
   }
@@ -50,11 +52,13 @@ export class RepositoryRssRouteCache {
    * 变成最新（那会让热点条目永远不被淘汰、冷条目被反复挤出）。
    * @param {{
    *   key: string, output_json: string, invoked: number, expires_at: number, created_at: number,
+   *   saved_at?: number, rendered?: [string, string][], object_key?: string, bytes?: number,
    * }} entry
    * @returns {void}
    */
   write(entry) {
-    const body = entry.rendered ? snapshot_prefix + JSON.stringify({ output: entry.output_json, rendered: entry.rendered, saved_at: entry.saved_at }) : entry.output_json;
+    const body = entry.object_key ? snapshot_prefix + JSON.stringify({ object_key: entry.object_key, saved_at: entry.saved_at, bytes: entry.bytes })
+      : entry.rendered ? snapshot_prefix + JSON.stringify({ output: entry.output_json, rendered: entry.rendered, saved_at: entry.saved_at }) : entry.output_json;
     const chunked = entry.rendered && body.length > chunk_size;
     this.transaction(() => {
       this.sql.exec("DELETE FROM rss_route_cache_chunks WHERE key = ?", entry.key);

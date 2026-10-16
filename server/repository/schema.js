@@ -373,7 +373,7 @@ export const API_SCHEMA_SQL = `
     ON script_logs(created_at);
   CREATE INDEX IF NOT EXISTS script_logs_errors
     ON script_logs(id DESC) WHERE status = 'error';
-  -- RSS/Atom 快照持久化 feed JSON 与两种 XML；大快照分块，兼容已有缓存表。
+  -- RSS/Atom 快照保存 R2 指针；兼容旧 feed JSON/XML 正文与分块，普通缓存仍存 SQLite。
   CREATE TABLE IF NOT EXISTS rss_route_cache (
     key TEXT PRIMARY KEY,
     output_json TEXT NOT NULL,

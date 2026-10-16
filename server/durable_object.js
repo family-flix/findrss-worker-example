@@ -387,6 +387,7 @@ export const route = {
       wait_until: promise => this.ctx.waitUntil(promise),
       route_cache: new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, RSS_ROUTE_CACHE_MAX_ENTRIES, {
         store: this.repo.rss_route_cache,
+        object_store: create_api_object_store(env),
         max_bytes: RSS_ROUTE_CACHE_MAX_BYTES,
         persist_max_bytes: RSS_ROUTE_CACHE_PERSIST_MAX_BYTES,
       }),

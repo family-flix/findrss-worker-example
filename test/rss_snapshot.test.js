@@ -18,7 +18,7 @@ function fixture(public_source = true) {
       if (result.error) return result;
       return Result.Ok({ title: "版本" + result.data, items: [] });
     } };`, metadata_json: JSON.stringify({ path: "/snapshot/:id", name: "快照" }) };
-  const ports = { route_cache: new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: store.repo }),
+  const ports = { route_cache: new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: store.repo, object_store: store.object_store }),
     schedule_alarm: async () => { scheduled++; }, wait_until: task => jobs.push(task) };
   const repo = { rss_route_cache: store.repo, scripts: { list_enabled: () => row.enabled ? [row] : [] },
     discovery: { list_public_routes: () => public_source ? [{ feed_url: "https://feeds.example.com/rss/snapshot/1", enabled: 1 }] : [],
@@ -50,7 +50,7 @@ test("首次访问返回正在生成并启动后台任务，生成后只读 XML�
     assert.match(result.body, /版本1/); assert.equal(result.headers["X-Api-RSS-Cache"], "hit");
     assert.ok(result.body.includes("https://feeds.example.com/" + format + "/snapshot/1"));
   }
-  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo });
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo, object_store: f.object_store });
   assert.match((await f.serve()).body, /版本1/); assert.equal(f.calls, 1);
   f.db.close();
 });
@@ -114,7 +114,7 @@ test("旧版 XML 的过期字段不影响读取，后台失败保留 XML；新�
   f.sql.exec("UPDATE rss_route_cache SET expires_at = 1");
   f.sql.exec("UPDATE rss_public_feeds SET attempted_at = 0");
   f.repo.delete_expired(Date.now());
-  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo });
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo, object_store: f.object_store });
   assert.equal(f.repo.read(key).expires_at, 1);
   assert.match((await f.serve()).body, /版本1/); assert.equal(f.calls, 1);
   await assert.rejects(f.serve("atom", { query: "?page=2" }), { status: 503 });
@@ -140,7 +140,7 @@ test("私密订阅请求只读，XML 无过期时间，重启及清理后 RSS/At
   assert.equal(results[0].headers["Cache-Control"], "private, no-cache");
   now += 365 * 86400000;
   f.repo.delete_expired(now);
-  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo });
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo, object_store: f.object_store });
   assert.match((await f.serve("rss", options)).body, /版本1/); assert.equal(f.calls, 1);
   const key = "private-snapshot:" + rss_route_cache_key("/snapshot/1", []);
   const state = f.ports.route_cache.inspect(key, now);
@@ -192,7 +192,7 @@ test("兼容旧版公开及私密 XML，抓取时间在刷新后准确保存，�
   const cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 1, { store: repo });
   for (const prefix of ["public-snapshot:", "private-snapshot:"]) {
     assert.equal(cache.inspect(prefix + "old").saved_at, saved_at);
-    assert.equal(cache.resolve(prefix + "old", now).rendered.get("rss\n"), "old XML");
+    assert.equal((await cache.resolve(prefix + "old", now)).rendered.get("rss\n"), "old XML");
     await cache.run(prefix + "old", now, async () => ({ output: "{}", invoked: false,
       rendered: new Map([["rss\n", "new XML"]]) }), { force: true });
     assert.equal(repo.read(prefix + "old").saved_at, now);
@@ -203,7 +203,7 @@ test("兼容旧版公开及私密 XML，抓取时间在刷新后准确保存，�
   }
   assert.equal(repo.count(), 1);
   for (const prefix of ["public-snapshot:", "private-snapshot:"]) {
-    assert.equal(cache.resolve(prefix + "old", now).rendered.get("rss\n"), "new XML");
+    assert.equal((await cache.resolve(prefix + "old", now)).rendered.get("rss\n"), "new XML");
   }
 });
 
@@ -221,7 +221,7 @@ test("15:44 生成的 XML 在 15:54 Cookie 同步、清理和重启后仍可读�
     method: "PUT", body: JSON.stringify([{ domain: ".kuaishou.com", name: "sid", value: "updated" }]),
   }));
   f.repo.delete_expired(now);
-  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo });
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo, object_store: f.object_store });
   const state = f.ports.route_cache.inspect(key, now);
   assert.equal(state.status, "fresh");
   assert.equal(state.saved_at, saved_at);
@@ -239,10 +239,10 @@ test("大 XML 分块持久化，超过 L1 预算仍可返回；删除与清理�
   assert.equal(result.rendered.get("rss\n"), xml); assert.equal(cache.stats().entries, 0);
   cache.invalidate_all();
   const rebuilt = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: repo });
-  assert.equal(rebuilt.resolve("private-snapshot:large", Date.now()).rendered.get("atom\n"), xml);
+  assert.equal((await rebuilt.resolve("private-snapshot:large", Date.now())).rendered.get("atom\n"), xml);
   assert.ok(db.prepare("SELECT COUNT(*) AS count FROM rss_route_cache_chunks").get().count > 1);
   repo.delete_expired(Date.now() + RSS_ROUTE_CACHE_TTL_MS);
-  assert.equal(rebuilt.resolve("private-snapshot:large", Date.now() + RSS_ROUTE_CACHE_TTL_MS).rendered.get("rss\n"), xml);
+  assert.equal((await rebuilt.resolve("private-snapshot:large", Date.now() + RSS_ROUTE_CACHE_TTL_MS)).rendered.get("rss\n"), xml);
   repo.delete_oldest(0);
   assert.ok(repo.read("private-snapshot:large"));
   repo.delete("private-snapshot:large");

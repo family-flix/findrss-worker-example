@@ -328,8 +328,8 @@ export class ServiceDiscovery {
     let route_snapshot;
     if (managed && address.is_route()) {
       const key = rss_route_cache_key(address.route_pathname, url.searchParams);
-      route_snapshot = ["public-snapshot:", "private-snapshot:"]
-        .map(prefix => this.route_cache.resolve(prefix + key, Date.now()))
+      route_snapshot = (await Promise.all(["public-snapshot:", "private-snapshot:"]
+        .map(prefix => this.route_cache.resolve(prefix + key, Date.now()))))
         .find(value => value?.rendered?.get(address.format + "\n") === xml);
       if (!route_snapshot) throw do_error("读取结果已失效，请重新读取订阅源信息", 409);
     }
@@ -362,7 +362,7 @@ export class ServiceDiscovery {
       throw do_error(conflict.message, conflict.status);
     }
     const preview_id = request.headers.get("X-Feed-Preview-ID") || "";
-    const cached = this.route_cache?.resolve("discovery-preview:" + preview_id, Date.now());
+    const cached = await this.route_cache?.resolve("discovery-preview:" + preview_id, Date.now());
     const preview = cached ? JSON.parse(cached.output) : null;
     const now = Date.now();
     const id = crypto.randomUUID();

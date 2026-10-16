@@ -50,7 +50,7 @@ for (const require_token of [false, true]) test(`${require_token ? "私密" : "�
     assert.equal(state.saved_at, saved_at);
     assert.equal(state.persistent, true);
     assert.equal("expires_at" in state, false);
-    const snapshot = service.route_cache.resolve(key, now);
+    const snapshot = await service.route_cache.resolve(key, now);
     assert.equal(snapshot.rendered.get("rss\n"), "<rss/>");
     assert.equal(snapshot.rendered.get("atom\n"), "<feed/>");
   }

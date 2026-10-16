@@ -29,7 +29,7 @@ function fixture(t) {
     scripts: { list: () => [row], list_enabled: () => [row], find: () => row } };
   repo.access_tokens.insert({ id: "valid-token-id", user_id: "reader", name: "Reader", token_hash: "hash", token_hint: "hint",
     expires_at: null, created_at: 1, credit_balance: 10, total_credits_granted: 10 });
-  const ports = { route_cache: new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: store.repo }), schedule_alarm: async () => {} };
+  const ports = { route_cache: new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: store.repo, object_store: store.object_store }), schedule_alarm: async () => {} };
   const app = {};
   app.credit = new ServiceCredit({ repo, storage: store.storage });
   app.discovery = new ServiceDiscovery({ repo, route_cache: ports.route_cache, public_origin: "https://feeds.example",
@@ -65,7 +65,7 @@ test("读取结果跨缓存重建复用，保存即发布广场文章和 RSS/Ato
   assert.equal(f.executions, 1);
   assert.equal(f.repo.discovery.count(), 0);
   await assert.rejects(f.serve(), { status: 401 });
-  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache });
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache, object_store: f.object_store });
   f.app.discovery.route_cache = f.ports.route_cache;
   const source = await f.save(feed_url, data.preview_id, { poll_policy: { mode: "manual" } });
   assert.equal(source.snapshot.articles[0].title, "预览文章");
@@ -75,7 +75,7 @@ test("读取结果跨缓存重建复用，保存即发布广场文章和 RSS/Ato
   assert.equal(source.next_snapshot_at, null);
   assert.equal(f.published.sources[0].snapshot.articles[0].title, "预览文章");
   for (const format of ["rss", "atom"]) assert.match((await f.serve(format)).body, /预览文章/);
-  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache });
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache, object_store: f.object_store });
   assert.match((await f.serve()).body, /预览文章/);
   assert.equal(f.executions, 1);
   const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]);
@@ -102,9 +102,9 @@ test("新增、改为私密与删除订阅源都保留已有持久 XML，私密�
   await assert.rejects(f.serve(), { status: 401 });
   f.app.discovery.storage = f.storage;
   await f.app.discovery.delete_discovery_source(source.id);
-  const rebuilt = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache });
-  assert.ok(rebuilt.resolve(own_key, Date.now()).rendered.get("rss\n"));
-  assert.equal(rebuilt.resolve(key, Date.now()).rendered.get("rss\n"), "快手 XML");
+  const rebuilt = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache, object_store: f.object_store });
+  assert.ok((await rebuilt.resolve(own_key, Date.now())).rendered.get("rss\n"));
+  assert.equal((await rebuilt.resolve(key, Date.now())).rendered.get("rss\n"), "快手 XML");
 });
 
 test("预览保存为私密源只复用私密 XML，不发布文章，清理和重建后仍需身份访问", async t => {
@@ -119,7 +119,7 @@ test("预览保存为私密源只复用私密 XML，不发布文章，清理和�
   assert.doesNotMatch(JSON.stringify(f.published), /预览文章|example.com\/article/);
   await assert.rejects(f.serve(), { status: 401 });
   f.repo.rss_route_cache.delete_expired(Date.now() + RSS_ROUTE_CACHE_TTL_MS + 1);
-  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache });
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache, object_store: f.object_store });
   assert.match((await f.serve("atom", "valid-token-id")).body, /预览文章/);
   assert.equal(f.executions, 1);
 });
@@ -139,7 +139,7 @@ test("外部源读取一次即可保存广场快照，地址改变或临时缓�
     assert.ok(data.preview_id);
     if (mode === "expired") {
       f.sql.exec("UPDATE rss_route_cache SET expires_at = 1");
-      f.app.discovery.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache });
+      f.app.discovery.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache, object_store: f.object_store });
     }
     if (mode === "invalidated") f.app.discovery.route_cache.invalidate_all();
     const source = await f.save(mode === "changed" ? "https://example.com/other.xml" : feed_url, data.preview_id,
