@@ -355,6 +355,9 @@ async function dispatch(request, app) {
   if (url.pathname === "/_admin/scripts/debug" && request.method === "POST") {
     return app.scripts.debug_script(request);
   }
+  if (url.pathname === "/_admin/scripts/install-preview" && request.method === "POST") {
+    return app.scripts.preview_script_install(request);
+  }
   const preview_asset_match = url.pathname.match(/^\/_admin\/scripts\/preview-assets\/([a-f0-9-]{36})$/);
   if (preview_asset_match && ["GET", "HEAD"].includes(request.method)) {
     return app.scripts.preview_script_asset(request, preview_asset_match[1]);

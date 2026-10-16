@@ -46,7 +46,7 @@ export function ScriptModel(row) {
     tags: Object.freeze(script_tags(metadata.tags)),
     maintainers: Object.freeze(
       Array.isArray(metadata.maintainers) ? metadata.maintainers.map(value =>
-        value && typeof value === "object" ? Object.freeze({ nickname: String(value.nickname || ""),
+        value && typeof value === "object" ? Object.freeze({ nickname: String(value.nickname || value.name || ""),
           url: String(value.url || ""), avatar: String(value.avatar || "") }) : String(value)) : [],
     ),
     example: String(metadata.example || ""),
@@ -65,6 +65,8 @@ export function ScriptModel(row) {
     debug: metadata.debug === true,
     version: String(metadata.version || ""),
     published_version: String(metadata.published_version || (metadata.status !== "draft" ? metadata.version || "" : "")),
+    published_script: typeof metadata.published_script === "string" ? metadata.published_script
+      : metadata.status !== "draft" ? String(source.script || "") : null,
     script_hash: String(metadata.script_hash || ""),
     status: metadata.status === "draft" ? "draft" : "published",
     kind: script_type(source.script, metadata.kind ?? metadata.script_type),
@@ -102,12 +104,15 @@ export function ScriptModel(row) {
       example: state.example,
       parameters: state.parameters,
       description: state.description,
+      ...(metadata.config_schema ? { config_schema: metadata.config_schema } : {}),
+      config: metadata.config || {},
       ...(Array.isArray(metadata.routes) ? { routes: state.routes.map(entry => ({ ...entry, platform: { ...entry.platform }, tags: [...entry.tags] })) } : {}),
       cookie_grant_id: String(metadata.cookie_grant_id || ""),
       permissions: metadata.permissions || { cookies: [] },
       debug: state.debug,
       version: state.version,
       published_version: state.published_version,
+      published_script: state.published_script,
       script_hash: state.script_hash,
       status: state.status,
       kind: state.kind,

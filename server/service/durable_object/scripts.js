@@ -20,6 +20,8 @@ import { script_output } from "../../lib/script_output.js";
 import { sha256_hex } from "../../lib/crypto.js";
 import { LogThrottle } from "../../infra/log_throttle.js";
 import { ScriptInvokeError, compile_script_module, execute_script, script_failure_fields } from "../../infra/script_sandbox.js";
+import { script_config_value } from "../../lib/script_config.js";
+import { fetch_install_script } from "../../infra/script_install.js";
 import { rss_route_cache_key } from "../../infra/rss_cache.js";
 import {
   COALESCE_KEY_HEADER,
@@ -289,7 +291,8 @@ export class ServiceScript {
     const version = parsed.model.version;
     const published_version = previous.published_version || "";
     if (publishing && !parsed.model.is_after(published_version)) throw do_error("版本号必须高于上次正式版本 " + published_version, 409);
-    return { version, script_hash: await sha256_hex(script), published_version: publishing ? version : published_version };
+    return { version, script_hash: await sha256_hex(script), published_version: publishing ? version : published_version,
+      published_script: publishing ? script : previous.published_script ?? null };
   }
 
   /**
@@ -340,6 +343,10 @@ export class ServiceScript {
       throw do_error("脚本校验失败：" + compiled.error, 400);
     }
     const metadata = compiled.metadata || { name: "未命名脚本", path: "" };
+    if (body.config !== undefined) {
+      try { metadata.config = script_config_value(metadata.config_schema, body.config); }
+      catch (error) { throw do_error(error.message, 400); }
+    }
     metadata.debug = body.debug === true;
     metadata.status = status;
     metadata.kind = body.kind ?? metadata.kind ?? metadata.script_type ?? body.script_type ?? "rss";
@@ -367,8 +374,8 @@ export class ServiceScript {
       created_at: now,
       updated_at: now,
     }), metadata, now, status === "published");
-    this.invalidate_routes();
     const row = this.repo.scripts.find(script_id);
+    this.invalidate_routes();
     await this.app.discovery?.publish_catalog();
     return do_result({ script: ScriptModel.fromRow(row).toValue() }, 201);
   }
@@ -439,6 +446,11 @@ export class ServiceScript {
     if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
       throw do_error("脚本缺少有效的 route 元数据，请更新为模块格式", 400);
     }
+    metadata.config = ScriptModel.fromRow(existing).toValue().config;
+    if (body.config !== undefined) {
+      try { metadata.config = script_config_value(metadata.config_schema, body.config); }
+      catch (error) { throw do_error(error.message, 400); }
+    }
     metadata.debug = body.debug === undefined
       ? ScriptModel.fromRow(existing).debug : body.debug;
     metadata.status = status;
@@ -466,8 +478,8 @@ export class ServiceScript {
       updated_at: now,
     }), metadata, now, status === "published" && (body.status === "published" || script !== existing.script
       || metadata.published_version !== previous_metadata.published_version));
-    this.invalidate_routes();
     const row = this.repo.scripts.find(script_id);
+    this.invalidate_routes();
     await this.app.discovery?.publish_catalog();
     return { script: ScriptModel.fromRow(row).toValue() }
   }
@@ -583,11 +595,29 @@ export class ServiceScript {
   }
 
   /**
-   * 用实际链接执行当前草稿，返回与 /debug 一致的执行详情。
-   * 跳过保存、公开缓存和积分，复用真实 fetchText / Cookie / invoke。
+   * 下载或读取待安装源码，只编译元数据，不执行 handler 或写入脚本。
    * @param {Request} request
    * @returns {Promise<Record<string, unknown>>}
    */
+  async preview_script_install(request) {
+    const max_bytes = ScriptModel.MAX_BYTES * 6 + 1024;
+    if (Number(request.headers.get("Content-Length") || 0) > max_bytes) throw do_error("request body is too large", 413);
+    const text = await request.text();
+    if (new TextEncoder().encode(text).byteLength > max_bytes) throw do_error("request body is too large", 413);
+    let body;
+    try { body = JSON.parse(text); } catch { throw do_error("invalid JSON", 400); }
+    if (!body || typeof body.input !== "string" || !body.input.trim()) throw do_error("请输入脚本 URL 或脚本内容", 400);
+    let script = body.input, source_url = "";
+    if (new TextEncoder().encode(script).byteLength > ScriptModel.MAX_BYTES) throw do_error("脚本超过 128KB 限制", 413);
+    if (/^[a-z][a-z\d+.-]*:\/\/\S+$/i.test(script.trim())) {
+      try { ({ script, source_url } = await fetch_install_script(script.trim())); }
+      catch (error) { throw do_error(error.name === "TimeoutError" ? "脚本下载超时，请重试" : error.message, 400); }
+    }
+    const compiled = await compile_script_module(script);
+    if (compiled.error || !compiled.metadata) throw do_error("脚本校验失败：" + compiled.error, 400);
+    return { script, source_url, metadata: compiled.metadata };
+  }
+
   async preview_script_routes(request) {
     const max_bytes = ScriptTestRequestModel.MAX_SCRIPT_BYTES * 6 + 1024;
     if (Number(request.headers.get("Content-Length") || 0) > max_bytes) throw do_error("request body is too large", 413);
@@ -641,6 +671,8 @@ export class ServiceScript {
     }
     const metadata = { ...selected.metadata, debug: true, debug_request: true };
     const stored = draft.route ? this.repo.scripts.find_config(draft.route) : null;
+    metadata.config_schema = compiled.metadata.config_schema;
+    metadata.config = stored ? ScriptModel.fromRow(stored).toValue().config : {};
     const version = draft.version ?? (stored ? ScriptModel.fromRow(stored).version : "");
     const grant_id = body.cookie_grant_id || (stored ? ScriptModel.fromRow(stored).toValue().cookie_grant_id : "") || "";
     const cookie_access = await this.cookie_access(draft.script, { ...compiled.metadata, version }, draft.route, grant_id, true);
@@ -666,7 +698,7 @@ export class ServiceScript {
       const returned = JSON.parse(result.output);
       const rendered = script_output(metadata, returned);
       debug.preview_assets = this.preview_assets.create({ script: draft.script,
-        metadata: { ...compiled.metadata, version }, script_id: draft.route, grant_id,
+        metadata: { ...compiled.metadata, config: metadata.config, version }, script_id: draft.route, grant_id,
         media: rendered.descriptor ? { route: metadata, descriptor: rendered.descriptor, kind: rendered.kind || "img" } : null,
         public_origin: selected.context.public_origin });
       return finish(200);
@@ -703,7 +735,7 @@ export class ServiceScript {
       .filter(entry => entry.match).sort((left, right) => right.match.score - left.match.score)[0];
     if (!selected?.metadata.allowed_hosts?.length) throw do_error("草稿中没有匹配的媒体代理路由", 404);
     target.searchParams.delete("token");
-    const metadata = { ...selected.metadata, debug_request: true };
+    const metadata = { ...selected.metadata, config_schema: snapshot.metadata.config_schema, config: snapshot.metadata.config, debug_request: true };
     const cookie_access = await this.cookie_access(snapshot.script, snapshot.metadata,
       snapshot.script_id, snapshot.grant_id, true);
     try {
@@ -774,6 +806,8 @@ export class ServiceScript {
     const route_index = normalized.route_index ?? 0;
     const metadata = entries[route_index];
     if (!metadata) throw do_error("route_index 超出路由范围", 400);
+    metadata.config_schema = compiled.metadata.config_schema;
+    metadata.config = normalized.route ? ScriptModel.fromRow(this.repo.scripts.find_config(normalized.route)).toValue().config : {};
     let example_url;
     try {
       example_url = new URL(String(metadata.example), "https://example.invalid");
@@ -1000,7 +1034,7 @@ export class ServiceScript {
     let metadata;
     try {
       const root_metadata = JSON.parse(String(selected.row.metadata_json));
-      metadata = { ...selected.metadata, routes: root_metadata.routes, permissions: root_metadata.permissions, version: root_metadata.version || "", cookie_grant_id: root_metadata.cookie_grant_id, debug: root_metadata.debug === true };
+      metadata = { ...selected.metadata, config_schema: root_metadata.config_schema, config: root_metadata.config, routes: root_metadata.routes, permissions: root_metadata.permissions, version: root_metadata.version || "", cookie_grant_id: root_metadata.cookie_grant_id, debug: root_metadata.debug === true };
       metadata.debug_request = debug_request;
     } catch {
       throw do_error("script metadata is invalid", 500);

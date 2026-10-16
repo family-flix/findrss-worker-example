@@ -1,6 +1,8 @@
 import { ScriptAgentModel } from "../components/script_agent.js";
 import { PaginationModel } from "../components/pagination.js";
 import { script_platform } from "../components/discovery_platform.js";
+import { createTwoFilesPatch } from "diff";
+import { ScriptConfigModel } from "../components/script_config.model.js";
 
 import { DEFAULT_RSS_SCRIPT, DEFAULT_HOT_SCRIPT } from "./script.default.js";
 
@@ -84,7 +86,7 @@ function normalize_script(raw) {
       ? raw.maintainers.map((value) =>
           value && typeof value === "object"
             ? {
-                nickname: String(value.nickname || ""),
+                nickname: String(value.nickname || value.name || ""),
                 url: safe_url(value.url),
                 avatar: safe_url(value.avatar),
               }
@@ -97,6 +99,8 @@ function normalize_script(raw) {
         ? raw.parameters
         : {},
     description: String(raw.description || ""),
+    config_schema: raw.config_schema || null,
+    config: raw.config || {},
     cookie_grant_id: String(raw.cookie_grant_id || ""),
     cookie_authorization: {
       status: ["active", "required"].includes(raw.cookie_authorization?.status)
@@ -105,6 +109,8 @@ function normalize_script(raw) {
       message: String(raw.cookie_authorization?.message || ""),
     },
     script: String(raw.script || ""),
+    published_script: typeof raw.published_script === "string" ? raw.published_script
+      : raw.status !== "draft" ? String(raw.script || "") : null,
     enabled: raw.enabled === true,
     debug: raw.debug === true,
     status: raw.status === "draft" ? "draft" : "published",
@@ -178,6 +184,9 @@ function ScriptViewModel() {
   const script_type_ = ref("rss");
   const draft_type_ = ref("rss");
   const draft_script_ = ref("");
+  const published_script_ = ref(null);
+  const diff_open_ = ref(false);
+  const diff_text_ = ref("");
   const draft_version_ = ref("");
 
   const debug_url_ = ref("");
@@ -211,6 +220,10 @@ function ScriptViewModel() {
   const list_error_ = ref("");
   const form_error_ = ref("");
   const form_message_ = ref("");
+  const install_open_ = ref(false);
+  const install_input_ = ref("");
+  const install_busy_ = ref(false);
+  const install_preview_ = ref(null);
 
   const script_logs_ = refarr([]);
   const script_logs_route_ = ref("");
@@ -229,6 +242,9 @@ function ScriptViewModel() {
     script_type: script_type_,
     draft_type: draft_type_,
     draft_script: draft_script_,
+    diff_open: diff_open_,
+    diff_text: diff_text_,
+    diff_available: computed(published_script_, script => script !== null),
     draft_version: draft_version_,
 
     debug_url: debug_url_,
@@ -244,12 +260,19 @@ function ScriptViewModel() {
     enabled_pending: enabled_pending_,
     status_pending: status_pending_,
     editing_id: editing_id_,
+    form_title: combine({ id: editing_id_, scripts: scripts_ }, ({ id, scripts }) =>
+      id ? `编辑脚本：${scripts.find(script => script.id === id)?.name || id}` : "新增脚本",
+    ),
     form_open: form_open_,
     loading: loading_,
     saving: saving_,
     list_error: list_error_,
     form_error: form_error_,
     form_message: form_message_,
+    install_open: install_open_,
+    install_input: install_input_,
+    install_busy: install_busy_,
+    install_preview: install_preview_,
 
     script_logs: script_logs_,
     script_logs_route: script_logs_route_,
@@ -527,6 +550,53 @@ function ScriptViewModel() {
   }
 
   const methods = {
+    open_install() {
+      if (saving_.value || install_busy_.value || cookie_consent_.value.open) return;
+      methods.reset_draft();
+      install_input_.set("");
+      install_open_.set(true);
+    },
+    close_install() {
+      if (saving_.value || install_busy_.value || cookie_consent_.value.open) return;
+      methods.reset_draft();
+    },
+    set_install_input(value) {
+      if (saving_.value || install_busy_.value || cookie_consent_.value.open) return;
+      install_input_.set(String(value));
+      install_preview_.set(null);
+      draft_script_.set("");
+      cookie_grant_id = "";
+      form_error_.set("");
+    },
+    async preview_install() {
+      if (install_busy_.value || saving_.value || cookie_consent_.value.open) return;
+      install_preview_.set(null);
+      form_error_.set("");
+      if (!install_input_.value.trim()) {
+        form_error_.set("请输入脚本 URL 或脚本内容");
+        return;
+      }
+      install_busy_.set(true);
+      try {
+        const result = await request_json("/admin/api/scripts/install-preview", {
+          method: "POST", body: JSON.stringify({ input: install_input_.value }),
+        });
+        draft_script_.set(result.script);
+        draft_type_.set(result.metadata.kind);
+        cookie_grant_id = "";
+        // 先解除忙碌状态，避免新建控件在挂载前错过解禁事件。
+        install_busy_.set(false);
+        install_preview_.set(result);
+      } catch (error) {
+        form_error_.set(error.message || String(error));
+      } finally {
+        install_busy_.set(false);
+      }
+    },
+    save_install(status = "draft") {
+      if (!install_preview_.value || install_busy_.value || cookie_consent_.value.open) return;
+      return methods.save_script(status);
+    },
     start() {
       return load();
     },
@@ -700,6 +770,16 @@ function ScriptViewModel() {
       if (saving_.value) return;
       methods.reset_draft();
     },
+    open_diff() {
+      if (!form_open_.value || !editing_id_.value || !state.diff_available.value) return;
+      diff_text_.set(published_script_.value === draft_script_.value ? "" : createTwoFilesPatch(
+        "published.js", "draft.js", published_script_.value, draft_script_.value,
+      ));
+      diff_open_.set(true);
+    },
+    close_diff() {
+      diff_open_.set(false);
+    },
     edit_script(script_id) {
       if (saving_.value) return;
       const script = scripts_.value.find((item) => item.id === script_id);
@@ -707,6 +787,8 @@ function ScriptViewModel() {
       agent?.methods.close();
       draft_revision++;
       reset_debug();
+      diff_open_.set(false);
+      published_script_.set(script.published_script);
       editing_id_.set(script.id);
       draft_type_.set(script.kind);
       draft_script_.set(script.script);
@@ -724,11 +806,16 @@ function ScriptViewModel() {
       form_open_.set(true);
     },
     reset_draft() {
+      install_open_.set(false);
+      install_preview_.set(null);
       cookie_grant_id = "";
       agent?.methods.close();
       draft_revision++;
       reset_debug();
       form_open_.set(false);
+      diff_open_.set(false);
+      diff_text_.set("");
+      published_script_.set(null);
 
       editing_id_.set("");
       draft_script_.set("");
@@ -774,6 +861,11 @@ function ScriptViewModel() {
               body,
             });
         const saved = normalize_script(result.script);
+        if (install_open_.value) {
+          script_type_.set(saved.kind);
+          query_.set("");
+          filter_status_.set("all");
+        }
         scripts_.as(
           was_editing
             ? scripts_.value.map((item) =>
@@ -815,7 +907,7 @@ function ScriptViewModel() {
       cookie_consent_.as({ ...cookie_consent_.value, busy: true, error: "" });
       try {
         if (
-          form_open_.value &&
+          (form_open_.value || install_open_.value) &&
           (draft_script_.value !== pending.source ||
             editing_id_.value !== pending.script_id ||
             draft_version_.value.trim() !== pending.version)
@@ -1084,6 +1176,12 @@ function ScriptViewModel() {
     total: computed(visible_scripts, (scripts) => scripts.length),
     loading: loading_,
   });
+  const config = ScriptConfigModel({ save: async (id, value) => {
+    await request_json("/admin/api/scripts/" + encodeURIComponent(id), {
+      method: "PATCH", body: JSON.stringify({ config: value }),
+    });
+    await load();
+  } });
   const paged_scripts = combine(
     { scripts: visible_scripts, pagination: pagination.state },
     ({ scripts, pagination: page }) =>
@@ -1092,7 +1190,7 @@ function ScriptViewModel() {
         (page.page + 1) * page.page_size,
       ),
   );
-  return { state, methods, visible_scripts, paged_scripts, pagination, agent };
+  return { state, methods, visible_scripts, paged_scripts, pagination, agent, config };
 }
 
 export { normalize_script, normalize_log_lines, ScriptViewModel };

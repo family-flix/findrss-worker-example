@@ -43,6 +43,7 @@ import { script_util_source } from "./script_util.js";
 import { script_type } from "../lib/script_type.js";
 import { ScriptCookiePermissionsModel } from "../domain/script_cookie_permissions.js";
 import { SandboxLanePool } from "./sandbox_lanes.js";
+import { validate_config_schema, script_config_value } from "../lib/script_config.js";
 // Workers 禁止运行时 fetch wasm，必须在构建期以模块形式导入（见仓库 README 的
 // Cloudflare Workers 章节），再用 newVariant 注入。
 import quickjs_wasm_module from "./quickjs.wasm";
@@ -100,6 +101,7 @@ ${script_metadata_source(script_type(script))}`,
       const metadata_json = vm.getString(metadata_handle);
       metadata_handle.dispose();
       const metadata = JSON.parse(metadata_json);
+      validate_config_schema(metadata.config_schema);
       metadata.permissions = ScriptCookiePermissionsModel(metadata.permissions).toValue();
       const paths = new Set();
       for (const entry of metadata.routes) {
@@ -388,6 +390,9 @@ export async function execute_script_inner(
   const upstream_requests = [];
   try {
     inject_script_globals(vm);
+    try {
+      route_metadata = { ...route_metadata, config: route_metadata.config_schema ? script_config_value(route_metadata.config_schema, route_metadata.config) : {} };
+    } catch (error) { throw new ScriptError("runtime", "脚本配置无效，请在脚本卡片中配置：" + error.message); }
     const get_cookies = promises.bind("cookies.get", async id_handle => {
       if (!cookie_access) throw new Error("Cookie 权限尚未获得管理员确认");
       return vm.unwrapResult(vm.evalCode("(" + JSON.stringify(cookie_access.get(vm.getString(id_handle))) + ")"));

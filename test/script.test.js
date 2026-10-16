@@ -45,11 +45,13 @@ test("ScriptModel 优先取 metadata_json，缺失字段回退到 row 上的列"
       example: "biz",
       parameters: { biz: "Mzkx" },
       description: "说明",
+      config: {},
       cookie_grant_id: "",
       permissions: { cookies: [] },
       debug: false,
       version: "",
       published_version: "",
+      published_script: "export const route = {}",
       script_hash: "",
       status: "published",
       script_type: "rss",
@@ -76,6 +78,14 @@ test("ScriptModel 优先取 metadata_json，缺失字段回退到 row 上的列"
   assert.equal(bare.enabled, false);
   assert.deepEqual(bare.maintainers, []);
   assert.deepEqual(bare.parameters, {});
+});
+
+test("正式源码兼容旧正式脚本，草稿没有快照时不以版本号或当前源码冒充正式源码", () => {
+  const value = metadata => value_of({ script: "当前源码", metadata_json: JSON.stringify(metadata) });
+  assert.equal(value({}).published_script, "当前源码");
+  assert.equal(value({ status: "draft", published_version: "1.0.0" }).published_script, null);
+  assert.equal(value({ status: "draft", published_script: "正式源码" }).published_script, "正式源码");
+  assert.equal(value({ status: "draft", published_script: "" }).published_script, "");
 });
 
 test("ScriptModel 对坏 metadata_json、数组与标量都归一成空对象", () => {

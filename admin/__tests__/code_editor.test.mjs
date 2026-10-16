@@ -67,6 +67,41 @@ test("CodeMirror 同步 Model 草稿、只读状态，并在卸载时释放订�
   assert.equal(disabled.handlers.size, 0);
 });
 
+test("Diff 只读显示新增与删除背景，并保持原始差异内容", () => {
+  const handlers = {};
+  let options, refreshed = false;
+  const editor = {
+    getWrapperElement: () => ({ style: {}, setAttribute() {} }),
+    getInputField: () => ({ setAttribute() {} }),
+    on(name, handler) { handlers[name] = handler; },
+    refresh() { refreshed = true; }, toTextArea() {},
+  };
+  const CodeEditor = vm.runInNewContext(
+    "(" + readFileSync(new URL("../components/code_editor.js", import.meta.url), "utf8")
+      .match(/function CodeEditor\([^]*?\n\}/)[0] + ")",
+    { Textarea: props => props, source_value, subscribe_source, dispose_all,
+      CodeMirror: { fromTextArea(_textarea, config) { options = config; return editor; } } },
+  );
+  const text = "@@ -1 +1 @@\n-old\n+new\n";
+  const view = CodeEditor({ value: text, mode: "diff", readOnly: true,
+    attributes: { n: "diff-code", "aria-label": "差异" } });
+  view.onMounted({ target: {} });
+  assert.equal(options.mode, "diff");
+  assert.equal(options.readOnly, true);
+  assert.equal(view.value, text);
+  assert.equal(refreshed, true);
+  for (const [text, expected] of [["+new", "var(--frui-color-success-bg)"],
+    ["-old", "var(--frui-color-danger-bg)"], [" context", undefined]]) {
+    const token = { style: {} };
+    const element = { style: {}, querySelectorAll: () => [token] };
+    handlers.renderLine(editor, { text }, element);
+    assert.equal(element.style.background, expected);
+    assert.equal(token.style.color, text[0] === "+" ? "var(--frui-color-success)" :
+      text[0] === "-" ? "var(--frui-color-danger)" : undefined);
+  }
+  view.onUnmounted();
+});
+
 test("只读输出允许选择复制，响应类型切换时更新 mode，并释放 mode 订阅", () => {
   const make_ref = value => {
     const handlers = new Set();

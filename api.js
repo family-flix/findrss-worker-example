@@ -325,6 +325,9 @@ export default {
       ) {
         return admin_script_request(env, request, "/debug");
       }
+      if (url.pathname === "/admin/api/scripts/install-preview" && request.method === "POST") {
+        return admin_script_request(env, request, "/install-preview");
+      }
       const preview_asset_match = url.pathname.match(/^\/admin\/api\/scripts\/preview-assets\/([a-f0-9-]{36})$/);
       if (preview_asset_match && ["GET", "HEAD"].includes(request.method)) {
         return admin_script_asset_request(env, request, preview_asset_match[1]);

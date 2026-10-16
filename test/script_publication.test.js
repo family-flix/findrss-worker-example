@@ -67,6 +67,30 @@ test("正式发布必填三段递增版本，绑定源码哈希，草稿保留�
   assert.equal(restored.published_version, "2.0.0");
 });
 
+test("草稿反复保存保留正式源码，重新发布才更新对比基准，旧正式脚本保存前自动保留源码", async () => {
+  const { service, rows } = setup();
+  const created = (await service.create_script(edit({ script: source, status: "draft" }))).data.script;
+  assert.equal(created.published_script, null);
+  const id = created.id;
+  await service.update_script(edit({ status: "published", version: "1.0.0" }), id);
+  const metadata = JSON.parse(rows[0].metadata_json);
+  delete metadata.published_script;
+  rows[0].metadata_json = JSON.stringify(metadata);
+  for (const script of [source + "\n// 草稿一", "未完成的草稿二"]) {
+    const draft = (await service.update_script(edit({ status: "draft", script }), id)).script;
+    assert.equal(draft.script, script);
+    assert.equal(draft.published_script, source);
+    assert.equal(JSON.parse(rows[0].metadata_json).published_script, source);
+    assert.equal((await service.list_scripts()).scripts[0].published_script, source);
+  }
+  assert.equal((await service.update_script(edit({ enabled: false }), id)).script.published_script, source);
+  const next = source + "\n// 正式二";
+  const published = (await service.update_script(edit({ script: next, status: "published", version: "1.0.1" }), id)).script;
+  assert.equal(published.published_script, next);
+  await assert.rejects(service.update_script(edit({ script: source, status: "published", version: "1.0.1" }), id));
+  assert.equal((await service.list_scripts()).scripts[0].published_script, next);
+});
+
 test("旧脚本无编号时仍可启停，下一次正式发布需指定版本号", async () => {
   const { service, rows } = setup();
   const id = (await service.create_script(edit({ script: source, version: "1.0.0" }))).data.script.id;

@@ -3,6 +3,7 @@ import "codemirror/mode/javascript/javascript.js";
 import "codemirror/mode/xml/xml.js";
 import "codemirror/mode/css/css.js";
 import "codemirror/mode/htmlmixed/htmlmixed.js";
+import "codemirror/mode/diff/diff.js";
 import { Textarea } from "./frui/textarea.js";
 import { source_value, subscribe_source, dispose_all } from "./frui/shared.js";
 
@@ -24,6 +25,17 @@ function CodeEditor({ value, disabled, readOnly = false, mode = "javascript", at
       wrapper.setAttribute("data-n", attributes.n + "-editor");
       editor.getInputField().setAttribute("aria-label", attributes["aria-label"]);
       editor.getInputField().setAttribute("data-n", attributes.n + "-input");
+      if (source_value(mode) === "diff") {
+        editor.on("renderLine", (_, line, element) => {
+          const color = { "+": "success", "-": "danger" }[line.text[0]];
+          if (!color) return;
+          element.style.background = `var(--frui-color-${color}-bg)`;
+          for (const token of element.querySelectorAll(".cm-positive, .cm-negative")) {
+            token.style.color = `var(--frui-color-${color})`;
+          }
+        });
+        editor.refresh();
+      }
       editor.on("change", (_, change) => {
         if (change.origin !== "setValue" && !readonly_value()) onInput?.({ target: { value: editor.getValue() } });
       });

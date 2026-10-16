@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { applyPatch } from "diff";
 import { DEFAULT_RSS_SCRIPT, DEFAULT_HOT_SCRIPT } from "../pages/script.default.js";
 
 // 脚本管理页的 Timeless stub：只实现 Model/View 用到的构造器与 ref 语义。
@@ -90,11 +91,11 @@ globalThis.window = {
       } });
       return node;
     },
-    Show({ when, ok, fail }) {
+    Show({ when, ok, fail, else: fallback }) {
       const node = create_element("show", {}, []);
       Object.defineProperty(node, "children", { get() {
         const value = when && when.__is_ref ? when.value : when;
-        return value ? [ok()] : fail ? [fail()] : [];
+        return value ? [ok()] : (fallback || fail) ? [(fallback || fail)()] : [];
       } });
       return node;
     },
@@ -190,6 +191,131 @@ window.FindRSSAdminUI.PageHeader = (props) => create_element("view", props, [cre
 
 const { ScriptPage } = await import("../pages/script.js");
 const { normalize_script: normalize_fixture } = await import("../pages/script.model.js");
+const { ScriptConfigModel } = await import("../components/script_config.model.js");
+const { ScriptViewModel } = await import("../pages/script.model.js");
+
+const install_fixture = {
+  script: "export const route = { path: '/installed', name: '安装测试', handler() { return {}; } };",
+  source_url: "https://example.com/script.js",
+  metadata: { kind: "hot", name: "安装测试", routes: [{ name: "安装测试", path: "/installed", example: "/installed", parameters: {} }],
+    permissions: { cookies: [{ id: "session", names: ["SID"], origin: "https://example.com", purpose: "读取订阅内容" }] } },
+};
+
+test("安装按钮打开独立弹窗，URL/源码先解析预览，确认前不保存；修改输入使预览失效", async () => {
+  const calls = [];
+  fetch_handler = async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return Response.json(install_fixture);
+  };
+  const root = build_page([], false);
+  assert.equal(find_node(root, "script-install-dialog"), undefined);
+  find_node(root, "script-install-button").props.onClick();
+  assert.equal(find_node(root, "script-form-dialog"), undefined);
+  await find_node(root, "script-install-parse").props.onClick();
+  assert.equal(calls.length, 0);
+  assert.match(child_texts(find_node(root, "script-install-error")).join(""), /请输入/);
+  for (const input of [install_fixture.source_url, install_fixture.script]) {
+    find_node(root, "script-install-input").props.onInput({ target: { value: input } });
+    await find_node(root, "script-install-parse").props.onClick();
+    assert.deepEqual(calls.at(-1), { url: "/admin/api/scripts/install-preview", body: { input } });
+    assert.deepEqual(child_texts(find_node(root, "script-install-name")), ["安装测试"]);
+    assert.match(child_texts(find_node(root, "script-install-permissions")).join(""), /SID/);
+    assert.equal(find_node(root, "script-install-source-code").props.value.value, install_fixture.script);
+    assert.equal(find_node(root, "script-install-source-code").props.attributes.readonly, true);
+    find_node(root, "script-install-input").props.onInput({ target: { value: "changed" } });
+    assert.equal(find_node(root, "script-install-preview"), undefined);
+    assert.equal(find_node(root, "script-install-save"), undefined);
+  }
+  find_node(root, "script-install-cancel").props.onClick();
+  assert.equal(find_node(root, "script-install-dialog"), undefined);
+  assert.equal(calls.length, 2);
+});
+
+test("安装解析与保存期间阻止重复提交和关闭，失败保留输入与预览，成功按识别类型显示新脚本", async t => {
+  refarr_seeds = [];
+  const model = ScriptViewModel();
+  t.after(() => model.methods.destroy());
+  const calls = [];
+  let finish;
+  fetch_handler = (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return new Promise(resolve => { finish = resolve; });
+  };
+  model.methods.open_install();
+  model.methods.set_install_input(install_fixture.source_url);
+  const parsing = model.methods.preview_install();
+  await model.methods.preview_install();
+  model.methods.close_install();
+  model.methods.set_install_input("changed");
+  assert.equal(model.state.install_input.value, install_fixture.source_url);
+  assert.equal(model.state.install_open.value, true);
+  assert.equal(calls.length, 1);
+  finish(Response.json({ error: "下载失败" }, { status: 400 }));
+  await parsing;
+  assert.match(model.state.form_error.value, /下载失败/);
+  assert.equal(model.state.install_preview.value, null);
+  const retry = model.methods.preview_install();
+  const set_preview = model.state.install_preview.set.bind(model.state.install_preview);
+  model.state.install_preview.set = value => {
+    if (value) assert.equal(model.state.install_busy.value, false);
+    set_preview(value);
+  };
+  finish(Response.json(install_fixture));
+  await retry;
+  const saving = model.methods.save_install();
+  await model.methods.save_install();
+  model.methods.close_install();
+  assert.equal(model.state.install_open.value, true);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2].body.script, install_fixture.script);
+  assert.equal(calls[2].body.kind, "hot");
+  assert.equal(calls[2].body.status, "draft");
+  finish(Response.json({ error: "保存失败" }, { status: 400 }));
+  await saving;
+  assert.equal(model.state.install_preview.value.script, install_fixture.script);
+  assert.match(model.state.form_error.value, /保存失败/);
+  const saved = model.methods.save_install();
+  finish(Response.json({ script: { ...script_fixture, id: "installed", kind: "hot", status: "draft", script: install_fixture.script } }));
+  await saved;
+  assert.equal(model.state.install_open.value, false);
+  assert.equal(model.state.script_type.value, "hot");
+  assert.equal(model.visible_scripts.value[0].id, "installed");
+});
+
+test("发布安装沿用版本校验和 Cookie 授权，取消不授权，确认后用同一份源码保存", async t => {
+  refarr_seeds = [];
+  const model = ScriptViewModel();
+  t.after(() => model.methods.destroy());
+  const calls = [];
+  fetch_handler = async (url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push({ url, body });
+    if (url.endsWith("/install-preview")) return Response.json(install_fixture);
+    if (url.endsWith("/cookie-grants")) return Response.json({ cookie_grant_id: "install-grant" });
+    if (body.cookie_grant_id) return Response.json({ script: { ...script_fixture, id: "installed", status: "published" } });
+    return Response.json({ error: "需要授权", cookie_permissions: { script_id: "", version: body.version,
+      script_hash: "source-hash", permissions: install_fixture.metadata.permissions, visibility: {} } }, { status: 409 });
+  };
+  model.methods.open_install();
+  model.methods.set_install_input(install_fixture.source_url);
+  await model.methods.preview_install();
+  await model.methods.save_install("published");
+  assert.match(model.state.form_error.value, /版本号/);
+  assert.equal(calls.length, 1);
+  model.methods.set_draft("version", "1.0.0");
+  await model.methods.save_install("published");
+  assert.equal(model.state.cookie_consent.value.open, true);
+  model.methods.close_install();
+  assert.equal(model.state.install_open.value, true);
+  model.methods.cancel_cookie_consent();
+  assert.equal(calls.length, 2);
+  await model.methods.save_install("published");
+  await model.methods.confirm_cookie_consent();
+  assert.equal(calls[3].url, "/admin/api/scripts/cookie-grants");
+  assert.equal(calls[3].body.script, install_fixture.script);
+  assert.equal(calls[4].body.cookie_grant_id, "install-grant");
+  assert.equal(model.state.install_open.value, false);
+});
 
 /** 每次构建都重置 refarr 预置数据（ViewModel 是每次调用新建的）。 */
 function build_page(script = script_fixture, open = true) {
@@ -198,6 +324,98 @@ function build_page(script = script_fixture, open = true) {
   if (open) find_node(root, "script-create-button").props.onClick();
   return root;
 }
+
+test("脚本配置按钮按 Schema 渲染、校验、保存并重新填入旧值；取消不提交", async () => {
+  const config_schema = { type: "object", required: ["token"], properties: {
+    token: { type: "string", title: "Token", minLength: 1, writeOnly: true },
+    count: { type: "integer", minimum: 0, maximum: 10, default: 0 },
+    enabled: { type: "boolean", default: false },
+    mode: { type: "string", enum: ["all", "new"], enumDescriptions: ["全部", "最新"], default: "new" },
+    options: { type: "object", properties: { tags: { type: "array", items: { type: "string" } } } },
+  } };
+  let saved = { ...script_fixture, id: "configured", config_schema, config: { token: "old" } };
+  const requests = [];
+  fetch_handler = async (url, options) => {
+    if (options?.method === "PATCH") {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      saved = { ...saved, config: body.config, updated_at: saved.updated_at + 1 };
+      return Response.json({ script: saved });
+    }
+    return Response.json({ scripts: [saved] });
+  };
+  assert.equal(find_node(build_page(script_fixture, false), "script-config-button"), undefined);
+  const root = build_page(saved, false);
+  find_node(root, "script-config-button").props.onClick();
+  assert.ok(find_node(root, "script-config-dialog"));
+  assert.equal(find_node(root, "script-config-field-token").props.type, "password");
+  assert.equal(find_node(root, "script-config-field-count").props.value.value, "0");
+  assert.equal(find_node(root, "script-config-field-enabled").props.checked.value, false);
+  assert.deepEqual(find_node(root, "script-config-field-mode").props.options.map(option => option.label), ["全部", "最新"]);
+  find_node(root, "script-config-field-token").props.onChange("");
+  assert.equal(await find_node(root, "script-config-save").props.onClick(), false);
+  assert.equal(requests.length, 0);
+  assert.match(find_node(root, "script-config-error").children[0].value, /token/);
+  find_node(root, "script-config-field-token").props.onChange("new");
+  find_node(root, "script-config-field-mode").props.onChange({ target: { value: '"all"' } });
+  find_node(root, "script-config-field-options-tags").props.onChange('["news"]');
+  assert.equal(await find_node(root, "script-config-save").props.onClick(), true);
+  assert.deepEqual(requests, [{ config: { token: "new", count: 0, enabled: false, mode: "all", options: { tags: ["news"] } } }]);
+  assert.equal(find_node(root, "script-config-dialog"), undefined);
+  find_node(root, "script-config-button").props.onClick();
+  assert.equal(find_node(root, "script-config-field-token").props.value.value, "new");
+  find_node(root, "script-config-field-token").props.onChange("cancelled");
+  find_node(root, "script-config-cancel").props.onClick();
+  assert.equal(requests.length, 1);
+});
+
+test("配置 Model 保留失败输入、防止重复保存并按新 Schema 切换字段", async () => {
+  let reject_save;
+  const model = ScriptConfigModel({ save: () => new Promise((resolve, reject) => { reject_save = reject; }) });
+  const script = { id: "one", config_schema: { type: "object", properties: {
+    amount: { type: "number" }, list: { type: "array", items: { type: "integer" } },
+  } }, config: {} };
+  model.methods.open(script);
+  model.methods.set_field('["list"]', "[");
+  assert.equal(await model.methods.save(), false);
+  assert.match(model.state.error.value, /JSON 数组/);
+  model.methods.set_field('["list"]', "[0]");
+  model.methods.set_field('["amount"]', "0.5");
+  const pending = model.methods.save();
+  assert.equal(model.state.busy.value, true);
+  model.methods.close();
+  assert.equal(model.state.open.value, true);
+  assert.equal(await model.methods.save(), false);
+  reject_save(new Error("保存失败"));
+  assert.equal(await pending, false);
+  assert.equal(model.state.fields.value[0].value.value, "0.5");
+  assert.equal(model.state.error.value, "保存失败");
+  model.methods.close();
+  model.methods.open({ id: "two", config_schema: { type: "object", properties: { title: { type: "string", default: "新表单" } } } });
+  assert.deepEqual(model.state.fields.value.map(field => field.path), [["title"]]);
+  assert.equal(model.state.fields.value[0].value.value, "新表单");
+});
+
+test("Schema 移除字段或把字段改为对象后，配置表单仍可修复并保存，取消不删除旧值", async () => {
+  let saved;
+  const model = ScriptConfigModel({ save: async (id, config) => { saved = config; } });
+  const config = { removed: "old", options: "legacy" };
+  const script = { id: "updated", config, config_schema: { type: "object", additionalProperties: false, properties: {
+    options: { type: "object", properties: { title: { type: "string" } } },
+  } } };
+  model.methods.open(script);
+  model.methods.close();
+  assert.deepEqual(config, { removed: "old", options: "legacy" });
+  model.methods.open(script);
+  model.methods.set_field('["options","title"]', "updated");
+  assert.equal(await model.methods.save(), true);
+  assert.deepEqual(saved, { options: { title: "updated" } });
+  model.methods.open({ id: "empty-object", config_schema: { type: "object", required: ["options"], properties: {
+    options: { type: "object", properties: {} },
+  } } });
+  assert.equal(await model.methods.save(), true);
+  assert.deepEqual(saved, { options: {} });
+});
 
 test("多位维护者显示昵称、头像和安全链接，保留旧字符串并屏蔽非法 URL", () => {
   const root = build_page({ ...script_fixture, platform: "zhihu", maintainers: [
@@ -208,7 +426,38 @@ test("多位维护者显示昵称、头像和安全链接，保留旧字符串�
   assert.equal(find_node(root, "script-maintainer-avatar").props.src, "https://example.com/avatar.png");
   assert.deepEqual(child_texts(find_node(root, "script-maintainer-nickname")), ["乙"]);
   assert.ok(child_texts(find_node(root, "script-card-maintainers-value")).includes("旧维护者"));
-  assert.deepEqual(child_texts(find_node(root, "script-card-platform")), ["知乎"]);
+  assert.equal(find_node(root, "script-card-platform").children.at(-1), "知乎");
+});
+
+test("维护者兼容 name 与头像，空头像和非法地址不渲染图片", () => {
+  for (const avatar of ["https://example.com/avatar.png", "", "javascript:alert(1)"]) {
+    const root = build_page({ ...script_fixture, maintainers: [{ name: "维护者", avatar }] }, false);
+    assert.deepEqual(child_texts(find_node(root, "script-maintainer-nickname")), ["维护者"]);
+    assert.equal(find_node(root, "script-maintainer-avatar")?.props.src,
+      avatar.startsWith("https:") ? avatar : undefined);
+  }
+});
+
+test("平台图标与名称位于更新时间下一行，更新时间精确到分钟", () => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>';
+  for (const [platform, expected] of [
+    [{ name: "独立平台", icon: svg }, "data:image/svg+xml," + encodeURIComponent(svg)],
+    [{ name: "独立平台", icon: "https://example.com/icon.png" }, "https://example.com/icon.png"],
+    [{ name: "独立平台", icon: "" }, "/platform-icons/website.svg"],
+    ["zhihu", "/platform-icons/zhihu.svg"],
+  ]) {
+    const root = build_page({ ...script_fixture, platform, updated_at: new Date(2026, 9, 16, 8, 5, 49).getTime() }, false);
+    const identity = find_node(root, "script-card-identity");
+    assert.deepEqual(identity.children.slice(-2).map(node => node.props.attributes.n),
+      ["script-card-updated", "script-card-platform"]);
+    assert.deepEqual(child_texts(find_node(identity, "script-card-updated")), ["更新于 2026-10-16 08:05"]);
+    assert.equal(find_node(identity, "script-card-platform-icon").props.src, expected);
+    assert.equal(find_node(find_node(root, "script-card-metadata"), "script-card-platform"), undefined);
+    assert.equal(find_node(identity, "script-card-platform").children.at(-1), typeof platform === "string" ? "知乎" : platform.name);
+  }
+  for (const updated_at of [0, "invalid"]) {
+    assert.deepEqual(child_texts(find_node(build_page({ ...script_fixture, updated_at }, false), "script-card-updated")), ["更新于 未知"]);
+  }
 });
 
 test("RSS/Hot Tabs 按 RSS 优先排序，各自筛选列表与计数，新增沿用当前类型", () => {
@@ -376,7 +625,7 @@ for (const editing of [false, true]) {
       { path: "/qidian/book/:book_id", name: "章节列表", example: "/qidian/book/1036526469" },
       { path: "/qidian/chapter/:book_id/:chapter_id", name: "正文", example: "/qidian/chapter/1036526469/745825165" },
     ];
-    const source = readFileSync(new URL("../../examples/scripts/rss/qidian_chapters.js", import.meta.url), "utf8");
+    const source = readFileSync(new URL("../../examples/scripts/rss/qidian.js", import.meta.url), "utf8");
     const requests = [];
     routes_handler = async (_url, options) => {
       assert.equal(JSON.parse(options.body).script, source);
@@ -876,8 +1125,132 @@ test("脚本表单默认隐藏，新增/编辑打开 Modal，取消清空草稿"
   find_node(root, "script-form-close-button").props.onClick();
   find_node(root, "script-edit-button").props.onClick();
   dialog = find_node(root, "script-form-dialog");
-  assert.equal(dialog.props.title.value, "编辑脚本");
+  assert.equal(dialog.props.title.value, `编辑脚本：${script_fixture.name}`);
   assert.equal(find_node(dialog, "script-code-textarea").props.value.value, script_fixture.script);
+});
+
+test("编辑弹窗标题跟随当前脚本，缺失名称时显示 ID", () => {
+  const root = build_page([
+    { ...script_fixture, id: "one", name: "脚本一" },
+    { ...script_fixture, id: "two", name: "脚本二" },
+    { ...script_fixture, id: "unnamed", name: "" },
+  ], false);
+  for (const name of ["脚本一", "脚本二", "unnamed"]) {
+    const buttons = walk(root).filter(node => node.props?.attributes?.n === "script-edit-button");
+    buttons[["脚本一", "脚本二", "unnamed"].indexOf(name)].props.onClick();
+    assert.equal(find_node(root, "script-form-dialog").props.title.value, `编辑脚本：${name}`);
+    find_node(root, "script-form-close-button").props.onClick();
+  }
+});
+
+test("Diff 按钮位于编辑表单底部左侧，无变更提示，关闭与 Escape 保留草稿", () => {
+  const root = build_page({ ...script_fixture, id: "one" });
+  assert.equal(find_node(root, "script-diff-button"), undefined);
+  find_node(root, "script-edit-button").props.onClick();
+  const form = find_node(root, "script-form-dialog");
+  assert.equal(find_node(form.props.footer[0], "script-diff-button").children[0], "Diff变更");
+  assert.equal(find_node(form, "script-diff-button").props.disabled.value, false);
+  assert.equal(form.props.footer[1], find_node(form, "script-save-button"));
+  find_node(root, "script-diff-button").props.onClick();
+  assert.ok(find_node(root, "script-diff-empty"));
+  find_node(root, "script-diff-close-button").props.onClick();
+  const input = find_node(root, "script-code-textarea");
+  const changed = "// 新增说明\n" + script_fixture.script;
+  input.props.onInput({ target: { value: changed } });
+  find_node(root, "script-diff-button").props.onClick();
+  const diff = find_node(root, "script-diff-code");
+  assert.equal(diff.props.mode, "diff");
+  assert.equal(diff.props.readOnly, true);
+  assert.equal(applyPatch(script_fixture.script, diff.props.value.value), changed);
+  find_node(root, "script-diff-dialog").props.onKeyDown({
+    key: "Escape", preventDefault() {}, stopPropagation() {},
+  });
+  assert.equal(find_node(root, "script-diff-dialog"), undefined);
+  assert.equal(input.props.value.value, changed);
+  assert.equal(form.props.open.value, true);
+  find_node(root, "script-diff-button").props.onClick();
+  find_node(root, "script-cancel-button").props.onClick();
+  assert.equal(find_node(root, "script-diff-dialog"), undefined);
+});
+
+test("左侧脚本区 Ctrl/Cmd+S 保存草稿，拦截浏览器保存且避免重复提交", async t => {
+  const original = fetch_handler;
+  t.after(() => { fetch_handler = original; });
+  for (const modifier of ["ctrlKey", "metaKey"]) {
+    const calls = [];
+    let finish;
+    fetch_handler = (url, options) => {
+      calls.push({ url, method: options.method, body: JSON.parse(options.body) });
+      return new Promise(resolve => { finish = resolve; });
+    };
+    const root = build_page({ ...script_fixture, id: "one" }, false);
+    find_node(root, "script-edit-button").props.onClick();
+    const pane = find_node(root, "script-code-pane");
+    const changed = "// 草稿\n" + script_fixture.script;
+    find_node(pane, "script-code-textarea").props.onInput({ target: { value: changed } });
+    const event = { key: "s", [modifier]: true, defaultPrevented: false,
+      preventDefault() { this.defaultPrevented = true; } };
+    for (const overrides of [{ [modifier]: false }, { key: "Enter" }, { altKey: true }, { shiftKey: true }, { defaultPrevented: true }]) {
+      await pane.props.onKeyDown({ ...event, ...overrides });
+    }
+    find_node(root, "script-diff-button").props.onClick();
+    await pane.props.onKeyDown({ ...event });
+    assert.equal(calls.length, 0);
+    find_node(root, "script-diff-close-button").props.onClick();
+    const pending = pane.props.onKeyDown(event);
+    assert.equal(event.defaultPrevented, true);
+    await pane.props.onKeyDown({ ...event, defaultPrevented: false });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "/admin/api/scripts/one");
+    assert.equal(calls[0].method, "PATCH");
+    assert.equal(calls[0].body.script, changed);
+    assert.equal(calls[0].body.status, "draft");
+    finish(Response.json({ script: { ...script_fixture, id: "one", script: changed, status: "draft" } }));
+    await pending;
+    assert.equal(find_node(root, "script-form-dialog"), undefined);
+  }
+});
+
+test("Diff 始终以正式源码为基准，包含已保存草稿与未保存编辑，支持空源码及换行", async () => {
+  const { ScriptViewModel } = await import("../pages/script.model.js");
+  for (const [saved, draft] of [
+    ["", "新增\n"], ["删除\n", ""], ["const a = 1;\n", "const a = 2;\n"],
+    ["无末尾换行", "无末尾换行\n"], ["甲\r\n乙\r\n", "甲\r\n丙\r\n"],
+  ]) {
+    const saved_draft = saved + "// 已保存的草稿";
+    refarr_seeds = [[normalize_fixture({ ...script_fixture, id: "one", status: "draft", script: saved_draft, published_script: saved }),
+      normalize_fixture({ ...script_fixture, id: "two", script: "另一个脚本" })], []];
+    const model = ScriptViewModel();
+    try {
+      model.methods.edit_script("one");
+      model.methods.open_diff();
+      assert.equal(applyPatch(saved, model.state.diff_text.value), saved_draft);
+      model.methods.close_diff();
+      model.methods.set_draft("script", draft);
+      model.methods.open_diff();
+      assert.equal(applyPatch(saved, model.state.diff_text.value), draft);
+      model.methods.edit_script("two");
+      assert.equal(model.state.diff_open.value, false);
+      model.methods.open_diff();
+      assert.equal(model.state.diff_text.value, "");
+      model.methods.reset_draft();
+      model.methods.open_diff();
+      assert.equal(model.state.diff_open.value, false);
+      assert.equal(model.state.diff_text.value, "");
+    } finally { model.methods.destroy(); }
+  }
+});
+
+test("没有正式源码时禁用 Diff，即使有历史正式版本号也不能用草稿代替", () => {
+  for (const published_version of ["", "1.0.0"]) {
+    const script = { ...script_fixture, id: "draft-only", status: "draft", published_version };
+    const root = build_page(script, false);
+    find_node(root, "script-edit-button").props.onClick();
+    const button = find_node(root, "script-diff-button");
+    assert.equal(button.props.disabled.value, true);
+    button.props.onClick();
+    assert.equal(find_node(root, "script-diff-dialog"), undefined);
+  }
 });
 
 test("Modal 保存期间不可取消或替换草稿；失败保留弹窗和错误", async (t) => {
@@ -894,7 +1267,7 @@ test("Modal 保存期间不可取消或替换草稿；失败保留弹窗和错�
   find_node(dialog, "script-cancel-button").props.onClick();
   find_node(root, "script-create-button").props.onClick();
   assert.equal(dialog.props.open.value, true);
-  assert.equal(dialog.props.title.value, "编辑脚本");
+  assert.equal(dialog.props.title.value, `编辑脚本：${script_fixture.name}`);
   assert.equal(input.props.value.value, script_fixture.script);
   finish(Response.json({ error: "保存失败" }, { status: 500 }));
   await pending;
@@ -911,7 +1284,7 @@ test("卡片显示来源网站与 Cookie 说明，缺失或危险网站不生成
   assert.deepEqual(child_texts(find_node(root, "script-card-description")), [description]);
   const identity = find_node(root, "script-card-identity");
   assert.deepEqual(identity.children.map(node => node.props.attributes?.n || node.type),
-    ["script-card-title", "show", "script-card-updated"]);
+    ["script-card-title", "show", "script-card-updated", "script-card-platform"]);
   assert.ok(find_node(identity, "script-card-description"));
   assert.ok(find_node(root, "admin-icon-globe"));
   assert.ok(find_node(root, "admin-icon-users"));
@@ -971,7 +1344,7 @@ test("消息页按钮在原页面打开共享脚本编辑器，加载关联脚�
     assert.equal(requests[0].url, "/admin/api/scripts");
     assert.equal(model.editor.state.editing_id.value, script.id);
     assert.equal(model.editor.state.draft_script.value, script.script);
-    assert.equal(find_node(page, "script-form-dialog").props.title.value, "编辑脚本");
+    assert.equal(find_node(page, "script-form-dialog").props.title.value, `编辑脚本：${script.name}`);
     for (const name of ["script-code-textarea", "script-save-button", "script-debug-url", "script-cookie-consent"])
       assert.ok(find_node(page, name), name);
     model.editor.methods.set_draft("script", "export const route = { path: '/updated' };");
@@ -1104,8 +1477,8 @@ for (const editing of [false, true]) {
     assert.ok(find_node(form, "script-debug-pane"));
     const actions = find_node(dialog, "script-debug-actions");
     assert.equal(find_node(form, "script-debug-actions"), undefined);
-    assert.equal(dialog.props.footer[2], actions);
-    assert.equal(dialog.props.footer[3].props.attributes.n, "script-draft-debug");
+    assert.equal(dialog.props.footer[4], actions);
+    assert.equal(find_node(dialog, "script-draft-debug"), undefined);
     assert.deepEqual(actions.children.map(node => node.props.attributes.n),
       ["script-live-debug", "script-live-debug-help"]);
     assert.equal(find_node(form, "script-debug-url-field"), undefined);
@@ -1117,7 +1490,7 @@ for (const editing of [false, true]) {
 
 
 
-test("卡片没有 Debug 开关，表单 Debug 随独立配置保存", async (t) => {
+test("卡片和表单没有 Debug 开关，新建默认关闭，编辑保留已有配置", async (t) => {
   const original = fetch_handler;
   t.after(() => { fetch_handler = original; });
   const calls = [];
@@ -1126,14 +1499,14 @@ test("卡片没有 Debug 开关，表单 Debug 随独立配置保存", async (t)
     calls.push({ url, body });
     return Response.json({ script: { ...script_fixture, debug: body.debug } });
   };
-  const root = build_page();
-  assert.equal(find_node(root, "script-debug"), undefined);
-  const draft = find_node(root, "script-draft-debug");
-  draft.props.onChange(true);
-  find_node(root, "script-code-textarea").props.onInput({ target: { value: "export const route = {};" } });
-  await find_node(root, "script-save-button").props.onClick();
-  assert.equal(calls.at(-1).body.debug, true);
-  assert.equal(draft.props.checked.value, false);
+  for (const editing of [false, true]) {
+    const root = build_page({ ...script_fixture, id: "script-debug-config", debug: true });
+    if (editing) find_node(root, "script-edit-button").props.onClick();
+    assert.equal(find_node(root, "script-debug"), undefined);
+    assert.equal(find_node(root, "script-draft-debug"), undefined);
+    await find_node(root, "script-save-button").props.onClick();
+    assert.equal(calls.at(-1).body.debug, editing);
+  }
 });
 
 test("卡片右上角无文案 Switch 修改启用状态，阻止重复提交，失败回滚且可重试", async (t) => {

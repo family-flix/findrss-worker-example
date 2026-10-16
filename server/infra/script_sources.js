@@ -155,6 +155,7 @@ export function script_ctx_source({ has_invoke, debug = false }) {
 const __requestContext = JSON.parse(__requestContextJSON);
 const ctx = {
   route: JSON.parse(__routeMetadataJSON),
+  config: JSON.parse(__routeMetadataJSON).config || {},
   method: __requestContext.method,
   pathname: __requestContext.pathname,
   params: __requestContext.params,
@@ -283,15 +284,16 @@ const __metadata = __entries.map((entry, route_index) => {
   }
   entry.maintainers = entry.maintainers.map(value => {
     if (typeof value === "string") return value;
-    if (!value || typeof value !== "object" || Array.isArray(value) || typeof value.nickname !== "string" ||
-        !value.nickname.trim() || value.nickname.length > 128) throw new Error("维护者 nickname 必须是 1–128 字符的字符串");
+    const nickname = value && (value.nickname || value.name);
+    if (!value || typeof value !== "object" || Array.isArray(value) || typeof nickname !== "string" ||
+        !nickname.trim() || nickname.length > 128) throw new Error("维护者 nickname 或 name 必须是 1–128 字符的字符串");
     for (const key of ["url", "avatar"]) {
       if (value[key] !== undefined && (typeof value[key] !== "string" || value[key].length > 2048 ||
           value[key] !== "" && !/^https?:\\/\\/[^\\s/]+(?:[/?#]|$)/i.test(value[key]))) {
         throw new Error("维护者 " + key + " 必须是 HTTP(S) URL");
       }
     }
-    return { nickname: value.nickname.trim(), url: value.url || "", avatar: value.avatar || "" };
+    return { nickname: nickname.trim(), url: value.url || "", avatar: value.avatar || "" };
   });
   if (typeof entry.handler !== "function") { throw new Error("route.handler 必须是函数"); }
   if (typeof entry.example !== "string" || !entry.example.startsWith("/")) {
@@ -324,5 +326,6 @@ const __metadata = __entries.map((entry, route_index) => {
 });
 const __scriptType = typeof kind !== "undefined" ? kind : typeof script_type === "undefined" ? ${JSON.stringify(default_type)} : script_type;
 if (__scriptType !== "hot" && __scriptType !== "rss") throw new Error("kind/script_type 必须是 hot 或 rss");
-globalThis.__routeMetadataJSON = JSON.stringify({ ...__metadata[0], kind: __scriptType, script_type: __scriptType, routes: __metadata, permissions: typeof permissions === "undefined" ? {} : permissions });`;
+globalThis.__routeMetadataJSON = JSON.stringify({ ...__metadata[0], kind: __scriptType, script_type: __scriptType, routes: __metadata, permissions: typeof permissions === "undefined" ? {} : permissions,
+  ...(typeof config_schema === "undefined" ? {} : { config_schema }) });`;
 }

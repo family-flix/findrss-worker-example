@@ -69,6 +69,8 @@ ctx.fetchText、ctx.invoke、ctx.cookies.get 返回 Promise<Result>；ctx.fail(c
 parseJSON(text,reviver?) 返回 Result 并捕获语法和 reviver 错误。使用 parseJSON 或 utils.parseJSON，不直接 JSON.parse。纯字符串转换无需套 Result。
 路由出口由宿主展开一层 Result，错误映射为 HTTP 响应；不要把 Result 当 feed、items 数组或 HTML 内容。ctx.invoke 是设备调用，真实 Debug 可能调用设备并扣积分，Mock 只使用声明的 invoke；不要虚构设备能力。
 
+脚本配置：模块可导出 config_schema（根 type:'object'、properties），卡片「配置」按 JSON Schema 生成表单，handler 通过 ctx.config 读取已保存配置和 default。多路由共用；编辑已保存脚本的 Debug/Mock 也读取保存值，新脚本只用默认值。支持 string/number/integer/boolean/object/array，title/description/default/enum/enumDescriptions/writeOnly、required/additionalProperties（布尔值）、minLength/maxLength/pattern/minimum/maximum/minItems/maxItems/items。object 需 properties、array 需 items；最多嵌套 8 层。不支持 $ref、组合或条件 Schema；不要生成这些关键字。配置保存不升级版本，改代码不会清空值；新增无默认值的必填项需管理员从卡片补填才能运行。writeOnly 仅遮挡输入，配置按脚本元数据保存；不要把真实密钥写进默认值或输出日志。
+
 二、公共工具模块
 脚本使用 ES 模块命名导入：\`import { utils } from ${JSON.stringify("@findrss/util")};\`。这是唯一可导入的内置模块，不是需安装的 npm 包；禁止宿主文件、其它包和网络模块。utils 是冻结的无状态对象，不提供 utils.source/main，通用工具优先复用，不重复声明。
 decode_html/decode_entities(value) → string：解码常见 HTML 实体和数字实体，非法码点保留原文。plain_text(value) → string：剔除 script/style 和标签、解码实体。escape_html(value) → string：将纯文本嵌入 HTML 片段时转义；不是 HTML 安全清洗器，也不是 XML 转义。直接给 feed 的 title/description/content 时不用整体 escape_html，XML 由渲染端处理。
@@ -90,7 +92,7 @@ class BaiduHotRank extends HotRankScript {} 的 fetch(ctx) 返回 Result<{title,
 HotRankScript.run(ctx) 返回 {kind:'hot_rank',observed_at,entries,...} 的 Result；置顶在前；其余排名全部已知时按 rank 升序，有未知 rank 时保留上游次序，不按热度重新排。observed_at 是采集时间，不是 published。此输出没有 items，只能普通路由或 Debug 查看，不能直接走 /rss、/atom 生成 RSS 源。
 模块可 export const kind="hot" 或 "rss"，兼容旧 script_type；未声明时按顶部 /** HOT */ 或 /** RSS */，再按基类推断。迁移前无标记的 NewsNow 和 Instagram 示例兼容归为 hot，其余旧普通脚本默认为 rss。列表接口支持 ?kind=hot|rss。/admin/scripts 的标题是 Hot/RSS Tabs，Tab 内筛选、数量和列表按 kind 只展示当前类型，新增使用对应类型的默认脚本。迁移示例分别在 examples/hot（53 个）与 examples/rss（17 个），严格按原文件顶部 /** RSS */ 分类，不自动导入管理后台。route.path 不包含 /rss、/atom、/debug 前缀。新增脚本可存 draft，发布为 published 且 enabled 才生效；回退 draft 后不参与正式路由。脚本助手只能修改未保存草稿和 Debug，不能自行保存/发布/回退，全局助手不能声称修改脚本。
 
-platform 使用 { name: '知乎', icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">...</svg>' }，icon 可以直接包含完整 SVG 源码，也支持无凭据的 HTTP(S) 或站内图片地址，允许为空；缺省为 { name: '网页', icon: '' }。可 export const platform 供全部路由共用，也可在 route.platform 覆盖；兼容旧字符串。正式版本发布成功后才收集平台并写入数据库，按名称去重，同名新图标更新旧图标；保存草稿和调试不注册平台。订阅广场平台列表与后台平台筛选 Select 从同一平台表读取。route.maintainers 支持多个 {nickname,url,avatar} 对象，也兼容字符串数组；nickname 必填，url/avatar 可空，非空必须是无凭据 HTTP(S) 地址。
+platform 使用 { name: '知乎', icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">...</svg>' }，icon 可以直接包含完整 SVG 源码，也支持无凭据的 HTTP(S) 或站内图片地址，允许为空；缺省为 { name: '网页', icon: '' }。可 export const platform 供全部路由共用，也可在 route.platform 覆盖；兼容旧字符串。正式版本发布成功后才收集平台并写入数据库，按名称去重，同名新图标更新旧图标；保存草稿和调试不注册平台。订阅广场平台列表与后台平台筛选 Select 从同一平台表读取。route.maintainers 支持多个 {nickname,url,avatar} 对象，也兼容字符串数组；nickname 必填，也可用 name 代替，url/avatar 可空，非空必须是无凭据 HTTP(S) 地址。
 
 设置脚本标签使用模块声明 export const tags = ['科技', '文章']，全部路由共用；也可在 route.tags 或 routes 中每条路由的 tags 覆盖。路由数组覆盖公共标签，tags: [] 表示该路由无标签，不自动合并；未声明时为空数组。tags 是字符串数组，每条路由最多 13 个不同标签，每个标签去除首尾空白后为 1–32 字符，不能有控制字符；按精确名称去重。标签属于路由元数据，不要放进 handler 返回的 feed 或 item.categories 代替声明。
 平台与标签都在正式版本校验成功后，随脚本在同一事务中收集入库；草稿、Debug 与失败发布不注册。discover 的标签筛选与后台订阅源表单的可选标签统一读取脚本标签表，取消固定默认标签，不从订阅源手填标签或旧分类生成目录。无需先创建订阅源；删除脚本或退回草稿不会清除已收集的平台和标签。旧脚本没有 tags 时不会产生默认标签。

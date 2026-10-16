@@ -88,11 +88,11 @@ Cloudflare Worker 改名会创建新的 DO 命名空间：已有生产数据需�
 `/admin/discovery` 的全局助手可查询、新增、编辑和删除订阅源，使用现有 `ServiceDiscovery` 校验、重复地址限制、模板保存和头像清理。编辑/删除必须先读取真实记录，写入点检查读取后记录是否变更，冲突时要求重新读取；只修改用户指定字段，不覆盖缺省字段。成功操作经 `resource_changed` 事件刷新列表，保留其它未保存表单；删除正在编辑的源会关闭该表单。当前筛选、选中源和未保存表单通过页面适配器注入；其它页面不提供订阅源写工具，不允许模型伪造跨页面操作。
 ## 脚本平台、标签与维护者
 
-平台使用 `{ name, icon }`，`icon` 支持完整 SVG 源码、无凭据的 HTTP(S) 图片地址或站内图片路径，可为空。默认值为 `{ name: "网页", icon: "" }`，兼容旧字符串。可 `export const platform = { name, icon }` 供全部路由共用，或通过 `route.platform` 逐条覆盖。示例脚本已直接内嵌 `public/platform-icons/` 中对应的 SVG，无需额外导入图标文件。
+平台使用 `{ name, icon }`，`icon` 支持完整 SVG 源码、无凭据的 HTTP(S) 图片地址或站内图片路径，可省略或留空。默认值为 `{ name: "网页", icon: "" }`，兼容旧字符串。可 `export const platform = { name, icon }` 供全部路由共用，或通过 `route.platform` 逐条覆盖。未提供图标时沿用内置平台图标，自定义平台默认显示地球 SVG，无需在脚本中重复内嵌。品牌示例脚本直接内嵌 `public/platform-icons/` 中对应的 SVG，无需额外导入图标文件。
 
 正式版本通过版本号、路由及 Cookie 授权校验后，脚本与平台在同一数据库事务中保存。平台按名称去重，同名新图标更新旧图标；草稿和调试不注册平台。`platforms` 表为订阅广场、后台平台筛选 Select 和订阅源表单提供统一列表，不需要先添加订阅源。升级时回填已发布脚本，草稿不参与；删除脚本或退回草稿不会清除已经收集的平台。已有订阅源的平台继续保留，新增自有源按匹配的已发布脚本路由预填平台。
 
-`maintainers` 支持多个 `{ nickname, url, avatar }` 对象，后台展示昵称、头像和个人链接。`nickname` 必填，`url`、`avatar` 可留空，非空时必须是无用户名密码的 HTTP(S) 地址；旧字符串数组继续支持。
+`maintainers` 支持多个 `{ nickname, url, avatar }` 对象，也可用 `name` 代替 `nickname`（如 `{ name: '作者', avatar: 'https://example.com/avatar.png' }），后台展示昵称、头像和个人链接。昵称必填，`url`、`avatar` 可留空，非空时必须是无用户名密码的 HTTP(S) 地址；旧字符串数组继续支持。
 
 标签使用 `export const tags = ['科技', '文章']` 为所有路由设置默认值，`route.tags` 或 `routes` 中的 `tags` 可逐条覆盖，空数组表示不带标签。每条路由最多 13 个不同标签，每个标签去除首尾空白后为 1–32 字符，不含控制字符，按名称精确去重。标签保存在路由元数据中，不是 handler 返回值或 RSS 条目分类。
 
@@ -111,6 +111,39 @@ export const route = {
   handler: ctx => script.run(ctx),
 };
 ```
+
+## 声明和填写脚本配置
+
+在模块中导出 `config_schema`，脚本卡片会显示「配置」按钮，点击后按 Schema 生成表单，保存的值在 handler 中通过 `ctx.config` 读取。配置按脚本 ID 保存，多条路由共用，正式执行、草稿 Debug、媒体预览和 Mock 测试均读取同一份值；新脚本调试使用默认值。示例：
+
+```js
+export const config_schema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title"],
+  properties: {
+    title: { type: "string", title: "订阅源名称", minLength: 1, default: "我的订阅" },
+    limit: { type: "integer", title: "条目数量", minimum: 1, maximum: 100, default: 20 },
+    full_text: { type: "boolean", title: "抓取全文", default: false },
+    language: { type: "string", title: "语言", enum: ["zh-CN", "en"],
+      enumDescriptions: ["中文", "英文"], default: "zh-CN" },
+    api_key: { type: "string", title: "API Key", writeOnly: true, description: "可选的接口凭据" },
+  },
+};
+export const route = {
+  path: "/configured-feed", name: "可配置订阅源",
+  handler(ctx) {
+    return { title: ctx.config.title, link: "https://example.com/", language: ctx.config.language,
+      items: [] };
+  },
+};
+```
+
+支持 `string`、`number`、`integer`、`boolean`、嵌套 `object` 和 `array`；枚举生成选择框，布尔值生成开关，数组使用 JSON 文本框。字段可设置 `title`、`description`、`default`、`enum`、`enumDescriptions`、`writeOnly`；校验支持 `required`、`additionalProperties`（布尔值）、`minLength`、`maxLength`、`pattern`、`minimum`、`maximum`、`minItems`、`maxItems` 和 `items`。根类型必须为 object，各对象需声明 properties，数组需声明 items，最多嵌套 8 层。暂不支持 `$ref`、组合和条件 Schema；不支持的关键字会在编译时报错。
+
+`PATCH /admin/api/scripts/<id>` 接受 `{ "config": { ... } }`，替换配置并填入缺省值，服务端校验失败返回 400，不覆盖已保存值。配置保存不升级脚本版本，更新代码、启停、草稿状态切换保留配置；保存后清空脚本响应缓存。新增必填字段而无默认值时，可先保存代码，再从卡片补填；未补填时执行会报告配置错误。
+
+配置上限 32KB，保存在现有 `metadata_json` 中，无需数据库迁移。`writeOnly` 仅遮挡输入，不加密存储，也不阻止管理员重新读取；不要把凭据写入 Schema 默认值、脚本输出或日志。
 
 ## 脚本 Result 与 JSON 解析
 
