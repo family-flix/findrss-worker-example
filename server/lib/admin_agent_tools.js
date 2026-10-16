@@ -1,8 +1,8 @@
 const object = properties => ({ type: "object", properties, additionalProperties: false });
 const string = { type: "string" }, boolean = { type: "boolean" };
-export const ADMIN_AGENT_SOURCE_FIELDS = Object.freeze(["title", "description", "website", "feed_url", "category", "tags", "enabled", "require_token", "sort_order", "source_type"]);
+export const ADMIN_AGENT_SOURCE_FIELDS = Object.freeze(["title", "description", "website", "feed_url", "category", "tags", "enabled", "require_token", "credit_cost", "sort_order", "source_type"]);
 const source_fields = { title: string, description: string, website: string, feed_url: string, category: string,
-  tags: { type: "array", items: string }, enabled: boolean, require_token: boolean, sort_order: { type: "integer" }, source_type: string };
+  tags: { type: "array", items: string }, enabled: boolean, require_token: boolean, credit_cost: { type: "integer", minimum: 0, maximum: 1_000_000_000 }, sort_order: { type: "integer" }, source_type: string };
 export const ADMIN_AGENT_TOOLS = Object.freeze([
   { name: "get_admin_context", description: "读取当前管理页面的任务、界面上下文和服务端实际状态。", parameters: object({}) },
   { name: "list_discovery_sources", description: "查询订阅源列表，包含停用源；可按关键词、平台和启用状态筛选，分页返回真实 ID。", parameters: object({ query: string, source_type: string, enabled: boolean, offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 40 } }) },

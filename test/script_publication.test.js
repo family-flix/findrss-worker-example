@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { register } from "node:module";
-import { RssRouteCache } from "../server/infra/rss_cache.js";
+import { RssRouteCache, rss_route_cache_key } from "../server/infra/rss_cache.js";
 import { ScriptModel } from "../server/domain/script.js";
 import { sha256_hex } from "../server/lib/crypto.js";
 
@@ -28,8 +28,31 @@ function setup() {
   const serve = pathname => route(new Request("https://internal/_public/feed/rss" + pathname, {
     headers: { "X-Api-Access-Token-ID": "test-user" },
   }), { scripts: service });
-  return { rows, cache, service, serve };
+  const generate = pathname => service.serve_rss_route("rss", pathname,
+    new Request("https://internal/_admin/feed/rss" + pathname), { refresh: true });
+  return { rows, cache, service, serve, generate };
 }
+
+test("发布、修改与删除脚本均保留自身及其他源的 XML", async () => {
+  const { service, cache, rows, generate } = setup();
+  const key = "public-snapshot:" + rss_route_cache_key("/kuaishou/profile/3xuxw5yhgr6f4um", []);
+  await cache.run(key, Date.now(), async () => ({ output: "{}", invoked: false,
+    rendered: new Map([["rss\n", "快手 XML"]]) }));
+  const created = await service.create_script(edit({ script: source, status: "published", version: "1.0.0" }));
+  const id = created.data.script.id;
+  await generate("/publication-test");
+  const own_key = "private-snapshot:" + rss_route_cache_key("/publication-test", []);
+  assert.equal(cache.inspect(own_key).status, "fresh");
+  await service.update_script(edit({ enabled: false }), id);
+  assert.equal(cache.inspect(own_key).status, "fresh");
+  assert.equal(cache.inspect(key).status, "fresh");
+  service.repo.scripts.exists = id => rows.some(row => row.route === id);
+  service.repo.scripts.delete = id => rows.splice(rows.findIndex(row => row.route === id), 1);
+  service.repo.script_logs = { delete_for_route() {} };
+  await service.delete_script(id);
+  assert.equal(cache.inspect(own_key).status, "fresh");
+  assert.equal(cache.resolve(key, Date.now()).rendered.get("rss\n"), "快手 XML");
+});
 
 test("正式发布必填三段递增版本，绑定源码哈希，草稿保留上次正式版本", async () => {
   const { service, rows } = setup();
@@ -118,8 +141,8 @@ test("并发发布同一版本只有一次成功，不覆盖已经提交的版�
   assert.equal((await service.list_scripts()).scripts[0].script_hash, await sha256_hex(rows[0].script));
 });
 
-test("草稿可保存不完整代码；发布需校验，正式路由和缓存退回后立即撤下", async () => {
-  const { rows, cache, service, serve } = setup();
+test("草稿可保存不完整代码；退回草稿保留 XML，路由立即停止访问", async () => {
+  const { rows, cache, service, serve, generate } = setup();
   const created = await service.create_script(edit({ script: "export const route = {", status: "draft" }));
   const id = created.data.script.id;
   assert.equal(created.data.script.status, "draft");
@@ -135,21 +158,26 @@ test("草稿可保存不完整代码；发布需校验，正式路由和缓存�
   const published = await service.update_script(edit({ status: "published", version: "1.0.0" }), id);
   assert.equal(published.script.status, "published");
   assert.equal(rows[0].path, "/publication-test");
-  for (const path of ["/publication-test", "/publication-test/extra"]) assert.equal((await serve(path)).status, 200);
+  for (const path of ["/publication-test", "/publication-test/extra"]) {
+    assert.equal((await serve(path)).status, 503);
+    await generate(path);
+    assert.equal((await serve(path)).status, 200);
+  }
   assert.equal(cache.stats().entries, 2);
   await service.update_script(edit({ status: "draft" }), id);
   assert.equal(rows[0].script, source);
-  assert.equal(cache.stats().entries, 0);
+  assert.equal(cache.stats().entries, 2);
   for (const path of ["/publication-test", "/publication-test/extra"]) assert.equal((await serve(path)).status, 404);
   await service.update_script(edit({ enabled: false }), id);
   await service.update_script(edit({ status: "published", version: "1.0.1" }), id);
   assert.equal((await serve("/publication-test")).status, 404);
   await service.update_script(edit({ enabled: true }), id);
+  await generate("/publication-test");
   assert.equal((await serve("/publication-test")).status, 200);
 });
 
 test("草稿可以使用相同路径；发布冲突保持草稿，旧脚本默认正式且保存保留状态", async () => {
-  const { service, rows, serve } = setup();
+  const { service, rows, serve, generate } = setup();
   const old = await service.create_script(edit({ script: source, version: "1.0.0" }));
   const id = old.data.script.id;
   const metadata = JSON.parse(rows[0].metadata_json);
@@ -163,6 +191,7 @@ test("草稿可以使用相同路径；发布冲突保持草稿，旧脚本默�
   assert.equal((await service.list_scripts()).scripts[1].status, "draft");
   await service.update_script(edit({ script: source, debug: true }), id);
   assert.equal((await service.list_scripts()).scripts[0].status, "published");
+  await generate("/publication-test");
   assert.equal((await serve("/publication-test")).status, 200);
   for (const status of [null, true, "invalid"]) {
     await assert.rejects(service.create_script(edit({ script: source, status })), error => error.status === 400);

@@ -37,7 +37,9 @@ function fake_store(rows = []) {
     delete_expired: (now) => {
       for (const [key, entry] of map) if (entry.expires_at <= now) map.delete(key);
     },
-    clear: () => map.clear(),
+    clear() {
+      for (const key of map.keys()) if (!/^(public|private)-snapshot:/.test(key)) map.delete(key);
+    },
     count: () => map.size,
     delete_oldest(keep) {
       const newest = [...map.entries()].sort((a, b) => b[1].created_at - a[1].created_at);
@@ -289,4 +291,31 @@ test("失效期间的新生成不合并旧任务，旧任务完成不能删掉�
   finish_new({ output: "new", invoked: false });
   assert.equal((await latest).output, "new"); assert.equal((await shared).output, "new");
   assert.equal(cache.lookup("/feed", Date.now()).output, "new");
+});
+
+test("配置失效保留公开和私密 XML 及其生成任务，普通缓存和任务仍失效", async () => {
+  const store = fake_store();
+  const cache = new RssRouteCache(300_000, 100, { store });
+  for (const key of ["public-snapshot:/saved", "private-snapshot:/saved", "/saved-drop"]) {
+    await cache.run(key, Date.now(), async () => ({ output: key, invoked: false }));
+  }
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const jobs = ["public-snapshot:/keep", "private-snapshot:/keep", "/drop"].map(key => cache.run(key, Date.now(), async () => {
+    await gate;
+    return { output: key, invoked: false };
+  }));
+  cache.invalidate_all();
+  jobs.push(cache.run("public-snapshot:/keep", Date.now(), () => assert.fail("XML 任务应继续合并")));
+  release();
+  await Promise.all(jobs);
+  for (const key of ["public-snapshot:/saved", "private-snapshot:/saved", "public-snapshot:/keep", "private-snapshot:/keep"]) {
+    assert.equal(cache.resolve(key, Date.now()).output, key);
+    assert.ok(store.read(key));
+  }
+  for (const key of ["/drop", "/saved-drop"]) {
+    assert.equal(cache.resolve(key, Date.now()), null);
+    assert.equal(store.read(key), null);
+  }
+  assert.equal(cache.stats().bytes, [...cache.entries.values()].reduce((total, entry) => total + entry.bytes, 0));
 });

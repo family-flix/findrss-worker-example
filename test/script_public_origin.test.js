@@ -80,9 +80,9 @@ for (const [name, configured, expected] of [
   assert.equal(preview_response.status, 200);
   assert.equal((await preview_response.json()).feed.icon, image);
 
-  // 首次访问注册公开快照，由后台使用已传递的公开地址执行脚本。
+  // 首次访问启动生成任务，由后台使用已传递的公开地址执行脚本。
   assert.equal((await app.fetch("/rss/origin/public")).status, 503);
-  await app.service.refresh_due_snapshots();
+  await Promise.all(app.service.xml_tasks.values());
   const response = await app.fetch("/rss/origin/public");
   assert.equal(response.status, 200);
   assert.ok((await response.text()).includes(image));

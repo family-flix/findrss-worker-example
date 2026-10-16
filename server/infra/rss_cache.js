@@ -1,6 +1,6 @@
 /**
- * /rss/ 路由响应缓存：缓存键归一化 + 两级缓存（L1 内存 / L2 注入的 store）+ TTL +
- * single-flight 去重 + 渲染结果记忆化。
+ * 路由结果：普通脚本采用两级 TTL 缓存；后台生成的 XML 持久保存，不设过期时间。
+ * 共用缓存键归一化、single-flight 去重与渲染结果记忆化。
  *
  * 纯模块，不依赖 Cloudflare API，也不 import repository——layering 规则不许
  * `infra/` 依赖 `repository/`（见 `test/layering.test.js` 的 `ALLOWED.infra`）。
@@ -14,6 +14,10 @@ const DEFAULT_MAX_ENTRIES = 1024;
 const DEFAULT_MAX_BYTES = 32 * 1024 * 1024;
 /** 单条目落 L2 的大小上限：`SCRIPT_OUTPUT_BYTES` 允许 2MB 的产出，整条进 SQLite 不合适。 */
 const DEFAULT_PERSIST_MAX_BYTES = 256 * 1024;
+
+function is_xml_key(key) {
+  return key.startsWith("public-snapshot:") || key.startsWith("private-snapshot:");
+}
 
 /**
  * @typedef {object} RouteCacheStore L2：同步接口，便于 `run` 在任何 await 之前完成查找。
@@ -53,15 +57,16 @@ export function rss_route_cache_key(pathname, params) {
  * @typedef {object} RouteCacheEntry
  * @property {string} output 脚本产出的 feed JSON
  * @property {boolean} invoked 这次产出是否真的下发了设备调用（决定 Cache-Control）
- * @property {number} expires_at 绝对时间戳，L1 与 L2 同一套
+ * @property {number} expires_at 普通缓存的绝对时间戳；持久 XML 为 0
+ * @property {number} saved_at 最后成功生成的时间
  * @property {number} bytes 近似内存占用（output + 已渲染的正文）
  * @property {Map<string, string>} rendered `format + "\n" + self_url` → 渲染后的正文
  * @property {boolean} snapshot 是否持久化两种 XML
  */
 
 /**
- * 命中直接返回；未命中按 key single-flight 去重执行，成功写入 TTL 条目，失败不缓存。
- * 容量超限时先清过期条目，再按写入序淘汰最旧（L1 与 L2 用同一上限）。
+ * 命中直接返回；未命中按 key single-flight 去重执行，失败不缓存。
+ * L1 按内存预算淘汰；L2 只对普通缓存执行过期及容量清理。
  */
 export class RssRouteCache {
   /**
@@ -102,13 +107,12 @@ export class RssRouteCache {
    * 只查 L1（同步）。L2 走 `resolve`。
    * @param {string} key
    * @param {number} now
-   * @param {boolean} [allow_stale] 公开源由后台更新，过期时仍可读上次快照
    * @returns {{ output: string, invoked: boolean } | null}
    */
-  lookup(key, now, allow_stale = false) {
+  lookup(key, now) {
     const entry = this.entries.get(key);
     if (entry === undefined) return null;
-    if (!allow_stale && entry.expires_at <= now) {
+    if (entry.expires_at !== 0 && entry.expires_at <= now) {
       this.drop(key);
       return null;
     }
@@ -122,19 +126,21 @@ export class RssRouteCache {
    * @param {number} now
    * @returns {{ output: string, invoked: boolean } | null}
    */
-  resolve(key, now, allow_stale = false) {
-    const hit = this.lookup(key, now, allow_stale);
+  resolve(key, now) {
+    const hit = this.lookup(key, now);
     if (hit !== null) return hit;
     const stored = this.store === null ? null : this.store.read(key);
     if (stored === null || stored === undefined) return null;
-    if (!allow_stale && Number(stored.expires_at) <= now) return null;
+    const xml = is_xml_key(key);
+    if (!xml && Number(stored.expires_at) <= now) return null;
     this.l2_hits += 1;
     this.put(key, {
       output: stored.output_json,
       invoked: Number(stored.invoked) !== 0,
-      expires_at: Number(stored.expires_at),
+      expires_at: xml ? 0 : Number(stored.expires_at),
+      saved_at: stored.saved_at ?? Number(stored.expires_at) - this.ttl_ms,
       rendered: stored.rendered,
-    }, allow_stale ? undefined : now);
+    }, now);
     return { output: stored.output_json, invoked: Number(stored.invoked) !== 0,
       ...(stored.rendered ? { rendered: new Map(stored.rendered) } : {}) };
   }
@@ -154,14 +160,13 @@ export class RssRouteCache {
     let pending = this.inflight.get(key);
     if (pending === undefined) {
       this.executions += 1;
-      const generation = this.generation;
       pending = Promise.resolve()
         .then(produce)
         .then((result) => {
           // 失效发生在执行期间时（如脚本刚被更新）不回填，避免旧内容重新进入缓存。
-          if (generation === this.generation) {
+          if (this.inflight.get(key) === pending) {
             const completed_at = this.clock();
-            const value = { ...result, expires_at: completed_at + this.ttl_ms };
+            const value = { ...result, saved_at: completed_at, expires_at: is_xml_key(key) ? 0 : completed_at + this.ttl_ms };
             // 先持久化再替换内存；刷新失败时仍可读取旧快照。
             this.persist(key, value);
             this.put(key, value, completed_at);
@@ -201,12 +206,11 @@ export class RssRouteCache {
     return body;
   }
 
-  /** 脚本配置变更后调用：清空 L1 与 L2，并作废仍在执行中的旧结果，使其不回填缓存。 */
+  /** 配置变更只使普通缓存失效，保留已生成和正在生成的 XML。 */
   invalidate_all() {
     this.generation += 1;
-    this.entries.clear();
-    this.inflight.clear();
-    this.bytes = 0;
+    for (const key of this.entries.keys()) if (!is_xml_key(key)) this.drop(key);
+    for (const key of this.inflight.keys()) if (!is_xml_key(key)) this.inflight.delete(key);
     if (this.store !== null) this.store.clear();
   }
 
@@ -223,17 +227,19 @@ export class RssRouteCache {
     };
   }
 
-  /** 管理端只读快照信息；不续期、不计命中，也不返回正文。 */
+  /** 管理端只读状态；XML 无过期时间，不计命中，也不返回正文。 */
   inspect(key, now = Date.now()) {
     const memory = this.entries.get(key);
     const stored = this.store?.read(key);
     const expires_at = Number(memory?.expires_at ?? stored?.expires_at ?? 0);
+    const exists = Boolean(memory || stored);
+    const xml = is_xml_key(key);
     return {
-      status: expires_at === 0 ? "empty" : expires_at > now ? "fresh" : "expired",
-      saved_at: expires_at === 0 ? 0 : expires_at - this.ttl_ms,
-      expires_at,
+      status: !exists ? "empty" : xml || expires_at > now ? "fresh" : "expired",
+      saved_at: exists ? memory?.saved_at ?? stored?.saved_at ?? expires_at - this.ttl_ms : 0,
+      ...(!xml ? { expires_at } : {}),
       bytes: memory?.bytes ?? (stored ? stored.output_json.length + (stored.rendered || []).reduce((total, [, body]) => total + body.length, 0) : 0),
-      persistent: Boolean(stored && Number(stored.expires_at) === expires_at),
+      persistent: Boolean(stored && (xml || Number(stored.expires_at) === expires_at)),
       refreshing: this.inflight.has(key),
     };
   }
@@ -253,6 +259,7 @@ export class RssRouteCache {
       output: value.output,
       invoked: value.invoked,
       expires_at: value.expires_at,
+      saved_at: value.saved_at,
       bytes,
       rendered,
       snapshot: Boolean(value.rendered),
@@ -275,7 +282,8 @@ export class RssRouteCache {
       output_json: result.output,
       invoked: result.invoked ? 1 : 0,
       expires_at: result.expires_at,
-      created_at: Date.now(),
+      saved_at: result.saved_at,
+      created_at: result.saved_at,
       ...(result.rendered ? { rendered: [...result.rendered] } : {}),
     });
     const total = this.store.count();
@@ -301,7 +309,7 @@ export class RssRouteCache {
   evict(now) {
     if (now !== undefined) {
       for (const [key, entry] of this.entries) {
-        if (entry.expires_at <= now) this.drop(key);
+        if (entry.expires_at !== 0 && entry.expires_at <= now) this.drop(key);
       }
     }
     while (this.entries.size > this.max_entries || this.bytes > this.max_bytes) {

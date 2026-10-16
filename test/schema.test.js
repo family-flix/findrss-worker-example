@@ -106,5 +106,7 @@ test("constructor 里 DDL、ALTER、依赖索引的执行顺序不能倒", () =>
   ordered("SELECT route, title, script, metadata_json FROM scripts", "scripts_path");
   ordered("exec(API_SCHEMA_SQL)", "calls_access_token");
   ordered("exec(API_SCHEMA_SQL)", "ALTER TABLE discovery_source_avatars ADD COLUMN object_key");
+  ordered("exec(API_SCHEMA_SQL)", "ALTER TABLE discovery_sources ADD COLUMN credit_cost INTEGER NOT NULL DEFAULT 1");
+  ordered("ALTER TABLE discovery_sources ADD COLUMN credit_cost INTEGER NOT NULL DEFAULT 1", "new RepositoryDiscoverySource");
   ordered("ALTER TABLE discovery_source_avatars ADD COLUMN object_key", "new RepositoryDiscoverySource");
 });

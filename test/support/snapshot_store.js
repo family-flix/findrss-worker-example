@@ -15,5 +15,5 @@ export function snapshot_store() {
     try { const result = task(); db.exec("COMMIT"); return result; }
     catch (error) { db.exec("ROLLBACK"); throw error; }
   } };
-  return { db, sql, repo: new RepositoryRssRouteCache({ sql, storage }) };
+  return { db, sql, storage, repo: new RepositoryRssRouteCache({ sql, storage }) };
 }

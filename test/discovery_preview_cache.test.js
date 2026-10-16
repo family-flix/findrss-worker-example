@@ -3,7 +3,10 @@ import test from "node:test";
 import { register } from "node:module";
 import { snapshot_store } from "./support/snapshot_store.js";
 import { RepositoryDiscoverySource } from "../server/repository/discovery_source.js";
-import { RssRouteCache } from "../server/infra/rss_cache.js";
+import { RepositoryAccessToken } from "../server/repository/access_token.js";
+import { RepositoryCredit } from "../server/repository/credit.js";
+import { ServiceCredit } from "../server/service/durable_object/credits.js";
+import { RssRouteCache, rss_route_cache_key } from "../server/infra/rss_cache.js";
 import { ServiceDiscovery } from "../server/service/durable_object/discovery.js";
 import { admin_discovery_preview } from "../server/service/worker/discovery.js";
 import { RSS_ROUTE_CACHE_TTL_MS } from "../server/lib/constants.js";
@@ -22,13 +25,16 @@ function fixture(t) {
       return Result.Ok({ title: "预览源", items: [{ title: "预览文章", link: "https://example.com/article" }] });
     } };` };
   const repo = { discovery: new RepositoryDiscoverySource(store), rss_route_cache: store.repo,
+    access_tokens: new RepositoryAccessToken(store), credit: new RepositoryCredit(store),
     scripts: { list: () => [row], list_enabled: () => [row], find: () => row } };
+  repo.access_tokens.insert({ id: "valid-token-id", user_id: "reader", name: "Reader", token_hash: "hash", token_hint: "hint",
+    expires_at: null, created_at: 1, credit_balance: 10, total_credits_granted: 10 });
   const ports = { route_cache: new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: store.repo }), schedule_alarm: async () => {} };
   const app = {};
+  app.credit = new ServiceCredit({ repo, storage: store.storage });
   app.discovery = new ServiceDiscovery({ repo, route_cache: ports.route_cache, public_origin: "https://feeds.example",
     check_cookie_permissions: script_id => app.scripts.check_cookie_permissions(script_id) });
   app.scripts = new ServiceScript({ repo, ports, app, public_origin: "https://feeds.example" });
-  store.repo.retain_keys = () => app.discovery.managed_private_snapshot_keys();
   let executions = 0, published;
   app.scripts.record_log = () => {};
   app.scripts.script_invoke = async () => ++executions;
@@ -77,6 +83,28 @@ test("读取结果跨缓存重建复用，保存即发布广场文章和 RSS/Ato
   const avatar = await f.app.discovery.put_discovery_avatar(new Request("https://internal/avatar", { method: "PUT", body: png }), source.id);
   assert.equal(avatar.source.snapshot.saved_at, source.snapshot.saved_at);
   assert.equal(avatar.source.cache.status, "fresh");
+});
+
+test("新增、改为私密与删除订阅源都保留已有持久 XML，私密访问仍需凭证", async t => {
+  const f = fixture(t);
+  const key = "public-snapshot:" + rss_route_cache_key("/kuaishou/profile/3xuxw5yhgr6f4um", []);
+  await f.ports.route_cache.run(key, Date.now(), async () => ({ output: "{}", invoked: false,
+    rendered: new Map([["rss\n", "快手 XML"]]) }));
+  const feed_url = "{{hostname}}/rss/preview/1?a=1&b=2";
+  const data = await (await f.preview(feed_url)).json();
+  const source = await f.save(feed_url, data.preview_id);
+  assert.ok(f.repo.rss_route_cache.read(key));
+  await f.app.discovery.update_discovery_source(new Request("https://internal/source", {
+    method: "PATCH", body: JSON.stringify({ require_token: true }),
+  }), source.id);
+  const own_key = "public-snapshot:" + rss_route_cache_key("/preview/1", new URLSearchParams("a=1&b=2"));
+  assert.ok(f.repo.rss_route_cache.read(own_key));
+  await assert.rejects(f.serve(), { status: 401 });
+  f.app.discovery.storage = f.storage;
+  await f.app.discovery.delete_discovery_source(source.id);
+  const rebuilt = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache });
+  assert.ok(rebuilt.resolve(own_key, Date.now()).rendered.get("rss\n"));
+  assert.equal(rebuilt.resolve(key, Date.now()).rendered.get("rss\n"), "快手 XML");
 });
 
 test("预览保存为私密源只复用私密 XML，不发布文章，清理和重建后仍需身份访问", async t => {

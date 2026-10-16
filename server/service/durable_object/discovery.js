@@ -144,10 +144,6 @@ export class ServiceDiscovery {
       const pathname = address.pathname.replace(/^\/(rss|atom)/, "");
       address.searchParams.delete("token");
       source.cache = this.route_cache.inspect((source.require_token ? "private-snapshot:" : "public-snapshot:") + rss_route_cache_key(pathname, address.searchParams));
-      if (source.cache.saved_at) {
-        source.cache.expires_at = source.next_snapshot_at;
-        source.cache.status = source.next_snapshot_at === null || source.next_snapshot_at > Date.now() ? "fresh" : "expired";
-      }
     }
     return source;
   }
@@ -271,15 +267,6 @@ export class ServiceDiscovery {
     }).filter(Boolean));
   }
 
-  managed_private_snapshot_keys() {
-    return new Set((this.repo.discovery.list_private_routes?.() || []).map(source => {
-      const address = SourceAddressModel(source.feed_url);
-      if (!address.is_route()) return "";
-      const url = new URL(source.feed_url.replace("{{hostname}}", "https://template.invalid"));
-      return "private-snapshot:" + rss_route_cache_key(address.route_pathname, url.searchParams);
-    }).filter(Boolean));
-  }
-
   async refresh_discovery_snapshot(source_id, public_url = "", { automatic = false } = {}) {
     if (this.snapshot_pending.has(source_id)) return this.snapshot_pending.get(source_id);
     const source = this.repo.discovery.find(source_id);
@@ -389,6 +376,7 @@ export class ServiceDiscovery {
       tags_json: JSON.stringify(source.tags),
       enabled: source.enabled ? 1 : 0,
       require_token: source.require_token ? 1 : 0,
+      credit_cost: source.credit_cost,
       sort_order: source.sort_order,
       source_type: source.source_type,
       poll_policy_json: JSON.stringify(source.poll_policy),
@@ -470,6 +458,7 @@ export class ServiceDiscovery {
       tags_json: JSON.stringify(source.tags),
       enabled: source.enabled ? 1 : 0,
       require_token: source.require_token ? 1 : 0,
+      credit_cost: source.credit_cost,
       sort_order: source.sort_order,
       source_type: source.source_type,
       poll_policy_json: JSON.stringify(source.poll_policy),

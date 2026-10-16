@@ -37,6 +37,9 @@ const edit = body => new Request("https://internal/_admin/scripts/debug-script",
 const request = (format = "rss", admin = false, authenticated = true) => new Request(`https://internal/_${admin ? "admin" : "public"}/feed/${format}/sample/123?token=hidden-token&secret=hidden-secret&offset=2`, {
   headers: { Accept: "text/html", "X-Api-Access-Token-ID": authenticated ? "test-user" : "" },
 });
+const generate = (input, service) => route(input, { scripts: {
+  serve_rss_route: (format, pathname, request) => service.serve_rss_route(format, pathname, request, { refresh: true }),
+} });
 
 test("页面 Debug 配置独立于代码：默认关闭，开关不改源码，改源码和启停保留开关", async () => {
   const { service, row } = setup();
@@ -51,10 +54,10 @@ test("页面 Debug 配置独立于代码：默认关闭，开关不改源码，�
   await assert.rejects(service.update_script(edit({ debug: "true" }), row().route), error => error.status === 400);
 });
 
-test("Debug RSS/Atom 错误页显示完整堆栈、上下文和日志，转义 HTML 并避免缓存", async () => {
+test("后台生成 RSS/Atom 的 Debug 错误显示完整堆栈、上下文和日志，转义 HTML 并避免缓存", async () => {
   const { service, cache } = setup(true);
   for (const format of ["rss", "atom"]) {
-    const response = await route(request(format), { scripts: service });
+    const response = await generate(request(format), service);
     assert.equal(response.status, 502);
     assert.match(response.headers.get("Content-Type"), /^text\/html/);
     assert.equal(response.headers.get("Cache-Control"), "no-store");
@@ -72,7 +75,7 @@ test("Debug RSS/Atom 错误页显示完整堆栈、上下文和日志，转义 H
 
 test("关闭 Debug 保持原有响应，后台 JSON 返回脚本错误描述", async () => {
   const { service } = setup();
-  let response = await route(request(), { scripts: service });
+  let response = await generate(request(), service);
   assert.equal(response.status, 502);
   assert.equal((await response.json()).code, "SCRIPT_FAILED");
   const enabled = setup(true).service;
@@ -140,7 +143,7 @@ test("Debug 保留设备错误状态与 Pending 重试头，不把尚未完成�
   for (const status of [402, 409, 503, 504]) {
     const { service, records } = setup(true, script('return ctx.invoke("device.method", {});'));
     service.script_invoke = async () => { throw new ScriptInvokeError(status, "设备调用错误"); };
-    const response = await route(request(), { scripts: service });
+    const response = await generate(request(), service);
     assert.equal(response.status, status === 504 ? 503 : status);
     assert.match(response.headers.get("Content-Type"), /text\/html/);
     assert.match(await response.text(), /invoke/);
@@ -154,6 +157,7 @@ test("Debug 保留设备错误状态与 Pending 重试头，不把尚未完成�
 
 test("Debug 开启时成功请求仍返回 RSS/Atom XML", async () => {
   const { service } = setup(true, script('return {title: "成功", items: []};'));
+  assert.equal((await generate(request("rss", true), service)).status, 200);
   for (const format of ["rss", "atom"]) {
     const response = await route(request(format), { scripts: service });
     assert.equal(response.status, 200);
@@ -164,7 +168,7 @@ test("Debug 开启时成功请求仍返回 RSS/Atom XML", async () => {
 
 test("/debug 绕过已有缓存，展示上下文、长日志和函数返回值，每次重新执行", async () => {
   const { service, cache } = setup(true, script('ctx.log("原始 HTML", "<html>" + "正文".repeat(4000) + "末尾</html>"); return {title: "成功", items: []};'));
-  await route(request(), { scripts: service });
+  await generate(request("rss", true), service);
   const before = cache.stats();
   for (let index = 0; index < 2; index++) {
     const response = await route(new Request('https://internal/_public/feed/debug/sample/123?token=hidden-token&secret=hidden-secret', {

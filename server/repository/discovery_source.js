@@ -190,13 +190,13 @@ export class RepositoryDiscoverySource {
   }
 
   list_private_routes() {
-    return this.sql.exec("SELECT feed_url FROM discovery_sources WHERE enabled = 1 AND require_token = 1 LIMIT ?", MAX_DISCOVERY_SOURCES).toArray();
+    return this.sql.exec("SELECT id, title, feed_url, credit_cost FROM discovery_sources WHERE enabled = 1 AND require_token = 1 ORDER BY id LIMIT ?", MAX_DISCOVERY_SOURCES).toArray();
   }
 
   /**
    * @param {{
    *   id: string, title: string, description: string, website: string, feed_url: string,
-   *   category: string, tags_json: string, enabled: number, require_token: number,
+   *   category: string, tags_json: string, enabled: number, require_token: number, credit_cost: number,
    *   sort_order: number, source_type: string, created_at: number, updated_at: number,
    * }} fields
    * @returns {void}
@@ -205,8 +205,8 @@ export class RepositoryDiscoverySource {
     this.sql.exec(
       `INSERT INTO discovery_sources (
         id, title, description, website, feed_url, category, tags_json,
-        enabled, require_token, sort_order, source_type, created_at, updated_at, poll_policy_json, poll_updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        enabled, require_token, credit_cost, sort_order, source_type, created_at, updated_at, poll_policy_json, poll_updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       fields.id,
       fields.title,
       fields.description,
@@ -216,6 +216,7 @@ export class RepositoryDiscoverySource {
       fields.tags_json,
       fields.enabled,
       fields.require_token,
+      fields.credit_cost ?? 1,
       fields.sort_order,
       fields.source_type,
       fields.created_at,
@@ -227,7 +228,7 @@ export class RepositoryDiscoverySource {
   /**
    * @param {{
    *   id: string, title: string, description: string, website: string, feed_url: string,
-   *   category: string, tags_json: string, enabled: number, require_token: number,
+   *   category: string, tags_json: string, enabled: number, require_token: number, credit_cost: number,
    *   sort_order: number, source_type: string, updated_at: number,
    * }} fields
    * @returns {void}
@@ -236,7 +237,7 @@ export class RepositoryDiscoverySource {
     this.sql.exec(
       `UPDATE discovery_sources
        SET title = ?, description = ?, website = ?, feed_url = ?, category = ?,
-           tags_json = ?, enabled = ?, require_token = ?, sort_order = ?, source_type = ?,
+           tags_json = ?, enabled = ?, require_token = ?, credit_cost = ?, sort_order = ?, source_type = ?,
            updated_at = ?, poll_policy_json = ?, poll_updated_at = ?
        WHERE id = ?`,
       fields.title,
@@ -247,6 +248,7 @@ export class RepositoryDiscoverySource {
       fields.tags_json,
       fields.enabled,
       fields.require_token,
+      fields.credit_cost ?? 1,
       fields.sort_order,
       fields.source_type,
       fields.updated_at,

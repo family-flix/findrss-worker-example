@@ -80,7 +80,7 @@ test("沙箱默认匿名；显式授权按名称发送，跨 origin 后不恢复
   } finally { globalThis.fetch = original_fetch; }
 });
 
-test("管理员确认精确源码版本；草稿可存，发布及缓存命中均验证授权，撤销清缓存", async () => {
+test("管理员确认精确源码版本；发布及缓存命中均验证授权，撤销后保留 XML 但阻止访问", async () => {
   const rows = [], grants = new Map(), cache = new RssRouteCache(60000, 100);
   let public_sources = [];
   const repo = {
@@ -120,7 +120,11 @@ test("管理员确认精确源码版本；草稿可存，发布及缓存命中�
   const serve = () => route(new Request("https://internal/_public/feed/rss/cookie-test", {
     headers: { "X-Api-Access-Token-ID": "test-user" },
   }), { scripts: service });
+  const generate = () => service.serve_rss_route("rss", "/cookie-test",
+    new Request("https://internal/_admin/feed/rss/cookie-test"), { refresh: true });
   try {
+    assert.equal((await serve()).status, 503);
+    await generate();
     assert.equal((await serve()).status, 200);
     assert.equal(cache.stats().entries, 1);
     assert.equal((await serve()).headers.get("X-Api-RSS-Cache"), "hit");
@@ -137,9 +141,9 @@ test("管理员确认精确源码版本；草稿可存，发布及缓存命中�
       find: id => public_sources.find(source => source.id === id), snapshot_attempt() {}, snapshot_get: () => snapshot,
       snapshot_save(_id, _url, articles, saved_at, error = "") { snapshot = { saved_at, error, articles_json: JSON.stringify(articles) }; },
     });
-    const discovery = new ServiceDiscovery({ repo, load_snapshot: async () => { await serve().then(async response => {
-      if (!response.ok) throw new Error((await response.json()).error || "需要确认 Cookie 权限");
-    }); return [{ title: "示例文章" }]; } });
+    const discovery = new ServiceDiscovery({ repo, load_snapshot: async () => {
+      await generate(); return [{ title: "示例文章" }];
+    } });
     const failed_snapshot = await discovery.refresh_discovery_snapshot("source");
     assert.match(failed_snapshot.snapshot.error, /Cookie 权限/);
     const challenge = await route(new Request("https://internal/_admin/scripts/" + id + "/cookie-permissions", { method: "POST" }), { scripts: service });
@@ -158,7 +162,8 @@ test("管理员确认精确源码版本；草稿可存，发布及缓存命中�
     grants.delete(approved.cookie_grant_id);
     assert.equal((await serve()).status, 409); // 即便已有缓存也不能绕过撤销。
     await service.revoke_cookie_grant(id);
-    assert.equal(cache.stats().entries, 0);
+    assert.equal(cache.stats().entries, 1);
+    assert.equal((await serve()).status, 409);
     await assert.rejects(service.update_script(edit({ script: script + "\n", status: "published", version: "1.0.2" }), id), error => error.status === 409);
   } finally { globalThis.fetch = original_fetch; }
 });

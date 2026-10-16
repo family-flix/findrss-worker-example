@@ -1,6 +1,6 @@
 // rss_route_cache 表（`RssRouteCache` 的 L2）的读写：按 key 取条目、upsert、过期/超量清理。
 //
-// JSON/XML 快照的存储封装与分块在这里处理；TTL 由注入时钟的 infra/rss_cache.js 判定。
+// XML 永久保存；普通脚本缓存的 TTL 由 infra/rss_cache.js 判定。
 //
 // `read` / `write` / `delete_expired` / `count` / `delete_oldest` 这组方法名**就是**
 // infra 侧约定的 store 接口，所以组合根（`server/durable_object.js`）可以把本对象直接
@@ -10,12 +10,12 @@
 const snapshot_prefix = "findrss-snapshot-v1:";
 const chunk_marker = "findrss-snapshot-chunks-v1";
 const chunk_size = 64 * 1024;
+const temporary_entries = "key NOT LIKE 'public-snapshot:%' AND key NOT LIKE 'private-snapshot:%'";
 
 export class RepositoryRssRouteCache {
   /** @param {{ sql: SqlStorage, storage?: DurableObjectStorage }} deps */
-  constructor({ sql, storage, retain_keys = () => new Set() }) {
+  constructor({ sql, storage }) {
     this.sql = sql;
-    this.retain_keys = retain_keys;
     this.transaction = storage ? task => storage.transactionSync(task) : task => task();
   }
 
@@ -40,6 +40,7 @@ export class RepositoryRssRouteCache {
       const snapshot = JSON.parse(row.output_json.slice(snapshot_prefix.length));
       row.output_json = snapshot.output;
       row.rendered = snapshot.rendered;
+      row.saved_at = snapshot.saved_at;
     }
     return row;
   }
@@ -53,7 +54,7 @@ export class RepositoryRssRouteCache {
    * @returns {void}
    */
   write(entry) {
-    const body = entry.rendered ? snapshot_prefix + JSON.stringify({ output: entry.output_json, rendered: entry.rendered }) : entry.output_json;
+    const body = entry.rendered ? snapshot_prefix + JSON.stringify({ output: entry.output_json, rendered: entry.rendered, saved_at: entry.saved_at }) : entry.output_json;
     const chunked = entry.rendered && body.length > chunk_size;
     this.transaction(() => {
       this.sql.exec("DELETE FROM rss_route_cache_chunks WHERE key = ?", entry.key);
@@ -92,30 +93,26 @@ export class RepositoryRssRouteCache {
 
   /** @param {number} now @returns {void} */
   delete_expired(now) {
-    // 定时私密源也保留上次快照；读取前仍由服务层校验订阅身份。
-    const retained = [...this.retain_keys()];
-    const exclusion = retained.length ? ` AND key NOT IN (${retained.map(() => "?").join(",")})` : "";
-    this.sql.exec("DELETE FROM rss_route_cache WHERE expires_at <= ? AND key NOT LIKE 'public-snapshot:%'" + exclusion, now, ...retained);
+    this.sql.exec("DELETE FROM rss_route_cache WHERE expires_at <= ? AND " + temporary_entries, now);
     this.delete_orphan_chunks();
   }
 
-  /** 脚本配置变更后的全清（`RssRouteCache.invalidate_all` 的 L2 侧）。 @returns {void} */
+  /** 配置变更只清理普通缓存，XML 仅在成功刷新时覆盖。 @returns {void} */
   clear() {
     this.transaction(() => {
-      this.sql.exec("DELETE FROM rss_route_cache_chunks");
-      this.sql.exec("DELETE FROM rss_route_cache");
-      this.sql.exec("UPDATE rss_public_feeds SET attempted_at = 0");
+      this.sql.exec("DELETE FROM rss_route_cache WHERE " + temporary_entries);
+      this.delete_orphan_chunks();
     });
   }
 
   /** @returns {number} */
   count() {
-    const row = this.sql.exec("SELECT COUNT(*) AS total FROM rss_route_cache").toArray()[0];
+    const row = this.sql.exec("SELECT COUNT(*) AS total FROM rss_route_cache WHERE " + temporary_entries).toArray()[0];
     return row === undefined ? 0 : Number(row.total);
   }
 
   /**
-   * 只保留 `created_at` 最新的 `keep` 行（`keep <= 0` 时清空）。L2 的行数上限由
+   * 普通缓存只保留 `created_at` 最新的 `keep` 行；持久 XML 不参与容量淘汰。L2 的行数上限由
    * 调用方按内存里的 `max_entries` 传进来——L1 与 L2 用同一个上限，L1 被挤掉的条目
    * 才能在 L2 里多活一会儿（这正是加 L2 的意义）。
    * @param {number} keep
@@ -123,13 +120,13 @@ export class RepositoryRssRouteCache {
    */
   delete_oldest(keep) {
     if (keep <= 0) {
-      this.sql.exec("DELETE FROM rss_route_cache");
+      this.sql.exec("DELETE FROM rss_route_cache WHERE " + temporary_entries);
       this.delete_orphan_chunks();
       return;
     }
     this.sql.exec(
       `DELETE FROM rss_route_cache WHERE key IN (
-         SELECT key FROM rss_route_cache ORDER BY created_at DESC LIMIT -1 OFFSET ?
+         SELECT key FROM rss_route_cache WHERE ${temporary_entries} ORDER BY created_at DESC LIMIT -1 OFFSET ?
        )`,
       keep);
     this.delete_orphan_chunks();
@@ -164,6 +161,5 @@ export class RepositoryRssRouteCache {
 
   delete_public(key) {
     this.sql.exec("DELETE FROM rss_public_feeds WHERE key = ?", key);
-    this.delete(key);
   }
 }

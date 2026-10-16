@@ -3,6 +3,9 @@ import test from "node:test";
 import { register } from "node:module";
 import { snapshot_store } from "./support/snapshot_store.js";
 import { RepositoryDiscoverySource } from "../server/repository/discovery_source.js";
+import { RepositoryAccessToken } from "../server/repository/access_token.js";
+import { RepositoryCredit } from "../server/repository/credit.js";
+import { ServiceCredit } from "../server/service/durable_object/credits.js";
 import { RepositorySnapshotSettings } from "../server/repository/snapshot_settings.js";
 import { ServiceDiscovery } from "../server/service/durable_object/discovery.js";
 import { ServiceSnapshotSettings } from "../server/service/durable_object/snapshot_settings.js";
@@ -28,7 +31,6 @@ function fixture(t) {
   let fail = false, articles = [{ title: "第一篇", link: "https://example.com/1" }];
   const service = new ServiceDiscovery({ repo, snapshot_settings: () => settings.settings(), schedule_alarm: async () => {},
     load_snapshot: async source => { calls.push(source.id); if (fail) throw new Error("离线"); return articles; } });
-  repo.rss_route_cache.retain_keys = () => service.managed_private_snapshot_keys();
   function add(id, policy, fields = {}) {
     repo.discovery.insert({ id, title: id, description: "", website: "", feed_url: "https://example.com/" + id,
       category: "", tags_json: "[]", enabled: 1, require_token: 0, sort_order: 0, source_type: "website",
@@ -223,8 +225,13 @@ test("真实私密脚本自动生成 RSS/Atom；鉴权后只读，过期清理�
     }
   };`, metadata_json: JSON.stringify({ path: "/private/:id", name: "私密" }) };
   f.repo.scripts = { list_enabled: () => [row] };
+  f.repo.access_tokens = new RepositoryAccessToken(f);
+  f.repo.credit = new RepositoryCredit(f);
+  f.repo.access_tokens.insert({ id: "user-token-id", user_id: "reader", name: "Reader", token_hash: "hash", token_hint: "hint",
+    expires_at: null, created_at: 1, credit_balance: 10, total_credits_granted: 10 });
   const ports = { route_cache: new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache }), schedule_alarm: async () => {} };
-  const script = new ServiceScript({ repo: f.repo, ports, app: { discovery: f.service }, public_origin: "https://feeds.example" });
+  const script = new ServiceScript({ repo: f.repo, ports, app: { discovery: f.service,
+    credit: new ServiceCredit({ repo: f.repo, storage: f.storage }) }, public_origin: "https://feeds.example" });
   let executions = 0, fail = false;
   script.record_log = () => {};
   script.script_invoke = async () => { if (fail) throw new Error("offline"); return ++executions; };
@@ -232,8 +239,8 @@ test("真实私密脚本自动生成 RSS/Atom；鉴权后只读，过期清理�
   const serve = (token = "", format = "rss") => script.serve_rss_route(format, "/private/1", new Request(
     "https://internal/_public/feed/" + format + "/private/1?b=2&a=1", { headers: { "X-Api-Access-Token-ID": token } }));
   await assert.rejects(serve(), { status: 401 });
-  await assert.rejects(serve("user-token-id"), { status: 503 }); assert.equal(executions, 0);
-  await f.service.refresh_due_snapshots(); assert.equal(executions, 1);
+  await assert.rejects(serve("user-token-id"), { status: 503 });
+  await Promise.all([f.service.refresh_due_snapshots(), ...script.xml_tasks.values()]); assert.equal(executions, 1);
   await assert.rejects(serve(), { status: 401 });
   const first = await serve("user-token-id");
   assert.match(first.body, /私密文章/); assert.equal(first.headers["Cache-Control"], "private, no-cache");

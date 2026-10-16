@@ -13,10 +13,10 @@ test("快照与任务租约共用 alarm，频繁调度不能推迟已安排的�
   const source = readFileSync(new URL("../server/durable_object.js", import.meta.url), "utf8");
   const schedule = vm.runInNewContext("({" + source.slice(source.lastIndexOf("  async schedule_alarm()"), source.lastIndexOf("\n}")) + "}).schedule_alarm",
     { Date: { now: () => 10000 }, MAINTENANCE_MILLISECONDS: 86400000 });
-  let current = null, lease = null, snapshot = 15000, token_expiry = null;
+  let current = null, lease = null, snapshot = 15000, token_expiry = null, statistics_at = 4000000;
   const writes = [];
   const object = { repo: { calls: { min_lease_expires_at: () => lease }, device_tokens: { min_expires_at: now => token_expiry > now ? token_expiry : null } },
-    app: { discovery: { next_snapshot_at: () => snapshot } },
+    app: { discovery: { next_snapshot_at: () => snapshot }, statistics: { next_snapshot_at: () => statistics_at } },
     ctx: { storage: { getAlarm: async () => current, setAlarm: async value => { current = value; writes.push(value); } } } };
   await schedule.call(object); assert.equal(current, 15000);
   snapshot = 20000; await schedule.call(object); assert.deepEqual(writes, [15000]);
@@ -24,6 +24,9 @@ test("快照与任务租约共用 alarm，频繁调度不能推迟已安排的�
   lease = null; snapshot = 3600000; await schedule.call(object); assert.equal(current, 12000);
   current = null; await schedule.call(object); assert.equal(current, 3600000);
   token_expiry = 11000; await schedule.call(object); assert.equal(current, 11000);
+  current = null; token_expiry = null; statistics_at = 310000;
+  await schedule.call(object); assert.equal(current, 310000);
+  statistics_at = 0; await schedule.call(object); assert.equal(current, 10000);
 });
 
 function png(width, height) {

@@ -87,6 +87,7 @@ export class ServiceScript {
     this.message_listeners = new Set();
     this.public_registered = new Set();
     this.public_refreshing = null;
+    this.xml_tasks = new Map();
     this.preview_assets = new ScriptPreviewAssets();
     /** 失败日志闸门：同一路由 + 相位 + query 在一个窗口内只记一行。 */
     this.failure_log_throttle = new LogThrottle(
@@ -140,8 +141,7 @@ export class ServiceScript {
   }
 
   /**
-   * 脚本配置变更后的统一失效入口：路由索引与响应缓存必须一起清。
-   * 两者共用失效点不是巧合——它们缓存的是同一份「脚本世界」的两个投影。
+   * 更新路由索引和普通缓存，保留上次成功生成的 XML。
    * @returns {void}
    */
   invalidate_routes() {
@@ -172,7 +172,7 @@ export class ServiceScript {
           headers: { "X-Feed-Public-URL": source.self_url },
         }), { refresh: true });
       } catch (error) {
-        // 停用或改成私密后，移除定时任务及旧公开产物。
+        // 停用或改成私密后只移除定时任务，XML 继续保留。
         if (error.status === 401 || error.status === 404) {
           this.repo.rss_route_cache.delete_public(source.key);
           this.public_registered.delete(source.key);
@@ -1004,7 +1004,13 @@ export class ServiceScript {
     const selected = RssRouteSelectionModel(rows, route_pathname).best();
     if (format === "raw" && !selected) throw do_error("not found", 404);
     const directory_public = this.rss_address_is_public(route_pathname);
-    const directory_private = (this.repo.discovery?.list_private_routes?.() || []).some(row => SourceAddressModel(row.feed_url).matches(route_pathname));
+    const private_sources = (this.repo.discovery?.list_private_routes?.() || []).filter(row => SourceAddressModel(row.feed_url).matches(route_pathname));
+    const request_key = rss_route_cache_key(route_pathname, request_query);
+    const private_source = private_sources.find(row => {
+      const address = SourceAddressModel(row.feed_url);
+      return rss_route_cache_key(address.route_pathname, new URL(address.resolve("https://template.invalid")).searchParams) === request_key;
+    }) || private_sources[0];
+    const directory_private = Boolean(private_source);
     const feed_public = directory_public || !directory_private && selected?.metadata.public === true;
     const public_route = request_url.pathname.startsWith("/_admin/feed/") || feed_public;
     if (debug_request && (!selected || !ScriptModel.fromRow(selected.row).debug)) throw do_error("not found", 404);
@@ -1054,11 +1060,11 @@ export class ServiceScript {
       params: selected.path_match.params,
       query,
     };
-    // 公开自有源不计积分：即使携带身份也按匿名调用下发，登录用户读公开源同样免费；
-    // 只有非公开源（个人订阅凭证访问）才以调用方身份计费。
-    const invoke_token = public_route ? "" : access_token_id;
-    // 相同 path+query 复用快照；私密源窗口内首个请求者承担 invoke 成本。
-    // XML 快照同时保存 RSS 与 Atom；公开/私密分开，切换权限不会复用旧公开产物。
+    // 已登记私密源按成功访问计费，后台生成和脚本内设备调用不再重复扣费。
+    const invoke_token = public_route || directory_private ? "" : access_token_id;
+    const charge_access = () => !refresh && !public_route && private_source
+      ? this.app.credit.charge_feed_access(access_token_id, DiscoverySourceModel.fromRow(private_source)) : {};
+    // 相同 path+query 共用后台生成的 RSS/Atom XML；公开/私密分开保存。
     const snapshot = (format === "rss" || format === "atom") && !preview_script_id;
     const cache_key = (snapshot ? (feed_public ? "public-snapshot:" : "private-snapshot:")
       : preview_script_id ? "admin-preview:" + preview_script_id + ":" : "")
@@ -1066,19 +1072,27 @@ export class ServiceScript {
     const self_url = (request.headers.get("X-Feed-Public-URL") ?? "").trim();
     if (snapshot && feed_public && !this.public_registered.has(cache_key)) {
       if (!this.repo.rss_route_cache.register_public(cache_key, route_pathname, request_query, self_url, RSS_ROUTE_CACHE_MAX_ENTRIES)) {
-        throw do_error("公开订阅源快照数量已达上限", 429);
+        throw do_error("公开订阅源 XML 数量已达上限", 429);
       }
       this.public_registered.add(cache_key);
       await this.ports.schedule_alarm?.();
     }
     if (snapshot && feed_public && refresh) this.repo.rss_route_cache.public_attempt(cache_key, Date.now());
-    const scheduled_private = snapshot && !feed_public && this.app.discovery?.managed_private_snapshot_keys?.().has(cache_key);
-    if (snapshot && (feed_public || scheduled_private) && !refresh && request_url.pathname.startsWith("/_public/feed/")) {
-      const stored = this.ports.route_cache.resolve(cache_key, Date.now(), true);
+    if (snapshot && !refresh && request_url.pathname.startsWith("/_public/feed/")) {
+      const stored = this.ports.route_cache.resolve(cache_key, Date.now());
       const body = stored?.rendered?.get(format + "\n");
-      if (body === undefined) throw do_error("订阅源快照正在后台生成，请稍后重试", 503, {}, { "Retry-After": "5" });
+      if (body === undefined) {
+        if (!this.xml_tasks.has(cache_key)) {
+          const task = this.serve_rss_route(format, route_pathname, request, { refresh: true })
+            .catch(error => console.warn("RSS XML generation failed", route_pathname, error.message))
+            .finally(() => this.xml_tasks.delete(cache_key));
+          this.xml_tasks.set(cache_key, task);
+          this.ports.wait_until?.(task);
+        }
+        throw do_error("订阅源 XML 正在生成，请稍后重试", 503, { code: "FEED_GENERATING" }, { "Retry-After": "5" });
+      }
       return { body, headers: { "Content-Type": FeedModel.content_type(format), "Cache-Control": feed_public ? "public, max-age=120" : "private, no-cache",
-        "X-Content-Type-Options": "nosniff", "X-Api-RSS-Cache": "hit" } };
+        "X-Content-Type-Options": "nosniff", "X-Api-RSS-Cache": "hit", ...charge_access() } };
     }
     // 只在写账本那一跳归一；这里原样透传，因此最多错标调用方自己那一行。
     const credit_subject = (request.headers.get(CREDIT_SUBJECT_HEADER) ?? "").trim();
@@ -1148,13 +1162,14 @@ export class ServiceScript {
         return {
           raw: JSON.parse(output), route: { allowed_hosts: metadata.allowed_hosts },
           version: String(selected.row.route) + ":" + selected.row.updated_at + ":" + metadata.route_index,
-          headers: { "Cache-Control": public_route ? "public, max-age=120" : "private, max-age=60",
-            "X-Api-RSS-Cache": cached ? "hit" : "miss" },
+          headers: { "Cache-Control": public_route ? "public, max-age=120" : directory_private ? "private, no-cache" : "private, max-age=60",
+            "X-Api-RSS-Cache": cached ? "hit" : "miss", ...charge_access() },
         };
       }
       if (debug_request) {
         return {
           body: output,
+          headers: charge_access(),
           rss_debug: {
             script: { id: String(selected.row.route), name: metadata.name || "", path: metadata.path },
             request: { ...request_context, authentication }, phase: "ok", lines, upstream_requests, cookie_accesses,
@@ -1178,10 +1193,12 @@ export class ServiceScript {
           "Content-Type": FeedModel.content_type(format),
           "X-Content-Type-Options": "nosniff",
           "X-Api-RSS-Cache": cached ? "hit" : "miss",
+          ...charge_access(),
         },
       };
     } catch (failure) {
       cookie_access?.assert_grant();
+      if (failure instanceof DurableObjectError) throw failure;
       const fields = script_failure_fields(failure);
       const phase = invoke_failure !== null ? "invoke" : fields.phase;
       const debug_details = metadata.debug === true && request_url.pathname.startsWith("/_public/feed/") ? {

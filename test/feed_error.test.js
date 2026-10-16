@@ -23,11 +23,14 @@ function setup(handler, { public_source = false, debug = false } = {}) {
 const request = (format, authenticated = true) => new Request(`https://internal/_public/feed/${format}/probe`, { headers: {
   Accept: "application/rss+xml, application/atom+xml", "X-Api-Access-Token-ID": authenticated ? "test-user" : "",
 } });
+const generate = (input, service) => route(input, { scripts: {
+  serve_rss_route: (format, pathname, request) => service.serve_rss_route(format, pathname, request, { refresh: true }),
+} });
 
-test("RSS/Atom 受控错误穿过 QuickJS，Debug 开启也给阅读器返回 Problem Details", async () => {
+test("后台生成 RSS/Atom 时受控错误穿过 QuickJS，Debug 开启也保留 Problem Details", async () => {
   const { service, cache, logs } = setup('return ctx.fail("UPSTREAM_AUTH_REQUIRED", "请联系源管理员更新微博 Cookie");', { debug: true });
   for (const format of ["rss", "atom"]) {
-    const response = await route(request(format), { scripts: service });
+    const response = await generate(request(format), service);
     assert.equal(response.status, 502);
     assert.equal(response.headers.get("Content-Type"), "application/problem+json");
     assert.equal(response.headers.get("Cache-Control"), "no-store");
@@ -47,7 +50,7 @@ test("RSS/Atom 受控错误穿过 QuickJS，Debug 开启也给阅读器返回 Pr
 test("参数错误和独立示例的 FeedError 契约均保留状态码", async () => {
   for (const handler of ['return ctx.fail("INVALID_PARAMETER", "UID 必须为数字");', 'throw Object.assign(new Error("UID 必须为数字"), {name: "FeedError", code: "INVALID_PARAMETER"});']) {
     const { service } = setup(handler);
-    const response = await route(request("rss"), { scripts: service });
+    const response = await generate(request("rss"), service);
     assert.equal(response.status, 400);
     assert.equal((await response.json()).code, "INVALID_PARAMETER");
   }
@@ -56,7 +59,7 @@ test("参数错误和独立示例的 FeedError 契约均保留状态码", async 
 test("普通异常和未知错误码不公开内部信息，缺 token 返回认证挑战", async () => {
   for (const handler of ['throw new Error("private fixture secret");', 'return ctx.fail("UNKNOWN_CODE", "private fixture secret");']) {
     const { service } = setup(handler);
-    const response = await route(request("rss"), { scripts: service });
+    const response = await generate(request("rss"), service);
     assert.equal(response.status, 502);
     assert.doesNotMatch(await response.text(), /private fixture secret/);
   }

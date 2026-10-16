@@ -38,7 +38,7 @@ test("路由直达 JSON；RSS/Atom 由后台共用一份 XML 快照，Debug 包�
   assert.match(direct.headers.get("Content-Type"), /application\/json/);
   assert.equal((await direct.json()).title, "1");
   assert.equal((await app.fetch("/rss/book/1")).status, 503);
-  await app.service.refresh_due_snapshots();
+  await Promise.all(app.service.xml_tasks.values());
   for (const format of ["rss", "atom"]) {
     const response = await app.fetch("/" + format + "/book/1");
     assert.equal(response.status, 200);
@@ -113,18 +113,20 @@ test("番茄正文直达 HTML、HEAD 无正文；解码转义、缓存、Debug �
     assert.equal(await head.text(), "");
     assert.equal(calls, 1);
     assert.equal((await app.fetch("/rss" + path)).status, 503);
+    await Promise.all(app.service.xml_tasks.values());
+    assert.equal(calls, 2);
     const debug = await app.fetch("/debug" + path);
     assert.equal(debug.status, 200);
     const debug_html = await debug.text();
     assert.match(debug_html, /我的故事/);
     assert.match(debug_html, /data-n="debug-output-content"/);
     assert.match(debug_html, /\/debug\/fanqienovel\/chapter\/9007199254740993/);
-    assert.equal(calls, 2);
+    assert.equal(calls, 3);
     const failure = await app.fetch("/debug/fanqienovel/chapter/bad");
     assert.equal(failure.status, 400);
     assert.match(failure.headers.get("Content-Type"), /text\/html/);
     assert.match(await failure.text(), /chapter_id 无效/);
-    assert.equal(calls, 2);
+    assert.equal(calls, 3);
     assert.equal((await app.fetch("/fanqienovel/chapter/bad")).status, 400);
     app.row.enabled = 0;
     app.service.invalidate_routes();

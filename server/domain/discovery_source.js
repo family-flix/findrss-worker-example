@@ -12,6 +12,7 @@
 import { DISCOVERY_CATEGORIES, DISCOVERY_CATEGORY_TAGS, DISCOVERY_PLATFORM_LABELS, DISCOVERY_RELATED_LIMIT, MAX_DISCOVERY_SOURCES } from "../lib/constants.js";
 import { public_http_url } from "../lib/proxy_url.js";
 import { SourceAddressModel } from "./source_address.js";
+import { CreditModel } from "./credits.js";
 import { stored_poll_policy } from "../lib/snapshot_schedule.js";
 import { parse_poll_policy } from "../lib/poll_schedule.js";
 
@@ -129,6 +130,7 @@ export function DiscoverySourceModel(state) {
     require_token: typeof source.require_token === "boolean"
       ? source.require_token
       : Number(source.require_token) === 1,
+    credit_cost: Number(source.credit_cost ?? CreditModel.DEFAULT_COST),
     sort_order: Number(source.sort_order ?? 0),
     source_type: String(source.source_type || "website"),
     poll_policy: source.poll_policy || stored_poll_policy(source.poll_policy_json),
@@ -163,6 +165,7 @@ export function DiscoverySourceModel(state) {
       tags: [...state_.tags],
       enabled: state_.enabled,
       require_token: state_.require_token,
+      credit_cost: state_.credit_cost,
       sort_order: state_.sort_order,
       source_type: state_.source_type,
       poll_policy: state_.poll_policy,
@@ -207,6 +210,7 @@ DiscoverySourceModel.merge_for_patch = (current, body) => {
     tags: source.tags ?? [...current.tags],
     enabled: source.enabled ?? Boolean(current.enabled),
     require_token: source.require_token ?? Boolean(current.require_token),
+    credit_cost: source.credit_cost === undefined ? current.credit_cost : source.credit_cost,
     sort_order: source.sort_order ?? Number(current.sort_order),
     source_type: source.source_type ?? String(current.source_type),
     poll_policy: source.poll_policy === undefined ? current.poll_policy : source.poll_policy,
@@ -342,6 +346,10 @@ DiscoverySourceModel.validate = (body, source_types = DISCOVERY_SOURCE_TYPES, in
     return invalid("require_token must be a boolean");
   }
   const require_token = body.require_token === true;
+  const credit_cost = body.credit_cost === undefined ? CreditModel.DEFAULT_COST : body.credit_cost;
+  if (!Number.isInteger(credit_cost) || credit_cost < 0 || credit_cost > CreditModel.MAX_BALANCE) {
+    return invalid("credit_cost must be an integer between 0 and " + CreditModel.MAX_BALANCE);
+  }
   if (body.sort_order !== undefined && !Number.isInteger(body.sort_order)) {
     return invalid("sort_order must be an integer");
   }
@@ -370,6 +378,7 @@ DiscoverySourceModel.validate = (body, source_types = DISCOVERY_SOURCE_TYPES, in
       tags,
       enabled,
       require_token,
+      credit_cost,
       sort_order,
       source_type,
       poll_policy,

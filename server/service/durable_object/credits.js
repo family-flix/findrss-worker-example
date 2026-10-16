@@ -1,18 +1,42 @@
-// 积分总览、管理端账本查询与「我的用量」。写路径（charge/grant/兑换）在各目的服务里。
+// 积分总览、订阅访问扣费、管理端账本查询与「我的用量」。
 //
 // 只回数据或抛 DurableObjectError，绝不造 Response。
 import { AccessTokenModel } from "../../domain/access_token.js";
-import { ActivityCursorModel, ActivityPageModel } from "../../domain/activity_log.js";
+import { ActivityCursorModel, ActivityEventModel, ActivityPageModel } from "../../domain/activity_log.js";
 import { CreditModel, CreditTransactionModel } from "../../domain/credits.js";
 import { valid_identifier } from "../../lib/identifiers.js";
 import { do_error } from "./error.js";
 
 export class ServiceCredit {
   /**
-   * @param {{ repo: Record<string, any> }} deps
+   * @param {{ repo: Record<string, any>, storage?: DurableObjectStorage }} deps
    */
-  constructor({ repo }) {
+  constructor({ repo, storage }) {
     this.repo = repo;
+    this.storage = storage;
+  }
+
+  charge_feed_access(access_token_id, source) {
+    return this.storage.transactionSync(() => {
+      const now = Date.now();
+      const token = this.repo.access_tokens.find(access_token_id);
+      if (!token || !AccessTokenModel.fromRow(token).is_active_at(now)) throw do_error("unauthorized", 401);
+      const balance = Number(token.credit_balance);
+      const cost = source.credit_cost;
+      if (!CreditModel.can_spend(balance, cost)) {
+        throw do_error("insufficient credits", 402, { required: cost, balance }, CreditModel.headers(balance));
+      }
+      const balance_after = balance - cost;
+      if (cost > 0) {
+        this.repo.access_tokens.set_balance_used(access_token_id, balance_after, cost);
+        this.repo.credit.insert({
+          id: crypto.randomUUID(), access_token_id, task_id: null, type: "charge",
+          amount: -cost, balance_after, method: "get_feed",
+          subject: ActivityEventModel.subject(source.title), note: "Feed access", created_at: now,
+        });
+      }
+      return CreditModel.headers(balance_after);
+    });
   }
 
   /** @param {Request} request @returns {Record<string, unknown>} */

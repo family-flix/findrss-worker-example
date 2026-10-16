@@ -118,6 +118,7 @@ import { ServiceWebhookSettings } from "./service/durable_object/webhook_setting
  * @property {string[] | string} [tags]
  * @property {boolean} [enabled]
  * @property {boolean} [require_token]
+ * @property {number} [credit_cost]
  * @property {number} [sort_order]
  * @property {string} [source_type]
  */
@@ -227,6 +228,9 @@ export class APIDurableObject extends DurableObject {
     if (!discovery_source_columns.some((column) => column.name === "require_token")) {
       this.ctx.storage.sql.exec(
         "ALTER TABLE discovery_sources ADD COLUMN require_token INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!discovery_source_columns.some((column) => column.name === "credit_cost")) {
+      this.ctx.storage.sql.exec("ALTER TABLE discovery_sources ADD COLUMN credit_cost INTEGER NOT NULL DEFAULT 1");
     }
     if (!discovery_source_columns.some((column) => column.name === "source_type")) {
       this.ctx.storage.sql.exec(
@@ -359,8 +363,7 @@ export const route = {
       platforms: new RepositoryPlatform({ sql: this.ctx.storage.sql }),
       tags: new RepositoryTag({ sql: this.ctx.storage.sql }),
       script_logs: new RepositoryScriptLog({ sql: this.ctx.storage.sql }),
-      rss_route_cache: new RepositoryRssRouteCache({ sql: this.ctx.storage.sql, storage: this.ctx.storage,
-        retain_keys: () => this.app?.discovery?.managed_private_snapshot_keys() || new Set() }),
+      rss_route_cache: new RepositoryRssRouteCache({ sql: this.ctx.storage.sql, storage: this.ctx.storage }),
       users: new RepositoryUser({ sql: this.ctx.storage.sql }),
       script_agent: new RepositoryScriptAgent({ sql: this.ctx.storage.sql }),
     };
@@ -396,7 +399,7 @@ export const route = {
     this.app.statistics = new ServiceStatistics({ repo: this.repo, app: this.app });
     this.app.maintenance = new ServiceMaintenance({ repo: this.repo });
     this.app.activity = new ServiceActivity({ repo: this.repo, app: this.app });
-    this.app.credit = new ServiceCredit({ repo: this.repo });
+    this.app.credit = new ServiceCredit({ repo: this.repo, storage: this.ctx.storage });
     this.app.redemption = new ServiceRedemption({
       repo: this.repo,
       storage: this.ctx.storage,

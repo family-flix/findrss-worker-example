@@ -117,6 +117,7 @@ test("DiscoverySourceModel.fromRow().toValue() 把 0/1 列翻成布尔，tags �
     tags: ["a", "b"],
     enabled: true,
     require_token: false,
+    credit_cost: 1,
     sort_order: 3,
     source_type: "wxmp",
     avatar_url: "",
@@ -296,6 +297,7 @@ test("DiscoverySourceModel.merge_for_patch 只覆盖出现过的字段", () => {
     tags: ["a"],
     enabled: true,
     require_token: false,
+    credit_cost: 1,
     sort_order: 5,
     source_type: "website",
     poll_policy: { mode: "inherit" },
@@ -320,6 +322,26 @@ test("DiscoverySourceModel 的上限常量与重复文案", () => {
     status: 409,
     message: "discovery source already exists",
   });
+});
+
+test("订阅源访问积分缺省为 1，接受零与整数，拒绝负数、小数及非数字，PATCH 保留原配置", () => {
+  const body = { title: "源", feed_url: "{{hostname}}/rss/demo" };
+  assert.equal(DiscoverySourceModel.validate(body).model.credit_cost, 1);
+  assert.equal(value_of().credit_cost, 1);
+  for (const credit_cost of [0, 7, 1_000_000_000]) {
+    const result = DiscoverySourceModel.validate({ ...body, credit_cost });
+    assert.equal(result.ok, true);
+    assert.equal(result.model.toValue().credit_cost, credit_cost);
+  }
+  for (const credit_cost of [-1, 0.5, "2", null, true, NaN, Infinity, 1_000_000_001]) {
+    const result = DiscoverySourceModel.validate({ ...body, credit_cost });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.status, 400);
+  }
+  const current = DiscoverySourceModel.fromRow(source_row({ credit_cost: 7 }));
+  assert.equal(DiscoverySourceModel.merge_for_patch(current, { title: "改名" }).credit_cost, 7);
+  assert.equal(DiscoverySourceModel.merge_for_patch(current, { credit_cost: 0 }).credit_cost, 0);
+  assert.equal(DiscoverySourceModel.validate(DiscoverySourceModel.merge_for_patch(current, { credit_cost: null })).ok, false);
 });
 
 

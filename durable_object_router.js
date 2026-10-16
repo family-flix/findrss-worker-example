@@ -387,7 +387,7 @@ async function dispatch(request, app) {
       request,
     );
     if (rss_route_match[1] === "raw") return feed;
-    if (feed.rss_debug) return debug_response({ ...feed.rss_debug, output: feed.body }, 200);
+    if (feed.rss_debug) return debug_response({ ...feed.rss_debug, output: feed.body }, 200, feed.headers);
     return new Response(feed.body, { headers: feed.headers });
   }
   if (url.pathname === "/_internal/access-tokens/verify" && request.method === "POST") {
