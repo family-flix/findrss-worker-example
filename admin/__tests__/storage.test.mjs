@@ -21,15 +21,12 @@ async function fixture(files) {
   return { ...model, bucket, requests };
 }
 
-test("文件树按需加载、折叠、缓存子目录，支持同名文件和目录", async () => {
+test("文件树默认展开全部层级，支持折叠、缓存以及同名文件和目录", async () => {
   const { state, methods, requests } = await fixture([["a/one", "1"], ["a/deep/two", "22"], ["a", "3"], ["z", "4"]]);
-  assert.deepEqual(state.rows.value.map(row => row.key), ["a/", "a", "z"]);
+  assert.deepEqual(state.rows.value.map(row => [row.key, row.depth]), [["a/", 0], ["a/deep/", 1], ["a/deep/two", 2], ["a/one", 1], ["a", 0], ["z", 0]]);
   assert.equal(state.count_label.value, "4 个文件");
-  assert.equal(requests.length, 2);
-  await methods.activate(id("a/"));
-  assert.deepEqual(state.rows.value.map(row => [row.key, row.depth]), [["a/", 0], ["a/deep/", 1], ["a/one", 1], ["a", 0], ["z", 0]]);
-  await methods.activate(id("a/deep/"));
-  assert.equal(state.rows.value.find(row => row.key === "a/deep/two").depth, 2);
+  assert.equal(requests.length, 4);
+  assert.ok(state.rows.value.filter(row => row.folder).every(row => row.expanded));
   await methods.activate(id("a/"));
   assert.equal(state.rows.value.length, 3);
   const count = requests.length;
@@ -39,20 +36,44 @@ test("文件树按需加载、折叠、缓存子目录，支持同名文件和�
   methods.dispose();
 });
 
-test("大量同级文件以加载更多追加，目录读取失败可重试且不清空已加载内容", async () => {
+test("自动读完同级文件的后续分页，失败可重试且不清空已加载内容", async () => {
   const f = await fixture(Array.from({ length: 205 }, (_, index) => ["files/" + String(index).padStart(3, "0"), "abc"]));
-  await f.methods.activate(id("files/"));
-  assert.equal(f.state.rows.value.length, 102);
-  f.bucket.fail_next({ op: "list" });
-  await f.methods.activate("more:files/");
+  assert.equal(f.state.rows.value.length, 206);
+  assert.ok(!f.state.rows.value.some(row => row.more));
+  const original = window.FindRSSAdminAuth.fetch;
+  let failed = false;
+  window.FindRSSAdminAuth.fetch = (url, options) => {
+    if (new URL("https://test" + url).searchParams.has("cursor") && !failed) {
+      failed = true;
+      return Response.json({ error: "R2 读取失败" }, { status: 502 });
+    }
+    return original(url, options);
+  };
+  await f.methods.refresh();
   assert.match(f.state.rows.value.at(-1).title, /点击重试/);
   assert.equal(f.state.rows.value.filter(row => !row.more && !row.folder).length, 100);
   await f.methods.activate("more:files/");
-  assert.equal(f.state.rows.value.filter(row => !row.more && !row.folder).length, 200);
-  await f.methods.activate("more:files/");
   assert.equal(f.state.rows.value.length, 206);
   assert.ok(!f.state.rows.value.some(row => row.more));
-  assert.equal(f.requests.filter(item => item.url.endsWith("/usage")).length, 1);
+  assert.equal(f.requests.filter(item => item.url.endsWith("/usage")).length, 2);
+  f.methods.dispose();
+});
+
+test("根目录超过一页时自动加载所有目录，读取并发最多 4 个", async () => {
+  const f = await fixture(Array.from({ length: 125 }, (_, index) => ["folder" + String(index).padStart(3, "0") + "/deep/file", "abc"]));
+  const original = window.FindRSSAdminAuth.fetch;
+  let inflight = 0, maximum = 0;
+  window.FindRSSAdminAuth.fetch = async (url, options) => {
+    if (url.endsWith("/usage")) return original(url, options);
+    inflight++; maximum = Math.max(maximum, inflight);
+    try { await new Promise(setImmediate); return await original(url, options); }
+    finally { inflight--; }
+  };
+  await f.methods.refresh();
+  assert.equal(f.state.rows.value.filter(row => !row.folder).length, 125);
+  assert.equal(f.state.rows.value.length, 375);
+  assert.ok(f.state.rows.value.filter(row => row.folder).every(row => row.expanded));
+  assert.equal(maximum, 4);
   f.methods.dispose();
 });
 
@@ -138,8 +159,12 @@ test("根目录和统计失败显示错误并可刷新重试", async () => {
   f.methods.dispose();
 });
 
-test("刷新后忽略旧目录的迟到响应，特殊加载行与真实文件键不冲突", async () => {
+test("卸载后忽略目录的迟到响应，特殊加载行与真实文件键不冲突", async () => {
   const f = await fixture([["a/child", "one"], ["more:", "real file"]]);
+  await f.methods.activate(id("more:"));
+  assert.equal(f.state.preview.value.text, "real file");
+  f.methods.preview_error("a/old");
+  assert.equal(f.state.preview.value.error, "");
   const original = window.FindRSSAdminAuth.fetch;
   let resolve_directory;
   window.FindRSSAdminAuth.fetch = (url, options) => {
@@ -148,14 +173,11 @@ test("刷新后忽略旧目录的迟到响应，特殊加载行与真实文件�
     }
     return original(url, options);
   };
-  const pending = f.methods.activate(id("a/"));
-  await f.methods.refresh();
+  const pending = f.methods.refresh();
+  await new Promise(setImmediate);
+  f.methods.dispose();
   resolve_directory(Response.json({ objects: [{ key: "a/old", size: 3 }], delimited_prefixes: [], truncated: false }));
   await pending;
-  assert.deepEqual(f.state.rows.value.map(row => row.key), ["a/", "more:"]);
-  await f.methods.activate(id("more:"));
-  assert.equal(f.state.preview.value.text, "real file");
-  f.methods.preview_error("a/old");
-  assert.equal(f.state.preview.value.error, "");
-  f.methods.dispose();
+  assert.ok(!f.state.rows.value.some(row => row.key === "a/old"));
+  assert.equal(f.state.preview.value, null);
 });

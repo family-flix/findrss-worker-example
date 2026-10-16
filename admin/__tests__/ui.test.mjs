@@ -71,9 +71,7 @@ test("存储文件树使用虚拟窗口，目录可展开且只提供预览", as
   assert.equal(tree.config.itemHeight, 40);
   const folder = tree.renderItem(ui.ref(tree.source.value[0]), ui.ref(0));
   assert.equal(find(folder, "storage-tree-name").children[0].state.value, "files");
-  assert.equal(find(folder, "storage-tree-row").state.attributes["aria-expanded"], "false");
-  find(folder, "storage-tree-row").events.onClick();
-  await new Promise(setImmediate);
+  assert.equal(find(folder, "storage-tree-row").state.attributes["aria-expanded"], "true");
   assert.equal(tree.source.value.length, 5001);
   tree.model.setItems(tree.source.value);
   for (const top of [0, 3200, tree.model.getTotalHeight() - 560]) {
