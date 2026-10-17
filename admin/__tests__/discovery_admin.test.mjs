@@ -1,23 +1,117 @@
+import { list_runtime, paged_fixture } from "./list_fixture.mjs";
 import { PollPolicyView, poll_policy_label } from "../components/poll_policy.js";
 import { page_source } from "./page_source.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
-import { PaginationModel, PaginationView } from "../components/pagination.js";
+import { resolveObjectURL } from "node:buffer";
+import { ListPaginationModel, PaginationModel, PaginationView } from "../components/pagination.js";
 import * as platform_helpers from "../components/discovery_platform.js";
 import { RssRoutePatternModel } from "../../server/domain/rss_route.js";
 import { PollPolicyModel } from "../components/poll_policy.model.js";
 
-function modal_model(fetch, { confirm = () => true } = {}) {
+function modal_model(fetch, { confirm = () => true, notify = () => {}, document = { querySelector: () => null } } = {}) {
   const ref = value => ({ value, set(next) { this.value = next; }, as(next) { this.value = next; } });
-  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, PaginationModel, PaginationView, URL, File, document: { querySelector: () => null }, window: {
-    FindRSSAdminUI: { DOM: {}, ref, refarr: ref, computed: (source, map) => ({ get value() { return map(source.value); } }), combine: (sources, map) => ({ get value() { return map(Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.value]))); } }) },
-    confirm, FindRSSAdminShell: {}, FindRSSAdminPages: {}, FindRSSAdminAuth: { fetch },
+  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, ListPaginationModel, PaginationModel, PaginationView, URL, File, Blob, document, window: {
+    FindRSSAdminUI: { ...list_runtime, DOM: {}, notify, ref, refarr: ref, computed: (source, map) => ({ get value() { return map(source.value); } }), combine: (sources, map) => ({ get value() { return map(Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.value]))); } }) },
+    confirm, setTimeout: handler => handler(), FindRSSAdminShell: {}, FindRSSAdminPages: {}, FindRSSAdminAuth: { fetch: async (url, options) => paged_fixture(await fetch(url, options || {}), url) },
   } });
   vm.runInContext(page_source("discovery.js") + "\nglobalThis.model = DiscoveryAdminViewModel();", context);
   assert.deepEqual(JSON.parse(JSON.stringify(context.model.state.platforms.value)), [{ id: "website", label: "网页", icon: "" }]);
   return context.model;
 }
+
+test("社媒主页新增保存、编辑回填与清空，关闭表单清除草稿，关键词可检索主页", async () => {
+  const writes = [];
+  const notifications = [];
+  let source = { id: "one", title: "源", feed_url: "{{hostname}}/rss/example/one", enabled: true };
+  const model = modal_model(async (url, options) => {
+    if (!options?.body) return Response.json(url.includes("/scripts") ? { scripts: [] } : { sources: [source] });
+    const body = JSON.parse(options.body);
+    writes.push({ method: options.method, body });
+    source = { ...source, ...body };
+    return Response.json({ source });
+  }, { notify: message => notifications.push(message) });
+  model.methods.create_source();
+  model.methods.set_draft("title", "源");
+  model.methods.set_draft("feed_url", source.feed_url);
+  model.methods.set_draft("social_url", " https://x.com/unique-home ");
+  await model.methods.save_source();
+  assert.equal(writes[0].method, "POST");
+  assert.deepEqual(notifications, ["源 已保存。"]);
+  assert.equal(writes[0].body.social_url, "https://x.com/unique-home");
+  assert.equal(model.state.draft_social_url.value, "");
+  await model.methods.set_filter("query", "unique-home");
+  assert.equal(model.visible_sources.value.length, 1);
+  model.methods.edit_source("one");
+  assert.equal(model.state.draft_social_url.value, "https://x.com/unique-home");
+  model.methods.set_draft("social_url", "");
+  await model.methods.save_source();
+  assert.equal(writes[1].method, "PATCH");
+  assert.deepEqual(notifications, ["源 已保存。", "源 已保存。"]);
+  assert.equal(writes[1].body.social_url, "");
+  assert.equal(model.visible_sources.value.length, 0);
+  model.methods.create_source();
+  model.methods.set_draft("social_url", "https://x.com/draft");
+  model.methods.close_form();
+  assert.equal(model.state.draft_social_url.value, "");
+});
+
+test("多个社媒主页保存时去空去重，编辑保留全部主页，清空后不恢复旧首项", async () => {
+  const writes = [];
+  let source = { id: "multi", title: "源", feed_url: "https://example.com/feed.xml", enabled: true };
+  const model = modal_model(async (url, options) => {
+    if (!options.body) return Response.json(url.includes("/scripts") ? { scripts: [] } : { sources: [source] });
+    const body = JSON.parse(options.body);
+    writes.push(body);
+    source = { ...source, ...body };
+    return Response.json({ source });
+  });
+  const social_urls = ["https://x.com/one", "https://www.douyin.com/user/two"];
+  model.methods.create_source();
+  model.methods.set_draft("title", source.title);
+  model.methods.set_draft("feed_url", source.feed_url);
+  model.methods.set_draft("social_urls", [" " + social_urls[0] + " ", "", social_urls[1], social_urls[0]]);
+  await model.methods.save_source();
+  assert.deepEqual(writes[0].social_urls, social_urls);
+  model.methods.edit_source(source.id);
+  assert.deepEqual(Array.from(model.state.draft_social_urls.value), social_urls);
+  model.methods.set_draft("social_urls", []);
+  await model.methods.save_source();
+  assert.deepEqual(writes[1].social_urls, []);
+  assert.equal(writes[1].social_url, "");
+  model.methods.edit_source(source.id);
+  assert.deepEqual(Array.from(model.state.draft_social_urls.value), []);
+  model.methods.close_form();
+  assert.deepEqual(Array.from(model.state.draft_social_urls.value), []);
+});
+
+test("多主页 JSON 导出后重新导入保留全部地址和顺序", async () => {
+  const social_urls = ["https://x.com/one", "https://www.douyin.com/user/two"];
+  let sources = [{ id: "multi", title: "源", feed_url: "https://example.com/feed.xml", social_urls }];
+  const writes = [];
+  let downloaded;
+  const document = { querySelector: () => null, createElement: () => ({
+    setAttribute() {}, click() { downloaded = resolveObjectURL(this.href).text(); },
+  }) };
+  const model = modal_model(async (_, options) => {
+    if (!options.body) return Response.json({ sources });
+    const source = JSON.parse(options.body);
+    writes.push(source);
+    sources.push({ ...source, id: "imported" });
+    return Response.json({ source: sources.at(-1) });
+  }, { document });
+  await model.methods.export_sources();
+  assert.equal(model.state.list_error.value, "");
+  const text = await downloaded;
+  assert.deepEqual(JSON.parse(text).sources[0].social_urls, social_urls);
+  sources = [];
+  model.methods.open_import();
+  model.methods.set_import_text(text);
+  await model.methods.import_sources();
+  assert.deepEqual(writes[0].social_urls, social_urls);
+  assert.equal(writes[0].social_url, social_urls[0]);
+});
 
 test("手动刷新保持加载状态，完成后更新当前记录的快照与缓存", async () => {
   const snapshot = { saved_at: 123, articles: [{ title: "旧文章" }] };
@@ -52,7 +146,7 @@ test("表格选择支持本页全选和跨页保留，筛选与刷新清理过�
   model.methods.toggle_page_selection();
   assert.equal(model.state.selected_ids.value.length, 20);
   assert.equal(model.page_selection.value.all, true);
-  model.pagination.set_page(1);
+  await model.pagination.set_page(1);
   assert.equal(model.page_selection.value.all, false);
   model.methods.toggle_selection("20");
   assert.equal(model.page_selection.value.some, true);
@@ -60,7 +154,7 @@ test("表格选择支持本页全选和跨页保留，筛选与刷新清理过�
   assert.equal(model.state.selected_ids.value.length, 25);
   model.methods.toggle_page_selection();
   assert.equal(model.state.selected_ids.value.length, 20);
-  model.methods.set_filter("query", "源");
+  await model.methods.set_filter("query", "源");
   assert.equal(model.state.selected_ids.value.length, 0);
   model.methods.toggle_selection("0");
   model.methods.toggle_selection("1");
@@ -81,17 +175,19 @@ test("批量启停设置明确状态，保留失败项，重复提交与处理�
     writes.push([id, JSON.parse(options.body)]);
     if (id === "one") await new Promise(resolve => { finish = resolve; });
     if (id === "two" && fail) return Response.json({ error: "写入失败" }, { status: 500 });
-    return Response.json({ source: { ...sources.find(source => source.id === id), ...JSON.parse(options.body) } });
+    const updated = { ...sources.find(source => source.id === id), ...JSON.parse(options.body) };
+    sources.splice(sources.findIndex(source => source.id === id), 1, updated);
+    return Response.json({ source: updated });
   });
   await model.methods.refresh_list();
-  model.methods.set_filter("status", "all");
+  await model.methods.set_filter("status", "all");
   model.methods.toggle_page_selection();
   const pending = model.methods.bulk_action("disable");
   assert.equal(model.state.bulk_busy.value, true);
   await model.methods.bulk_action("delete");
   model.methods.clear_selection();
   model.methods.toggle_selection("one");
-  model.methods.set_filter("status", "disabled");
+  await model.methods.set_filter("status", "disabled");
   model.methods.create_source();
   model.methods.open_import();
   assert.equal(model.state.selected_ids.value.length, 2);
@@ -104,7 +200,7 @@ test("批量启停设置明确状态，保留失败项，重复提交与处理�
   assert.equal(model.state.bulk_busy.value, false);
   assert.match(model.state.bulk_message.value, /成功 2 个，失败 0 个/);
 
-  model.methods.set_filter("status", "all");
+  await model.methods.set_filter("status", "all");
   model.methods.toggle_page_selection();
   const enable = model.methods.bulk_action("enable");
   finish();
@@ -119,25 +215,22 @@ test("批量启停设置明确状态，保留失败项，重复提交与处理�
   assert.equal(model.state.list_error.value, "");
 });
 
-test("批量删除只确认一次，取消不写入，失败保留以便重试", async () => {
-  let confirmed = false;
-  const confirmations = [], deleted = [];
+test("批量删除提交所选订阅源，失败保留以便重试", async () => {
+  const deleted = [];
+  let sources = ["one", "two"].map(id => ({ id, title: id, enabled: true }));
   const model = modal_model(async (url, options) => {
     if (options.method === "DELETE") {
       deleted.push(url.split("/").at(-1));
+      if (deleted.at(-1) !== "two") sources = sources.filter(source => source.id !== deleted.at(-1));
       return deleted.at(-1) === "two" ? Response.json({ error: "删除失败" }, { status: 500 }) : Response.json({});
     }
-    return Response.json({ sources: ["one", "two"].map(id => ({ id, title: id, enabled: true })) });
-  }, { confirm: text => { confirmations.push(text); return confirmed; } });
+    return Response.json({ sources });
+  });
   await model.methods.refresh_list();
   model.methods.toggle_page_selection();
-  await model.methods.bulk_action("delete");
   assert.deepEqual(deleted, []);
   assert.equal(model.state.selected_ids.value.length, 2);
-  confirmed = true;
   await model.methods.bulk_action("delete");
-  assert.equal(confirmations.length, 2);
-  assert.match(confirmations[1], /2 个订阅源/);
   assert.deepEqual(deleted, ["one", "two"]);
   assert.deepEqual(Array.from(model.state.sources.value, source => source.id), ["two"]);
   assert.deepEqual(Array.from(model.state.selected_ids.value), ["two"]);
@@ -169,6 +262,36 @@ test("批量刷新更新 XML 和快照，跳过外部私密源，失败保留选
   assert.deepEqual(Array.from(model.state.selected_ids.value), ["external", "failed"]);
   assert.match(model.state.bulk_message.value, /成功 2 个，失败 1 个，跳过 1 个/);
   assert.match(model.state.list_error.value, /失败源：上游离线/);
+});
+
+test("后端翻页后仍可批量刷新和停用前一页选中的订阅源", async () => {
+  const sources = Array.from({ length: 21 }, (_, index) => ({ id: String(index), title: "源 " + index, enabled: true }));
+  const refreshed = [], disabled = [];
+  const model = modal_model(async (url, options) => {
+    if (options.method === "POST") {
+      refreshed.push(url.split("/").at(-2));
+      return Response.json({ snapshot: { saved_at: 100, articles: [], error: "" } });
+    }
+    if (options.method === "PATCH") {
+      const source = sources.find(source => url.endsWith("/" + source.id));
+      Object.assign(source, JSON.parse(options.body));
+      disabled.push(source.id);
+      return Response.json({ source });
+    }
+    return Response.json({ sources });
+  });
+  await model.methods.refresh_list();
+  model.methods.toggle_selection("0");
+  await model.pagination.set_page(1);
+  model.methods.toggle_selection("20");
+  await model.methods.bulk_action("refresh");
+  assert.deepEqual(refreshed, ["0", "20"]);
+  model.methods.toggle_selection("20");
+  await model.pagination.set_page(0);
+  model.methods.toggle_selection("0");
+  await model.methods.bulk_action("disable");
+  assert.deepEqual(disabled, ["20", "0"]);
+  assert.equal(model.pagination.state.value.total, 19);
 });
 
 test("后台可选标签使用脚本目录，匹配路由预填且手动修改保留，草稿和源标签不进入选项", async () => {
@@ -208,21 +331,27 @@ test("后台可选标签使用脚本目录，匹配路由预填且手动修改�
 
 test("JSON 导入兼容导出格式，保留配置和模板，跳过已有及重复地址", async () => {
   const writes = [];
+  const sources = [{ id: "old", title: "已有", feed_url: "https://example.com/existing", enabled: true }];
   const model = modal_model(async (_, options) => {
-    if (!options?.body) return Response.json({ sources: [{ id: "old", title: "已有", feed_url: "https://example.com/existing", enabled: true }] });
+    if (!options?.body) return Response.json({ sources });
     const source = JSON.parse(options.body);
     writes.push(source);
-    return Response.json({ source: { ...source, id: "new-" + writes.length } });
+    const saved = { ...source, id: "new-" + writes.length };
+    sources.push(saved);
+    return Response.json({ source: saved });
   });
   await model.methods.refresh_list();
   model.methods.open_import();
   const source = { id: "ignored", title: "导入源", feed_url: "https://old.example/rss/test", feed_url_template: "{{hostname}}/rss/test",
+    social_url: "https://x.com/imported",
     tags: ["标签"], enabled: false, require_token: true, credit_cost: 7, source_type: "website", sort_order: 3, avatar_url: "/old-avatar", snapshot: { saved_at: 1 }, poll_policy: { mode: "manual" } };
   model.methods.set_import_text(JSON.stringify({ sources: [
     { title: "已有", feed_url: "https://example.com/existing" }, source, source,
   ] }));
   await model.methods.import_sources();
-  assert.deepEqual(writes, [{ title: "导入源", feed_url: "{{hostname}}/rss/test", tags: ["标签"], enabled: false, require_token: true, credit_cost: 7, source_type: "website", sort_order: 3, poll_policy: { mode: "manual" } }]);
+  assert.deepEqual(writes, [{ title: "导入源", social_url: "https://x.com/imported", feed_url: "{{hostname}}/rss/test", tags: ["标签"], enabled: false, require_token: true, credit_cost: 7, source_type: "website", sort_order: 3, poll_policy: { mode: "manual" } }]);
+  assert.equal(model.state.sources.value.length, 1, "默认启用筛选排除导入的停用源");
+  await model.methods.set_filter("status", "all");
   assert.equal(model.state.sources.value.length, 2);
   assert.match(model.state.import_message.value, /已导入 1 个.*跳过重复地址 2 个/);
   assert.equal(model.state.import_text.value, "");
@@ -275,15 +404,20 @@ test("JSON 导入中断保留结果与剩余条目，重复提交被阻止，重
   const calls = [];
   let finish;
   let fail = true;
+  const sources = [];
   const model = modal_model(async (_, options) => {
+    if (!options.body) return Response.json({ sources });
     const source = JSON.parse(options.body);
     calls.push(source.title);
-    if (source.title === "one") return new Promise(resolve => { finish = () => resolve(Response.json({ source: { ...source, id: "one" } })); });
-    return fail ? Response.json({ error: "路由不存在" }, { status: 400 }) : Response.json({ source: { ...source, id: "two" } });
+    if (source.title === "one") return new Promise(resolve => { finish = () => { sources.push({ ...source, id: "one" }); resolve(Response.json({ source: sources.at(-1) })); }; });
+    if (fail) return Response.json({ error: "路由不存在" }, { status: 400 });
+    sources.push({ ...source, id: "two" });
+    return Response.json({ source: sources.at(-1) });
   });
   model.methods.open_import();
   model.methods.set_import_text(JSON.stringify(["one", "two"].map(title => ({ title, feed_url: "https://example.com/" + title }))));
   const pending = model.methods.import_sources();
+  await new Promise(setImmediate);
   await model.methods.import_sources();
   model.methods.close_import();
   assert.equal(model.state.import_open.value, true);
@@ -461,6 +595,7 @@ test("新增与编辑共用弹窗，取消清空草稿，保存失败保留表�
     feed_url_template: "{{hostname}}/rss/demo", tags: ["科技"], category: "science", enabled: false,
     website: "https://example.com", description: "科技资讯", sort_order: 0, require_token: false };
   const { state, methods } = modal_model((url, options) => {
+    if (!options?.method) return Response.json({ sources: [source] });
     calls.push({ url, options });
     return new Promise(resolve => { finish = () => resolve(fail
       ? Response.json({ error: "保存失败" }, { status: 500 }) : Response.json({ source })); });
@@ -507,6 +642,7 @@ test("头像上传失败保留弹窗，重试更新已创建源而不重复新�
   const calls = [];
   let avatar_fails = true;
   const { state, methods } = modal_model(async (url, options) => {
+    if (!options.method) return Response.json({ sources: [{ id: "created", title: "示例源", enabled: true }] });
     calls.push({ url, options });
     if (url.endsWith("/avatar") && avatar_fails) return Response.json({ error: "上传失败" }, { status: 500 });
     return Response.json({ source: { id: "created", title: "示例源", enabled: true } });
@@ -532,8 +668,8 @@ test("RSS 地址输入及失焦不读取订阅源，点击按钮才读取", () =
   const component = (props, children) => { nodes.push({ props, children }); return {}; };
   const calls = [];
   const ref = (value) => ({ value, set(next) { this.value = next; }, as(next) { this.value = next; } });
-  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, PaginationModel, PaginationView, URL, document: { querySelector: () => null }, window: {
-    Timeless: { DOM: {}, ref, refarr: ref, computed: (source, map) => ({ get value() { return map(source.value); } }),
+  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, ListPaginationModel, PaginationModel, PaginationView, URL, document: { querySelector: () => null }, window: {
+    Timeless: { ...list_runtime, DOM: {}, ref, refarr: ref, computed: (source, map) => ({ get value() { return map(source.value); } }),
       combine: (sources, map) => ({ get value() { return map(Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.value]))); } }),
       View: component, Input: component, FeedAddressEditor: component, Button: component, Select: component, Textarea: component, Dialog: component, Icon: component,
       Show: () => ({}), For: () => ({}),
@@ -613,8 +749,8 @@ test("新增源回填默认值，异步旧地址不覆盖新草稿，头像随�
   const calls = [];
   let finish;
   const ref = (value) => ({ value, set(next) { this.value = next; }, as(next) { this.value = next; } });
-  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, PaginationModel, PaginationView, URL, File, Uint8Array, atob, document: { querySelector: () => null }, window: {
-    Timeless: { DOM: {}, ref, refarr: ref, computed: () => ({}), combine: () => ({}) },
+  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, ListPaginationModel, PaginationModel, PaginationView, URL, File, Uint8Array, atob, document: { querySelector: () => null }, window: {
+    Timeless: { ...list_runtime, DOM: {}, ref, refarr: ref, computed: () => ({}), combine: () => ({}) },
     FindRSSAdminShell: {}, FindRSSAdminPages: {}, FindRSSAdminAuth: { fetch(url, options) {
       calls.push({ url, options });
       if (url.endsWith('/preview')) return new Promise((resolve) => { finish = resolve; });
@@ -677,8 +813,8 @@ test("读取订阅源信息失败时展示具体错误描述，清除读取中�
   const message = "脚本执行失败：脚本异常：小红书笔记缺少有效的 noteId";
   let calls = 0;
   const ref = value => ({ value, set(next) { this.value = next; }, as(next) { this.value = next; } });
-  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, PaginationModel, PaginationView, URL, document: { querySelector: () => null }, window: {
-    Timeless: { DOM: {}, ref, refarr: ref, computed: () => ({}), combine: () => ({}) }, FindRSSAdminShell: {}, FindRSSAdminPages: {},
+  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, ListPaginationModel, PaginationModel, PaginationView, URL, document: { querySelector: () => null }, window: {
+    Timeless: { ...list_runtime, DOM: {}, ref, refarr: ref, computed: () => ({}), combine: () => ({}) }, FindRSSAdminShell: {}, FindRSSAdminPages: {},
     FindRSSAdminAuth: { fetch: async () => { calls++; return Response.json({ error: message }, { status: 502 }); } },
   } });
   context.window.FindRSSAdminUI = context.window.Timeless;
@@ -695,7 +831,7 @@ test("读取订阅源信息失败时展示具体错误描述，清除读取中�
 
 test("新增保存携带读取缓存标识，修改地址、重新读取失败或关闭表单后不复用旧标识", async () => {
   for (const mode of ["matching", "changed", "failed", "closed"]) {
-    let saved, preview_body, fail = false;
+    let saved, saved_source, preview_body, fail = false;
     const snapshot = { saved_at: 123, articles: [{ title: "已读取文章" }] };
     const model = modal_model(async (url, options) => {
       if (url.endsWith("/preview")) {
@@ -705,9 +841,10 @@ test("新增保存携带读取缓存标识，修改地址、重新读取失败�
       }
       if (options?.method === "POST") {
         saved = options;
-        return Response.json({ source: { ...JSON.parse(options.body), id: "new", snapshot, cache: { status: "fresh" } } });
+        saved_source = { ...JSON.parse(options.body), id: "new", snapshot, cache: { status: "fresh" } };
+        return Response.json({ source: saved_source });
       }
-      return Response.json({ scripts: [] });
+      return Response.json({ scripts: [], sources: saved_source ? [saved_source] : [] });
     });
     model.methods.set_draft("feed_url", "https://example.com/feed.xml");
     await model.methods.preview_feed();
@@ -757,12 +894,12 @@ test("操作后刷新列表时较早的读取迟到不会覆盖最新订阅源�
   const model = modal_model(() => new Promise(resolve => pending.push(resolve)));
   const first = model.methods.refresh_list();
   const latest = model.methods.refresh_list();
-  pending[1](Response.json({ sources: [{ id: "new", title: "最新源", feed_url: "https://example.com/new" }] }));
-  await latest;
-  assert.equal(model.state.sources.value[0].id, "new");
-  assert.equal(model.state.loading.value, false);
   pending[0](Response.json({ sources: [{ id: "old", title: "旧源", feed_url: "https://example.com/old" }] }));
   await first;
+  assert.equal(model.state.sources.value.length, 0);
+  assert.equal(model.state.loading.value, true);
+  pending[1](Response.json({ sources: [{ id: "new", title: "最新源", feed_url: "https://example.com/new" }] }));
+  await latest;
   assert.equal(model.state.sources.value[0].id, "new");
   assert.equal(model.state.loading.value, false);
 });

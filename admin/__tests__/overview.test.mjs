@@ -1,3 +1,4 @@
+import { ListPaginationModel, PaginationView } from "../components/pagination.js";
 import { page_source } from "./page_source.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -12,7 +13,7 @@ function fixture(create_response, page_id = "overview") {
     script_count: 200, source_count: 700, source_call_count: 1234,
     cookie_count: 3, route_count: 8, platform_count: 4, tag_count: 6,
     sources: [{ id: "a", title: "源", feed_url: "https://feeds.example/rss/a", enabled: true, tracked: true, call_count: 1234 }] };
-  const context = vm.createContext({ URL, setTimeout: () => 0, clearTimeout() {},
+  const context = vm.createContext({ ListPaginationModel, PaginationView, URL, setTimeout: () => 0, clearTimeout() {},
     setInterval(callback, milliseconds) { intervals.push({ callback, milliseconds }); return intervals.length; }, clearInterval() {} });
   context.window = context;
   context.document = { querySelector: () => null };
@@ -21,6 +22,8 @@ function fixture(create_response, page_id = "overview") {
   const ui = context.Timeless;
   const element = (props, children = []) => ({ props, children });
   Object.assign(ui, { DOM: {}, View: element, Button: element, Input: element, Select: element,
+    Popconfirm: props => element(props, [props.trigger({})]),
+    EmptyCard: props => element({ attributes: { n: props.name } }, [props.title, props.description, ...props.actions]),
     Dialog: (props, children) => element(props, [...children, ...props.footer]),
     Show: ({ when, ok }) => ({ props: {}, get children() { return when.value ? [ok()] : []; } }),
     For: ({ each, render }) => element({}, each.value.map((row, index) => render(row, { value: index }))) });
@@ -31,9 +34,14 @@ function fixture(create_response, page_id = "overview") {
   context.FindRSSAdminAuth = { fetch: async (url, options) => {
     requests.push(url);
     if (options?.method === "POST") return create_response(options);
+    if (url.startsWith("/admin/api/access-tokens?")) {
+      const params = new URL(url, "https://admin").searchParams;
+      const offset = Number(params.get("offset")), limit = Number(params.get("limit"));
+      return Response.json({ access_tokens: access_tokens.slice(offset, offset + limit), total_count: access_tokens.length });
+    }
     return Response.json(url === "/admin/api/overview"
       ? { generated_at: 1000, statistics }
-      : { devices: [], methods: [], task_counts: [], access_tokens });
+      : { devices: [], methods: [], task_counts: [], access_tokens, total_count: access_tokens.length });
   } };
   vm.runInContext(page_source("dashboard.js")
     + `\nglobalThis.model = DashboardViewModel(${JSON.stringify(page_id)}); globalThis.source_view = SourceCallsView; globalThis.metrics_view = MetricsView; globalThis.token_view = AccessTokenManagementView;`, context);
@@ -107,6 +115,7 @@ test("概览移除在线方法容器与 Token 抽屉，独立 Token 页面显示
   assert.equal(tokens.props.title, "Token");
   assert.equal(tokens.props.count.value, "0");
   const token_nodes = nodes(tokens);
+  assert.deepEqual(Array.from(tokens.props.actions, node => node.props.attributes?.n), ["open-access-token-create-button"]);
   for (const name of ["token-management-view", "access-token-management", "access-token-list", "confirm-dialog-root"])
     assert.ok(token_nodes.some(node => node.props.attributes?.n === name), name);
   assert.equal(token_nodes.some(node => node.props.attributes?.n === "access-token-create-form"), false);
@@ -119,10 +128,11 @@ test("概览移除在线方法容器与 Token 抽屉，独立 Token 页面显示
   assert.equal(token_nodes.some(node => node.props.attributes?.n === "overview-metrics"), false);
   tokens.children[0].props.onMounted();
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(f.requests, ["/admin/api/management-overview"]);
+  assert.deepEqual(f.requests, ["/admin/api/access-tokens?limit=20&offset=0"]);
   assert.deepEqual(f.intervals.map(interval => interval.milliseconds), [5000]);
   f.access_tokens.push({ id: "test-token", name: "测试 Token" });
-  await tokens.props.actions.find(node => node.props.attributes?.n === "refresh-button").props.onClick();
+  f.intervals[0].callback();
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.requests.length, 2);
   assert.equal(tokens.props.count.value, "1");
   tokens.children[0].props.onUnmounted();
@@ -175,4 +185,25 @@ test("Token 弹窗保留校验与失败提示，提交时防止关闭和重复�
   model.methods.dismissCreatedAccessToken();
   assert.equal(model.state.access_token_action.value.created_token, "");
   model.methods.dispose();
+});
+
+test("Token 页面使用 ListCore 后端分页，翻页与修改条数不读取全量管理概览", async () => {
+  const f = fixture(undefined, "tokens");
+  f.access_tokens.push(...Array.from({ length: 41 }, (_, index) => ({ id: "t" + index, name: "Token " + index })));
+  await f.model.methods.refresh();
+  assert.ok(f.model.token_pagination.list instanceof f.ui.kit.ListCore);
+  assert.equal(f.model.state.access_tokens.value.length, 20);
+  assert.equal(f.model.token_pagination.state.value.total, 41);
+  await f.model.token_pagination.set_page(2);
+  assert.deepEqual(Array.from(f.model.state.access_tokens.value, token => token.id), ["t40"]);
+  assert.equal(f.requests.at(-1), "/admin/api/access-tokens?limit=20&offset=40");
+  f.access_tokens.pop();
+  await f.model.methods.refresh();
+  assert.equal(f.model.token_pagination.state.value.page, 1);
+  assert.equal(f.requests.at(-1), "/admin/api/access-tokens?limit=20&offset=20");
+  await f.model.token_pagination.set_page_size(10);
+  assert.equal(f.requests.at(-1), "/admin/api/access-tokens?limit=10&offset=0");
+  assert.equal(f.model.state.access_tokens.value.length, 10);
+  assert.ok(f.requests.every(url => url.startsWith("/admin/api/access-tokens?")));
+  f.model.methods.dispose();
 });

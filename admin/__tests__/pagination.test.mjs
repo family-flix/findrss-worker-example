@@ -1,3 +1,4 @@
+import { paged_fixture } from "./list_fixture.mjs";
 import { PollPolicyView, poll_policy_label } from "../components/poll_policy.js";
 import { PollPolicyModel } from "../components/poll_policy.model.js";
 import { page_source } from "./page_source.mjs";
@@ -5,14 +6,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
 import { readFileSync } from "node:fs";
-import { PaginationModel, PaginationView } from "../components/pagination.js";
+import { ListPaginationModel, PaginationModel, PaginationView } from "../components/pagination.js";
 import { ScriptAgentModel } from "../components/script_agent.js";
+import { buildSync } from "esbuild";
+import { fileURLToPath } from "node:url";
 import * as platform_helpers from "../components/discovery_platform.js";
 import { RssRoutePatternModel } from "../../server/domain/rss_route.js";
 
+const config_model_source = buildSync({
+  entryPoints: [fileURLToPath(new URL("../components/script_config.model.js", import.meta.url))],
+  bundle: true, write: false, format: "iife", globalName: "ScriptConfigModule",
+}).outputFiles[0].text;
+
 // Use the shipped reactive runtime without starting a browser.
 function fixture(file, factory, fetch = async () => Response.json({})) {
-  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, PaginationModel, PaginationView, ScriptAgentModel, URL, URLSearchParams, File,
+  const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, ListPaginationModel, PaginationModel, PaginationView, ScriptAgentModel, URL, URLSearchParams, File,
     setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {} });
   context.window = context;
   context.document = { querySelector: () => null, readyState: "loading", addEventListener() {} };
@@ -20,9 +28,11 @@ function fixture(file, factory, fetch = async () => Response.json({})) {
   const ui = context.Timeless;
   ui.DOM = {};
   const element = (props, children = []) => ({ props, children });
-  Object.assign(ui, { View: element, Button: element, Select: element, Field: element, Img: element });
+  Object.assign(ui, { View: element, Button: element, Select: element, Field: element, Img: element, notify() {} });
   context.FindRSSAdminUI = ui;
-  context.FindRSSAdminAuth = { fetch };
+  vm.runInContext(config_model_source, context);
+  context.ScriptConfigModel = context.ScriptConfigModule.ScriptConfigModel;
+  context.FindRSSAdminAuth = { fetch: async (url, options) => paged_fixture(await fetch(url, options), url) };
   context.FindRSSAdminShell = {};
   context.FindRSSAdminPages = {};
   context.localStorage = { getItem: () => null };
@@ -66,26 +76,27 @@ test("共享分页处理空列表、末页、条数切换和加载中的按钮�
   assert.equal(model.state.value.page, 0);
 });
 
-test("订阅源先在全部数据中筛选再分页，编辑、删除末页与新增均正确", async () => {
+test("订阅源通过 ListCore 读取后端筛选分页，编辑、删除末页与新增均正确", async () => {
   const rows = Array.from({ length: 41 }, (_, index) => ({ id: "source-" + index, title: "源 " + index,
     source_type: index === 40 ? "zhihu" : "website", tags: [], enabled: true }));
   const { model } = fixture("discovery.js", "DiscoveryAdminViewModel", async (url, options) => {
-    if (options?.method === "POST") return Response.json({ source: { id: "new", title: "新增", enabled: true } });
+    if (options?.method === "DELETE") { rows.splice(rows.findIndex(row => row.id === url.split("/").at(-1)), 1); return Response.json({}); }
+    if (options?.method === "POST") { const source = { id: "new", title: "新增", enabled: true }; rows.unshift(source); return Response.json({ source }); }
     return Response.json({ sources: rows });
   });
   await model.methods.refresh_list();
   assert.deepEqual(ids(model.paged_sources.value), ids(rows.slice(0, 20)));
-  model.pagination.set_page(2);
+  await model.pagination.set_page(2);
   assert.deepEqual(ids(model.paged_sources.value), ["source-40"]);
   model.methods.edit_source("source-40");
   assert.equal(model.state.editing_id.value, "source-40");
   model.methods.close_form();
-  model.methods.set_filter("platform", "zhihu");
+  await model.methods.set_filter("platform", "zhihu");
   assert.equal(model.pagination.state.value.page, 0);
   assert.equal(model.pagination.state.value.total, 1);
   assert.deepEqual(ids(model.paged_sources.value), ["source-40"]);
-  model.methods.set_filter("platform", "all");
-  model.pagination.set_page(2);
+  await model.methods.set_filter("platform", "all");
+  await model.pagination.set_page(2);
   await model.methods.remove_source("source-40");
   assert.equal(model.pagination.state.value.page, 1);
   assert.equal(model.paged_sources.value.length, 20);
@@ -117,11 +128,11 @@ test("订阅源 JSON 导出所有源，不受筛选和分页影响，保留模�
       click() { if (fail) throw new Error("download blocked"); downloads.push({ href: this.href, filename: this.download }); } };
   };
   await model.methods.refresh_list();
-  model.methods.set_filter("platform", "zhihu");
-  model.methods.set_filter("query", "科技");
-  model.pagination.set_page(2);
+  await model.methods.set_filter("platform", "zhihu");
+  await model.methods.set_filter("query", "科技");
+  await model.pagination.set_page(2);
   assert.equal(model.paged_sources.value.length, 1);
-  model.methods.export_sources();
+  await model.methods.export_sources();
   assert.match(downloads[0].filename, /^findrss-sources-\d{4}-\d{2}-\d{2}\.json$/);
   assert.equal(blobs[0].type, "application/json;charset=utf-8");
   const exported = JSON.parse(await blobs[0].text());
@@ -132,43 +143,43 @@ test("订阅源 JSON 导出所有源，不受筛选和分页影响，保留模�
   assert.deepEqual(exported.sources[0].tags, ["科技"]);
   assert.equal("cache" in exported.sources[0], false);
   assert.equal("snapshot" in exported.sources[0], false);
-  assert.equal(model.state.sources.value[0].feed_url, rows[0].feed_url);
+  assert.equal(model.state.sources.value[0].feed_url, rows[40].feed_url);
   assert.ok(model.state.sources.value[0].snapshot.articles.length);
   timers.shift()();
   assert.deepEqual(cleanup, ["blob:export-1"]);
 
-  model.methods.set_filter("query", "");
-  model.methods.set_filter("platform", "website");
+  await model.methods.set_filter("query", "");
+  await model.methods.set_filter("platform", "website");
   assert.equal(model.visible_sources.value.length, 0);
-  model.methods.export_sources();
+  await model.methods.export_sources();
   assert.equal(downloads.length, 2, "筛选无结果仍可导出所有源");
   assert.deepEqual(JSON.parse(await blobs[1].text()), exported);
   timers.shift()();
   model.state.loading.set(true);
-  model.methods.export_sources();
+  await model.methods.export_sources();
   assert.equal(downloads.length, 2, "加载中不触发下载");
   model.state.loading.set(false);
   fail = true;
-  model.methods.export_sources();
+  await model.methods.export_sources();
   assert.match(model.state.list_error.value, /导出失败：download blocked/);
   timers.shift()();
   assert.deepEqual(cleanup, ["blob:export-1", "blob:export-2", "blob:export-3"]);
 });
 
-test("订阅源列表显示 JSON 导出入口，无数据或加载中禁用", () => {
+test("订阅源列表显示 JSON 导出入口，加载中禁用", () => {
   const { context } = fixture("discovery.js", "DiscoveryAdminViewModel");
   let page;
   context.FindRSSAdminShell.Page = options => { page = options; };
   vm.runInContext("DiscoveryPage()", context);
   const button = page.actions.find(action => action.props.attributes.n === "discovery-source-export-button");
   assert.deepEqual(Array.from(button.children), ["导出 JSON"]);
-  assert.equal(button.props.disabled.value, true);
+  assert.equal(button.props.disabled.value, false);
   assert.equal(typeof button.props.onClick, "function");
   assert.match(button.props.attributes.title, /导出所有订阅源/);
 });
 
-test("平台筛选 Select 使用数据库 SVG，切换选中平台后图标同步变化", () => {
-  const { context, model, ui } = fixture("discovery.js", "DiscoveryAdminViewModel");
+test("平台筛选 Select 使用数据库 SVG，切换选中平台后图标同步变化", async () => {
+  const { context, model, ui } = fixture("discovery.js", "DiscoveryAdminViewModel", async () => Response.json({ sources: [], platforms: [{ id: "甲", label: "甲平台", icon: first_icon }, { id: "乙", label: "乙平台", icon: second_icon }] }));
   const element = (props, children = []) => ({ props, children });
   Object.assign(ui, { Img: element, Input: element });
   const first_icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M1 2h3v4H1z"/></svg>';
@@ -180,9 +191,9 @@ test("平台筛选 Select 使用数据库 SVG，切换选中平台后图标同�
   const option = select.props.render_option({ value: "甲", label: "甲平台" });
   assert.equal(option.children[0].props.src.value, "data:image/svg+xml," + encodeURIComponent(first_icon));
   const selected = select.props.render_value({ label: "选中平台" });
-  model.methods.set_filter("platform", "甲");
+  await model.methods.set_filter("platform", "甲");
   assert.equal(selected.children[0].props.src.value, "data:image/svg+xml," + encodeURIComponent(first_icon));
-  model.methods.set_filter("platform", "乙");
+  await model.methods.set_filter("platform", "乙");
   assert.equal(selected.children[0].props.src.value, "data:image/svg+xml," + encodeURIComponent(second_icon));
 });
 
@@ -190,20 +201,54 @@ test("脚本跨页搜索附加路由，筛选回首页且删除末页不会留�
   const rows = Array.from({ length: 41 }, (_, index) => ({ id: "script-" + index, name: "脚本 " + index,
     path: "/route/" + index, enabled: true, routes: [{ name: "路由", path: "/route/" + index },
       ...(index === 40 ? [{ name: "附加路由", path: "/extra/search" }] : [])] }));
-  const { model } = fixture("script.js", "ScriptViewModel", async () => Response.json({ scripts: rows }));
+  const { model } = fixture("script.js", "ScriptViewModel", async (url, options) => {
+    if (options?.method === "DELETE") { rows.splice(rows.findIndex(row => row.id === url.split("/").at(-1)), 1); return Response.json({}); }
+    return Response.json({ scripts: rows });
+  });
   model.methods.start();
   await new Promise(setImmediate);
   assert.equal(model.paged_scripts.value.length, 20);
-  model.pagination.set_page(2);
+  await model.pagination.set_page(2);
   assert.deepEqual(ids(model.paged_scripts.value), ["script-40"]);
-  model.methods.set_filter("query", "/extra/search");
+  await model.methods.set_filter("query", "/extra/search");
   assert.equal(model.pagination.state.value.page, 0);
   assert.deepEqual(ids(model.paged_scripts.value), ["script-40"]);
-  model.methods.set_filter("query", "");
-  model.pagination.set_page(2);
+  await model.methods.set_filter("query", "");
+  await model.pagination.set_page(2);
   await model.methods.remove_script("script-40");
   assert.equal(model.pagination.state.value.page, 1);
   assert.equal(model.paged_scripts.value.length, 20);
+});
+
+test("订阅源公开性 Select 通过 ListCore 请求后端，组合筛选且切换时回首页", async () => {
+  const calls = [];
+  const rows = Array.from({ length: 45 }, (_, index) => ({ id: "s" + index, title: "示例 " + index,
+    source_type: "website", enabled: true, require_token: index % 2 === 1 }));
+  const { model, context, ui } = fixture("discovery.js", "DiscoveryAdminViewModel", async url => {
+    calls.push(url);
+    return Response.json({ sources: rows });
+  });
+  await model.methods.refresh_list();
+  assert.ok(model.pagination.list instanceof ui.kit.ListCore);
+  await model.pagination.set_page(2);
+  assert.equal(model.paged_sources.value.length, 5);
+  ui.Input = (props, children = []) => ({ props, children });
+  const form = vm.runInContext("FilterFormView({ store: model })", context);
+  const field = form.children.find(node => node.props.attributes?.n === "discovery-source-filter-visibility-field");
+  const select = field.children[0];
+  assert.deepEqual(Array.from(select.props.options, option => option.label), ["全部", "公开", "不公开"]);
+  await select.props.onChange({ target: { value: "private" } });
+  assert.equal(model.pagination.state.value.page, 0);
+  assert.equal(model.pagination.state.value.total, 22);
+  assert.ok(model.paged_sources.value.every(row => row.require_token));
+  await model.methods.set_filter("query", "示例 1");
+  const params = new URL(calls.at(-1), "https://admin").searchParams;
+  assert.equal(params.get("visibility"), "private");
+  assert.equal(params.get("q"), "示例 1");
+  assert.equal(params.get("offset"), "0");
+  await model.methods.set_filter("visibility", "public");
+  assert.ok(model.paged_sources.value.every(row => !row.require_token));
+  model.pagination.destroy();
 });
 
 test("用户分页请求保留关键词，切换条数回首页，缩小后的末页自动回退", async () => {

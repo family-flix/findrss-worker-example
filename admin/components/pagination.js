@@ -1,4 +1,71 @@
 // Shared pagination state. Lists filter first, then use the resulting total.
+// ListCore 负责服务端分页；PaginationModel 仅将其状态适配到现有分页控件。
+export function ListPaginationModel(ui, { url, key, normalize = value => value, loading, error,
+  filters = () => ({}), on_data, fetch = window.FindRSSAdminAuth.fetch } = {}) {
+  const { kit, Result } = ui;
+  const page = ui.ref(0), page_size = ui.ref(20), total = ui.ref(0);
+  loading = loading || ui.ref(false);
+  error = error || ui.ref("");
+  const client = new kit.HttpClientCore({});
+  client.fetch = async options => {
+    const response = await fetch(options.url, { credentials: "same-origin", cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "请求失败：HTTP " + response.status);
+    return { ok: response.ok, status: response.status, data };
+  };
+  const request = new kit.RequestCore(({ page, pageSize, next_marker, ...query }) => ({
+    url, method: "GET", query: { limit: pageSize, offset: (page - 1) * pageSize, ...query },
+  }), { client, delay: null, process(result) {
+    if (result.error) return result;
+    const payload = result.data;
+    const params = request.args[0];
+    return Result.Ok({ list: (payload[key] || []).map(normalize), total: Number(payload.total_count) || 0,
+      page: params.page, pageSize: params.pageSize, payload });
+  } });
+  const list = new kit.ListCore(request, { pageSize: 20,
+    processor(response, original) { return { ...response, payload: original.payload }; } });
+  let generation = 0, active = null;
+  function load(target_page = page.value) {
+    const current = ++generation;
+    const params = { ...filters(), page: target_page + 1, pageSize: page_size.value };
+    loading.set(true);
+    error.set("");
+    async function run() {
+      if (current !== generation) return;
+      try {
+        const result = await list.search(params);
+        if (current !== generation) return;
+        if (result.error) throw result.error;
+        const response = list.response;
+        const last_page = Math.max(0, Math.ceil(response.total / params.pageSize) - 1);
+        if (target_page > last_page) {
+          // 已在串行请求内部，直接重新读取有效页，避免等待自己。
+          params.page = last_page + 1;
+          target_page = last_page;
+          const retry = await list.search(params);
+          if (current !== generation) return;
+          if (retry.error) throw retry.error;
+        }
+        page.set(target_page);
+        total.set(list.response.total);
+        on_data?.(list.response.dataSource, list.response.payload);
+      } catch (failure) {
+        if (current === generation) error.set(failure.message || String(failure));
+      } finally {
+        if (current === generation) loading.set(false);
+      }
+    }
+    // ListCore 的参数属于实例，串行执行并跳过旧查询，防止旧响应覆盖新筛选。
+    const task = active ? active.then(run) : run();
+    active = task;
+    task.finally(() => { if (active === task) active = null; });
+    return task;
+  }
+  const pagination = PaginationModel(ui, { total, page, page_size, loading, on_change: load });
+  return { ...pagination, list, total, load, error,
+    destroy() { generation++; list.destroy(); request.destroy(); client.destroy(); } };
+}
+
 export function PaginationModel(ui, { total, loading, page, page_size, on_change } = {}) {
   const { ref, combine } = ui;
   page = page || ref(0);
@@ -36,6 +103,7 @@ export function PaginationView(ui, { model, name, label }) {
   const { View, Button, Select, computed } = ui;
   const read = map => computed(model.state, map);
   const button = (suffix, text, target, disabled) => Button({
+    icon: false,
     class: "box-border flex-none justify-self-center", attributes: { n: name + "-" + suffix, type: "button" },
     disabled: read(state => state.loading || disabled(state)),
     onClick() { return model.set_page(target(model.state.value)); },
@@ -44,8 +112,7 @@ export function PaginationView(ui, { model, name, label }) {
     "gap": ".75rem",
     "margin-top": "1rem",
     "padding-block": ".75rem",
-    "border-top": "1px solid var(--frui-color-border-soft)",
-    "font-size": ".75rem"
+    "border-top": "1px solid var(--frui-color-border-soft)"
   }, attributes: { n: name, role: "navigation", "aria-label": label } }, [
     View({class: "box-border flex-none whitespace-nowrap",  attributes: { n: name + "-summary", "aria-live": "polite" } }, [
       read(state => "共 " + state.total + " 条 · 显示 " + state.first + "–" + state.last),

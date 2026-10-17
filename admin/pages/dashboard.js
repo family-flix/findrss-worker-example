@@ -3,6 +3,7 @@ import {
   format_time,
   DeviceTokensModel,
 } from "./dashboard.model.js";
+import { PaginationView } from "../components/pagination.js";
 
 const Timeless = window.FindRSSAdminUI;
 
@@ -20,9 +21,11 @@ if (!window.FindRSSAdminShell) {
 const {
   Button,
   Dialog,
+  EmptyCard,
   For,
   Input,
   Icon,
+  Popconfirm,
   Select,
   Show,
   View,
@@ -85,7 +88,6 @@ function MetricView(props) {
       style: {
         "backdrop-filter": "blur(18px)",
         padding: "18px",
-        border: "1px solid var(--frui-color-border)",
       },
       attributes: {
         n: props.name + "-metric",
@@ -241,7 +243,7 @@ function MetricsView(props) {
       }),
       MetricView({
         name: "platforms",
-        label: "平台",
+        label: "来源",
         field: "platform_count",
         metrics: props.metrics,
       }),
@@ -961,17 +963,13 @@ function AccessTokenCardView(props) {
               );
             },
           }),
-          Button(
-            {
-              class: "box-border flex-none",
-              attributes: { n: "remove-access-token-button" },
-              disabled: busy_,
-              onClick() {
-                return vm$.methods.removeAccessToken(access_token_id);
-              },
-            },
-            [remove_label_],
-          ),
+          Popconfirm({
+            title: computed(name_, name => `移除用户 Token“${name}”？此操作无法撤销。`), confirmText: "确认移除",
+            disabled: busy_, attributes: { n: "remove-access-token-confirmation" },
+            onConfirm: () => vm$.methods.removeAccessToken(access_token_id),
+            trigger: props => Button({ ...props, class: "box-border flex-none", disabled: busy_,
+              attributes: { ...props.attributes, n: "remove-access-token-button" } }, [remove_label_]),
+          }),
         ],
       ),
     ],
@@ -1442,23 +1440,22 @@ function AccessTokenManagementView(props) {
         },
         [
           Show({
-            when: computed(
-              vm$.state.access_tokens,
-              (access_tokens) => access_tokens.length === 0,
+            when: combine(
+              { tokens: vm$.state.access_tokens, loading: vm$.state.loading, error: vm$.state.error, refreshed_at: vm$.state.refreshed_at },
+              ({ tokens, loading, error, refreshed_at }) => tokens.length === 0 && !loading && !error && refreshed_at > 0,
             ),
             ok() {
-              return View(
-                {
-                  class: "box-border rounded-card m-0 text-muted",
-                  style: {
-                    padding: "8px 0",
-                  },
-                  attributes: { n: "empty-access-token-list" },
-                },
-                [
-                  "尚未创建用户。创建后可使用用户 Token，或绑定的邮箱密码登录 Reader。",
-                ],
-              );
+              return EmptyCard({
+                name: "empty-access-token-list",
+                title: "还没有 Token",
+                description: "创建第一个 Token，用于访问订阅源或登录 Reader。",
+                actions: [Button({
+                  variant: "primary",
+                  attributes: { n: "empty-create-access-token-button" },
+                  disabled: computed(vm$.state.access_token_action, action => action.creating),
+                  onClick: vm$.methods.openAccessTokenForm,
+                }, ["创建 Token"])],
+              });
             },
           }),
           For({
@@ -2761,23 +2758,13 @@ function DeviceView(props) {
                   );
                 },
               }),
-              Button(
-                {
-                  class: "box-border flex-none",
-                  style: {
-                    "min-width": "64px",
-                  },
-                  attributes: {
-                    n: "delete-device-button",
-                    "aria-label": "删除设备",
-                  },
-                  disabled: action_busy_,
-                  onClick() {
-                    return vm$.methods.deleteDevice(device_id);
-                  },
-                },
-                [delete_button_label_],
-              ),
+              Popconfirm({
+                title: computed(device_, device => `删除设备“${device.device_name}”？会断开其连接、终止未完成的调用并清除设备日志，此操作无法撤销。`),
+                disabled: action_busy_, attributes: { n: "delete-device-confirmation" },
+                onConfirm: () => vm$.methods.deleteDevice(device_id),
+                trigger: props => Button({ ...props, class: "box-border flex-none", style: { "min-width": "64px" }, disabled: action_busy_,
+                  attributes: { ...props.attributes, n: "delete-device-button", "aria-label": "删除设备" } }, [delete_button_label_]),
+              }),
             ],
           ),
         ],
@@ -3274,22 +3261,20 @@ function DeviceTokensView(model) {
                           : "从未使用"),
                     ],
                   ),
-                  View(
-                    {
-                      as: "code",
-                      class: "box-border block break-anywhere",
-                      style: {
-                        "margin-top": "8px",
+                  Show({
+                    when: computed(plaintext, Boolean),
+                    ok: () => View(
+                      {
+                        as: "code",
+                        class: "box-border block break-anywhere",
+                        style: {
+                          "margin-top": "8px",
+                        },
+                        attributes: { n: "device-token-value" },
                       },
-                      attributes: { n: "device-token-value" },
-                    },
-                    [
-                      computed(
-                        model.revealed,
-                        (values) => values[token.id] || token.token_hint,
-                      ),
-                    ],
-                  ),
+                      [plaintext],
+                    ),
+                  }),
                 ],
               ),
               View(
@@ -3335,18 +3320,14 @@ function DeviceTokensView(model) {
                     },
                     ["编辑备注"],
                   ),
-                  Button(
-                    {
-                      class: "box-border flex-none",
-                      disabled: computed(
-                        model.busy,
-                        (value) => value || token.status === "revoked",
-                      ),
-                      attributes: { n: "revoke-device-token-button" },
-                      onClick: () => model.revoke(token),
-                    },
-                    ["撤销"],
-                  ),
+                  Popconfirm({
+                    title: `撤销设备 Token“${token.name}”？使用它的设备将断开连接，此操作无法撤销。`, confirmText: "确认撤销",
+                    disabled: computed(model.busy, value => value || token.status === "revoked"),
+                    attributes: { n: "revoke-device-token-confirmation" }, onConfirm: () => model.revoke(token),
+                    trigger: props => Button({ ...props, class: "box-border flex-none",
+                      disabled: computed(model.busy, value => value || token.status === "revoked"),
+                      attributes: { ...props.attributes, n: "revoke-device-token-button" } }, ["撤销"]),
+                  }),
                 ],
               ),
             ],
@@ -3362,19 +3343,18 @@ function DashboardApplicationView(page_id = "overview", embedded = false) {
   const is_token_page = page_id === "tokens";
   const vm$ = DashboardViewModel(page_id);
   const device_tokens = is_device_page
-    ? DeviceTokensModel(vm$.methods.confirm)
+    ? DeviceTokensModel()
     : null;
   const refresh_disabled_ = computed(vm$.state.loading, (loading) =>
     loading ? true : undefined,
   );
 
-  const header_actions = [
-    ...(is_token_page ? [Button({
+  const header_actions = is_token_page ? [Button({
       class: "box-border",
       attributes: { n: "open-access-token-create-button" },
       disabled: computed(vm$.state.access_token_action, action => action.creating),
       onClick: vm$.methods.openAccessTokenForm,
-    }, ["创建 Token"])] : []),
+    }, ["创建 Token"])] : [
     View(
       {
         class:
@@ -3489,6 +3469,7 @@ function DashboardApplicationView(page_id = "overview", embedded = false) {
           ...(is_token_page
             ? [
                 AccessTokenManagementView({ store: vm$ }),
+                PaginationView(Timeless, { model: vm$.token_pagination, name: "access-token-pagination", label: "Token 分页" }),
                 ConfirmDialogView({ store: vm$ }),
               ]
             : [
@@ -3515,7 +3496,7 @@ function DashboardApplicationView(page_id = "overview", embedded = false) {
     title: is_device_page ? "设备管理" : is_token_page ? "Token" : "运行概览",
     count: is_device_page
       ? computed(vm$.state.devices, (devices) => String(devices.length))
-      : is_token_page ? computed(vm$.state.access_tokens, tokens => String(tokens.length)) : undefined,
+      : is_token_page ? computed(vm$.token_pagination.total, String) : undefined,
     actions: header_actions,
   };
   return embedded

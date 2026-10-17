@@ -1,5 +1,5 @@
 import { format_datetime } from "../../server/lib/datetime.js";
-import { PaginationModel } from "../components/pagination.js";
+import { ListPaginationModel } from "../components/pagination.js";
 import { PollPolicyModel } from "../components/poll_policy.model.js";
 import {
   discovery_platforms,
@@ -45,7 +45,7 @@ function is_managed_rss_url(value) {
 }
 
 /**
- * 自有 RSS/Atom 地址按匹配的脚本路由预填平台，其余归为网页。
+ * 自有 RSS/Atom 地址按匹配的脚本路由预填来源，其余归为网页。
  */
 function infer_source_route(feed_url, scripts) {
   const text = String(feed_url || "");
@@ -86,11 +86,15 @@ function safe_avatar_url(value) {
 }
 
 function normalize_source(source) {
+  const social_urls = Array.isArray(source.social_urls) ? source.social_urls.map(String)
+    : source.social_url ? [String(source.social_url)] : [];
   return {
     id: String(source.id || ""),
     title: String(source.title || ""),
     description: String(source.description || ""),
     website: String(source.website || ""),
+    social_url: social_urls[0] || "",
+    social_urls,
     feed_url: String(source.feed_url || ""),
     // 服务端已把 {{hostname}} 展开成当前环境的绝对地址；这里留着存储原文供编辑回填。
     feed_url_template: String(source.feed_url_template || ""),
@@ -149,9 +153,14 @@ function DiscoveryAdminViewModel() {
   const query_ = ref("");
   const filter_platform_ = ref("all");
   const filter_status_ = ref("enabled");
+  const filter_visibility_ = ref("all");
+  const selected_sources = new Map();
+  let loaded_page = -1;
   const draft_title_ = ref("");
   const draft_feed_url_ = ref("");
   const draft_website_ = ref("");
+  const draft_social_urls_ = ref([]);
+  const draft_social_url_ = computed(draft_social_urls_, values => values[0] || "");
   const draft_description_ = ref("");
   const draft_tags_ = ref("");
   const draft_sort_order_ = ref("0");
@@ -159,7 +168,7 @@ function DiscoveryAdminViewModel() {
   const draft_require_token_ = ref(false);
   const draft_credit_cost_ = ref("1");
   const draft_source_type_ = ref("website");
-  // 手改过「平台」之后就不再按地址自动预判（否则用户的选择会被下一次输入覆盖）。
+  // 手改过「来源」之后就不再按地址自动预判（否则用户的选择会被下一次输入覆盖）。
   const source_type_touched_ = ref(false);
   const tags_touched_ = ref(false);
   const avatar_file_ = ref(null);
@@ -196,7 +205,7 @@ function DiscoveryAdminViewModel() {
       platforms.map((type) => ({ value: type.id, label: type.label })),
     ),
     filter_platform_options: computed(platforms_, (platforms) => [
-      { value: "all", label: "全部平台" },
+      { value: "all", label: "全部来源" },
       ...platforms.map((type) => ({ value: type.id, label: type.label })),
     ]),
     snapshot_refreshing: snapshot_refreshing_,
@@ -207,9 +216,12 @@ function DiscoveryAdminViewModel() {
     query: query_,
     filter_platform: filter_platform_,
     filter_status: filter_status_,
+    filter_visibility: filter_visibility_,
     draft_title: draft_title_,
     draft_feed_url: draft_feed_url_,
     draft_website: draft_website_,
+    draft_social_url: draft_social_url_,
+    draft_social_urls: draft_social_urls_,
     draft_description: draft_description_,
     draft_tags: draft_tags_,
     draft_sort_order: draft_sort_order_,
@@ -238,37 +250,8 @@ function DiscoveryAdminViewModel() {
     import_reading: import_reading_,
   };
 
-  let list_generation = 0;
   async function load() {
-    const current = ++list_generation;
-    loading_.set(true);
-    list_error_.set("");
-    try {
-      const payload = await request_json("/admin/api/discovery/sources");
-      if (current === list_generation) {
-        tags_.set(Array.isArray(payload.tags) ? [...new Set(payload.tags.filter(tag => typeof tag === "string"))] : []);
-        sources_.as(
-          (Array.isArray(payload.sources) ? payload.sources : []).map(
-            normalize_source,
-          ),
-        );
-        selected_ids_.set(selected_ids_.value.filter(id => sources_.value.some(source => source.id === id)));
-        platforms_.set(
-          Array.isArray(payload.platforms)
-            ? payload.platforms.map(({ id, name, label, icon }) => ({
-                id,
-                label: name || label,
-                ...(icon === undefined ? {} : { icon }),
-              }))
-            : discovery_platforms(),
-        );
-      }
-    } catch (error) {
-      if (current === list_generation)
-        list_error_.set(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (current === list_generation) loading_.set(false);
-    }
+    return pagination.load();
   }
 
   async function load_scripts() {
@@ -300,10 +283,13 @@ function DiscoveryAdminViewModel() {
     if (!draft_credit_cost_.value.trim() || !Number.isInteger(credit_cost) || credit_cost < 0 || credit_cost > 1_000_000_000) {
       throw new Error("每次访问消耗积分必须为 0 到 1000000000 的整数");
     }
+    const social_urls = [...new Set(draft_social_urls_.value.map(value => value.trim()).filter(Boolean))];
     return {
       title: draft_title_.value.trim(),
       feed_url: draft_feed_url_.value.trim(),
       website: draft_website_.value.trim(),
+      social_url: social_urls[0] || "",
+      social_urls,
       description: draft_description_.value.trim(),
       category: "",
       tags: draft_tags_.value
@@ -321,13 +307,19 @@ function DiscoveryAdminViewModel() {
 
   /** 列表项按 id 就地替换（保存/上传/移除头像都回权威 `{source}`）。 */
   function apply_source(source) {
+    if (selected_ids_.value.includes(source.id)) selected_sources.set(source.id, source);
     sources_.as(
       sources_.value.map((item) => (item.id === source.id ? source : item)),
     );
   }
 
+  function show_list_message(message) {
+    form_message_.set(message);
+    if (!bulk_busy_.value) Timeless.notify(message);
+  }
+
   async function set_source_flag(source_id, field, value) {
-    const source = sources_.value.find(item => item.id === source_id);
+    const source = sources_.value.find(item => item.id === source_id) || selected_sources.get(source_id);
     if (!source || source_updating_.value.includes(source_id)) return false;
     if (source[field] === value) return true;
     source_updating_.set([...source_updating_.value, source_id]);
@@ -338,7 +330,8 @@ function DiscoveryAdminViewModel() {
       });
       const updated = normalize_source(result.source);
       apply_source(updated);
-      form_message_.set(updated.title + (field === "enabled"
+      if (!bulk_busy_.value) await load();
+      show_list_message(updated.title + (field === "enabled"
         ? updated.enabled ? " 已启用。" : " 已停用。"
         : updated.require_token ? " 已设为需要 token 访问。" : " 已设为公开。"));
       return true;
@@ -428,7 +421,8 @@ function DiscoveryAdminViewModel() {
       methods.reset_draft();
       saving_.set(false);
       form_open_.set(false);
-      form_message_.set(source.title + " 已保存。");
+      show_list_message(source.title + " 已保存。");
+      await load();
     } catch (error) {
       form_error_.set(error instanceof Error ? error.message : String(error));
     } finally {
@@ -518,6 +512,8 @@ function DiscoveryAdminViewModel() {
               "title",
               "description",
               "website",
+              "social_url",
+              "social_urls",
               "feed_url",
               "category",
               "tags",
@@ -546,15 +542,16 @@ function DiscoveryAdminViewModel() {
         return;
       }
       import_busy_.set(true);
-      const existing = new Set(
-        sources_.value
-          .flatMap((source) => [source.feed_url, source.feed_url_template])
-          .filter(Boolean),
-      );
+      const existing = new Set();
       let imported = 0,
         skipped = 0,
         processed = 0;
       try {
+        const current_sources = await request_json("/admin/api/discovery/sources");
+        for (const source of current_sources.sources || []) {
+          if (source.feed_url) existing.add(source.feed_url);
+          if (source.feed_url_template) existing.add(source.feed_url_template);
+        }
         for (const source of sources) {
           if (existing.has(source.feed_url)) skipped++;
           else {
@@ -587,14 +584,16 @@ function DiscoveryAdminViewModel() {
       } finally {
         pagination.reset();
         import_busy_.set(false);
+        await load();
       }
     },
-    export_sources() {
-      if (loading_.value || !sources_.value.length) return;
+    async export_sources() {
+      if (loading_.value) return;
       list_error_.set("");
       let object_url = "";
       try {
-        const sources = sources_.value.map(
+        const payload = await request_json("/admin/api/discovery/sources");
+        const sources = (payload.sources || []).map(normalize_source).map(
           ({
             cache,
             snapshot,
@@ -637,7 +636,7 @@ function DiscoveryAdminViewModel() {
       return load();
     },
     async refresh_snapshot(source_id) {
-      const source = sources_.value.find((item) => item.id === source_id);
+      const source = sources_.value.find((item) => item.id === source_id) || selected_sources.get(source_id);
       if (
         !source ||
         (source.require_token && !source.cache) ||
@@ -653,6 +652,8 @@ function DiscoveryAdminViewModel() {
             "/snapshot",
           { method: "POST" },
         );
+        if (selected_ids_.value.includes(source_id)) selected_sources.set(source_id, { ...source,
+          snapshot: result.snapshot, cache: result.cache || source.cache });
         sources_.as(
           sources_.value.map((item) =>
             item.id === source_id
@@ -795,16 +796,19 @@ function DiscoveryAdminViewModel() {
       }
     },
     start() {
-      load();
+      return load();
     },
     set_filter(name, value) {
       if (bulk_busy_.value) return;
       selected_ids_.set([]);
+      selected_sources.clear();
       bulk_message_.set("");
       pagination.reset();
       if (name === "query") query_.set(String(value));
       if (name === "platform") filter_platform_.set(String(value));
       if (name === "status") filter_status_.set(String(value));
+      if (name === "visibility") filter_visibility_.set(String(value));
+      return load();
     },
     set_draft(name, value) {
       if (name === "title") draft_title_.set(String(value));
@@ -817,7 +821,7 @@ function DiscoveryAdminViewModel() {
         draft_feed_url_.set(String(value));
         if (editing_id_.value === "" && !tags_touched_.value)
           draft_tags_.set(infer_source_tags(String(value), scripts_.value).join(", "));
-        // 只有「新增」且用户没手改过平台时才自动预判；编辑已有源时不覆盖已保存的选择。
+        // 只有「新增」且用户没手改过来源时才自动预判；编辑已有源时不覆盖已保存的选择。
         if (editing_id_.value === "" && !source_type_touched_.value) {
           draft_source_type_.set(
             infer_source_type(String(value), scripts_.value),
@@ -825,6 +829,8 @@ function DiscoveryAdminViewModel() {
         }
       }
       if (name === "website") draft_website_.set(String(value));
+      if (name === "social_url") draft_social_urls_.set(value ? [String(value)] : []);
+      if (name === "social_urls") draft_social_urls_.set(value.map(String));
       if (name === "description") draft_description_.set(String(value));
       if (name === "tags") {
         tags_touched_.set(true);
@@ -863,6 +869,7 @@ function DiscoveryAdminViewModel() {
       draft_title_.set(source.title);
       draft_feed_url_.set(source.feed_url_template || source.feed_url);
       draft_website_.set(source.website);
+      draft_social_urls_.set([...normalize_source(source).social_urls]);
       draft_description_.set(source.description);
       draft_tags_.set(source.tags.join(", "));
       draft_sort_order_.set(String(source.sort_order));
@@ -888,6 +895,7 @@ function DiscoveryAdminViewModel() {
       draft_title_.set("");
       draft_feed_url_.set("");
       draft_website_.set("");
+      draft_social_urls_.set([]);
       draft_description_.set("");
       draft_tags_.set("");
       tags_touched_.set(false);
@@ -927,6 +935,7 @@ function DiscoveryAdminViewModel() {
     },
     toggle_selection(source_id) {
       if (bulk_busy_.value || loading_.value || !sources_.value.some(source => source.id === source_id)) return;
+      selected_sources.set(source_id, sources_.value.find(source => source.id === source_id));
       selected_ids_.set(selected_ids_.value.includes(source_id)
         ? selected_ids_.value.filter(id => id !== source_id)
         : [...selected_ids_.value, source_id]);
@@ -934,6 +943,7 @@ function DiscoveryAdminViewModel() {
     },
     toggle_page_selection() {
       if (bulk_busy_.value || loading_.value) return;
+      for (const source of paged_sources.value) selected_sources.set(source.id, source);
       const page_ids = paged_sources.value.map(source => source.id);
       const all_selected = page_ids.length > 0 && page_ids.every(id => selected_ids_.value.includes(id));
       selected_ids_.set(all_selected
@@ -944,12 +954,12 @@ function DiscoveryAdminViewModel() {
     clear_selection() {
       if (bulk_busy_.value) return;
       selected_ids_.set([]);
+      selected_sources.clear();
     },
     async bulk_action(action) {
       if (bulk_busy_.value || loading_.value || source_updating_.value.length || !["enable", "disable", "refresh", "delete"].includes(action)) return;
-      const selected = sources_.value.filter(source => selected_ids_.value.includes(source.id));
+      const selected = selected_ids_.value.map(id => sources_.value.find(source => source.id === id) || selected_sources.get(id)).filter(Boolean);
       if (!selected.length) return;
-      if (action === "delete" && !window.confirm("删除选中的 " + selected.length + " 个订阅源？此操作无法撤销。")) return;
       bulk_busy_.set(true);
       bulk_message_.set("");
       list_error_.set("");
@@ -962,7 +972,7 @@ function DiscoveryAdminViewModel() {
             continue;
           }
           const success = action === "refresh" ? await methods.refresh_snapshot(source.id)
-            : action === "delete" ? await methods.remove_source(source.id, false)
+            : action === "delete" ? await methods.remove_source(source.id)
             : await methods.toggle_source(source.id, action === "enable");
           if (success) {
             succeeded++;
@@ -973,6 +983,7 @@ function DiscoveryAdminViewModel() {
           bulk_message_.set("已处理 " + (succeeded + errors.length + skipped) + " / " + selected.length + " 个订阅源…");
         }
       } finally {
+        if (action !== "refresh") await load();
         bulk_busy_.set(false);
         form_message_.set("");
         bulk_message_.set("批量操作完成：成功 " + succeeded + " 个，失败 " + errors.length + " 个，跳过 " + skipped + " 个。"
@@ -988,11 +999,9 @@ function DiscoveryAdminViewModel() {
       if (bulk_busy_.value) return false;
       return set_source_flag(source_id, "require_token", !is_public);
     },
-    async remove_source(source_id, confirm = true) {
-      const source = sources_.value.find((item) => item.id === source_id);
+    async remove_source(source_id) {
+      const source = sources_.value.find((item) => item.id === source_id) || selected_sources.get(source_id);
       if (!source) return false;
-      if (confirm && !window.confirm("删除订阅源“" + source.title + "”？此操作无法撤销。"))
-        return false;
       try {
         await request_json(
           "/admin/api/discovery/sources/" + encodeURIComponent(source_id),
@@ -1003,7 +1012,8 @@ function DiscoveryAdminViewModel() {
         sources_.as(sources_.value.filter((item) => item.id !== source_id));
         selected_ids_.set(selected_ids_.value.filter(id => id !== source_id));
         if (editing_id_.value === source_id) methods.reset_draft();
-        form_message_.set(source.title + " 已删除。");
+        show_list_message(source.title + " 已删除。");
+        if (!bulk_busy_.value) await load();
         return true;
       } catch (error) {
         list_error_.set(error instanceof Error ? error.message : String(error));
@@ -1012,48 +1022,28 @@ function DiscoveryAdminViewModel() {
     },
   };
 
-  const visible_sources = combine(
-    {
-      sources: sources_,
-      query: query_,
-      platform: filter_platform_,
-      status: filter_status_,
+  const pagination = ListPaginationModel(Timeless, {
+    fetch, url: "/admin/api/discovery/sources", key: "sources", normalize: normalize_source,
+    loading: loading_, error: list_error_,
+    filters: () => ({ q: query_.value.trim(), source_type: filter_platform_.value === "all" ? "" : filter_platform_.value,
+      status: filter_status_.value, visibility: filter_visibility_.value }),
+    on_data(sources, payload) {
+      if (loaded_page === pagination.page.value) {
+        const previous_ids = new Set(sources_.value.map(source => source.id));
+        const current_ids = new Set(sources.map(source => source.id));
+        selected_ids_.set(selected_ids_.value.filter(id => !previous_ids.has(id) || current_ids.has(id)));
+      }
+      loaded_page = pagination.page.value;
+      sources_.as(sources);
+      for (const source of sources) if (selected_ids_.value.includes(source.id)) selected_sources.set(source.id, source);
+      tags_.set(Array.isArray(payload.tags) ? [...new Set(payload.tags.filter(tag => typeof tag === "string"))] : []);
+      platforms_.set(Array.isArray(payload.platforms)
+        ? payload.platforms.map(({ id, name, label, icon }) => ({ id, label: name || label, ...(icon === undefined ? {} : { icon }) }))
+        : discovery_platforms());
     },
-    (deps) => {
-      const query = deps.query.trim().toLowerCase();
-      return deps.sources.filter((source) => {
-        if (deps.platform !== "all" && source.source_type !== deps.platform)
-          return false;
-        if (deps.status === "enabled" && !source.enabled) return false;
-        if (deps.status === "disabled" && source.enabled) return false;
-        if (query === "") return true;
-        return [
-          source.title,
-          source.description,
-          source.website,
-          source.feed_url,
-          source.feed_url_template,
-          source.tags.join(" "),
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(query);
-      });
-    },
-  );
-
-  const pagination = PaginationModel(Timeless, {
-    total: computed(visible_sources, (sources) => sources.length),
-    loading: loading_,
   });
-  const paged_sources = combine(
-    { sources: visible_sources, pagination: pagination.state },
-    ({ sources, pagination: page }) =>
-      sources.slice(
-        page.page * page.page_size,
-        (page.page + 1) * page.page_size,
-      ),
-  );
+  const visible_sources = sources_;
+  const paged_sources = sources_;
   const page_selection = combine({ sources: paged_sources, selected: selected_ids_ }, ({ sources, selected }) => ({
     all: sources.length > 0 && sources.every(source => selected.includes(source.id)),
     some: sources.some(source => selected.includes(source.id)),

@@ -1,4 +1,5 @@
 import { format_datetime as format_time } from "../../server/lib/datetime.js";
+import { ListPaginationModel } from "../components/pagination.js";
 const Timeless = window.FindRSSAdminUI;
 const fetch = window.FindRSSAdminAuth.fetch;
 const { combine, ref, refarr, refobj } = Timeless;
@@ -22,6 +23,7 @@ function empty_metrics() {
 
 function DashboardViewModel(page_id = "overview") {
   const is_overview = page_id === "overview";
+  const is_token_page = page_id === "tokens";
   const loading_ = ref(false);
   const error_ = ref("");
   const devices_ = refarr([]);
@@ -562,7 +564,8 @@ function DashboardViewModel(page_id = "overview") {
         error: "",
       });
       access_token_form_open_.as(false);
-      refresh(false);
+      if (is_token_page) await token_pagination.load(0);
+      else refresh(false);
     } catch (error) {
       set_access_token_action({
         creating: false,
@@ -685,13 +688,7 @@ function DashboardViewModel(page_id = "overview") {
       (candidate) => candidate.id === access_token_id,
     );
     if (!access_token) return;
-    const confirmed = await request_confirm({
-      title: "移除用户 Token",
-      message: "移除用户 Token“" + access_token.name + "”？此操作无法撤销。",
-      confirm_label: "移除",
-      danger: true,
-    });
-    if (!confirmed) return;
+    if (access_token_action_.value.busy_id) return;
     set_access_token_action({
       busy_id: access_token_id,
       busy_action: "remove",
@@ -717,6 +714,7 @@ function DashboardViewModel(page_id = "overview") {
           (candidate) => candidate.id !== access_token_id,
         ),
       );
+      if (is_token_page) await token_pagination.load();
       set_access_token_action({ busy_id: "", busy_action: "", error: "" });
     } catch (error) {
       set_access_token_action({
@@ -978,16 +976,8 @@ function DashboardViewModel(page_id = "overview") {
       (candidate) => candidate.device_id === device_id,
     );
     if (!device) return;
-    const confirmed = await request_confirm({
-      title: "删除设备",
-      message:
-        "删除设备“" +
-        device.device_name +
-        "”？会断开其连接、终止未完成的调用并清除设备日志，此操作无法撤销。",
-      confirm_label: "删除",
-      danger: true,
-    });
-    if (!confirmed) return;
+    const action = device_actions_.value[device_id];
+    if (action?.deleting || action?.toggling) return;
     set_device_action(device_id, { deleting: true, error: "" });
     try {
       const response = await fetch(
@@ -1230,6 +1220,7 @@ function DashboardViewModel(page_id = "overview") {
   }
 
   async function refresh(show_loading = true) {
+    if (is_token_page) return token_pagination.load();
     if (refresh_promise !== null) return refresh_promise;
     if (show_loading) loading_.as(true);
     error_.as("");
@@ -1287,6 +1278,7 @@ function DashboardViewModel(page_id = "overview") {
   }
 
   function dispose() {
+    token_pagination?.destroy();
     started = false;
     if (refresh_timer !== null) clearInterval(refresh_timer);
     refresh_timer = null;
@@ -1388,10 +1380,19 @@ function DashboardViewModel(page_id = "overview") {
     confirm_dialog: confirm_dialog$,
   };
 
-  return { state, methods, ui: ui_stores };
+  const token_pagination = is_token_page ? ListPaginationModel(Timeless, {
+    fetch, url: "/admin/api/access-tokens", key: "access_tokens", normalize: normalize_access_token,
+    loading: loading_, error: error_,
+    on_data(tokens) {
+      sync_access_tokens(tokens);
+      metrics_.as({ ...metrics_.value, token_count: token_pagination.total.value });
+      refreshed_at_.as(Date.now());
+    },
+  }) : null;
+  return { state, methods, ui: ui_stores, token_pagination };
 }
 
-function DeviceTokensModel(confirm_action) {
+function DeviceTokensModel() {
   const open = ref(false),
     tokens = refarr([]),
     busy = ref(false),
@@ -1514,18 +1515,6 @@ function DeviceTokensModel(confirm_action) {
       error.as("复制失败：" + (failure.message || String(failure)));
     },
     async revoke(token) {
-      if (
-        !(await confirm_action({
-          title: "撤销设备 Token",
-          message:
-            "撤销“" +
-            token.name +
-            "”？使用它的设备将断开连接，此操作无法撤销。",
-          confirm_label: "撤销",
-          danger: true,
-        }))
-      )
-        return;
       return run(async () => {
         await request("/" + token.id + "/revoke", "POST");
         hide(token.id);
