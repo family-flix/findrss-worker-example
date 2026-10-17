@@ -1,6 +1,19 @@
 import { utils } from "@findrss/util";
 
-export const version = "1.0.0";
+export const version = "1.1.0";
+export const config_schema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    PlayerHostname: {
+      type: "string",
+      title: "视频播放地址",
+      description:
+        "完整播放页地址，例如 https://player.example.com/video.html；留空使用 /video.html",
+      default: "/video.html",
+    },
+  },
+};
 export const platform = {
   name: "视频号",
   icon: '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 512 512" data-n="wxchannels-platform-icon"><path fill="none" stroke="#fa9d3b" stroke-linecap="round" stroke-linejoin="round" stroke-width="42" d="M256 256C214 214 174 112 122 112c-46 0-70 54-44 139 28 140 82 260 142 33l36-76M256 256c42-42 82-144 134-144 46 0 70 54 44 139-28 140-82 260-142 33l-36-76" data-n="wxchannels-icon-path-1" /></svg>',
@@ -44,7 +57,11 @@ export class WechatChannelsRSS extends RSSScript {
     const url = String(media?.url || "");
     return url ? url + String(media?.url_token ?? media?.token ?? "") : "";
   }
-  static media_play_url(media, cover) {
+  static media_play_url(
+    media,
+    cover,
+    play_endpoint = WechatChannelsRSS.PLAY_ENDPOINT,
+  ) {
     const media_url = String(media?.url || "");
     if (media_url === "") {
       return "";
@@ -52,7 +69,7 @@ export class WechatChannelsRSS extends RSSScript {
     const video_url = WechatChannelsRSS.media_signed_url(media);
     const decode_key = String(media?.decode_key ?? "");
     return (
-      `${WechatChannelsRSS.PLAY_ENDPOINT}?url=${encodeURIComponent(video_url)}&key=${encodeURIComponent(decode_key)}` +
+      `${play_endpoint}?url=${encodeURIComponent(video_url)}&key=${encodeURIComponent(decode_key)}` +
       `&poster=${encodeURIComponent(cover)}`
     );
   }
@@ -75,7 +92,12 @@ export class WechatChannelsRSS extends RSSScript {
       `allow="autoplay; fullscreen; encrypted-media; picture-in-picture" frameborder="0" allowfullscreen></iframe>`
     );
   }
-  static build_channel(data, username, public_origin = "") {
+  static build_channel(
+    data,
+    username,
+    public_origin = "",
+    play_endpoint = WechatChannelsRSS.PLAY_ENDPOINT,
+  ) {
     const contact =
       data.contact && typeof data.contact === "object" ? data.contact : {};
     const objects = Array.isArray(data.object) ? data.object : [];
@@ -99,7 +121,7 @@ export class WechatChannelsRSS extends RSSScript {
         : WechatChannelsRSS.feed_media(item);
       const cover_url = WechatChannelsRSS.media_cover_url(item);
       const play_url = is_video
-        ? WechatChannelsRSS.media_play_url(media, cover_url)
+        ? WechatChannelsRSS.media_play_url(media, cover_url, play_endpoint)
         : "";
       const decode_key = is_video ? String(media?.decode_key ?? "") : "";
       const gallery =
@@ -204,12 +226,14 @@ export class WechatChannelsRSS extends RSSScript {
       const query_username =
         typeof ctx.query.username === "string" ? ctx.query.username.trim() : "";
       const requested_username = path_account || query_username;
-      const username = requested_username;
       const offset =
         typeof ctx.query.offset === "string" ? ctx.query.offset.trim() : "";
-      if (username === "") {
+      if (requested_username === "") {
         return Result.Err("缺少 query 参数 username", "INVALID_PARAMETER");
       }
+      const username = requested_username.endsWith("@finder")
+        ? requested_username
+        : requested_username + "@finder";
       const result_1 = await ctx.invoke("wxchannels.contact.feed.list", {
         username,
         offset,
@@ -240,7 +264,12 @@ export class WechatChannelsRSS extends RSSScript {
         if (id.error) return id;
       }
       return Result.Ok(
-        WechatChannelsRSS.build_channel(data, username, ctx.public_origin),
+        WechatChannelsRSS.build_channel(
+          data,
+          username,
+          ctx.public_origin,
+          ctx.config?.PlayerHostname?.trim() || WechatChannelsRSS.PLAY_ENDPOINT,
+        ),
       );
     } catch (error) {
       return Result.Err(error, error?.code ?? "UPSTREAM_INVALID_RESPONSE");
