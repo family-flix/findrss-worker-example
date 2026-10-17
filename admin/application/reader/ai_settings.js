@@ -11,7 +11,6 @@ import { AI_BUILTIN_ROLES } from "@/domain/preferences/ai_settings.js";
 export function AISettingsModel({ store }) {
   const draft = store.state.settings_draft;
   const provider_query = ref(""),
-    model_query = ref(""),
     selected_provider = ref("");
   const role_query = ref("");
   const selected_role = ref(""),
@@ -89,15 +88,7 @@ export function AISettingsModel({ store }) {
   const visible_providers = combine({ entries: provider_entries, query: provider_query }, ({ entries, query }) =>
     entries.filter(entry => entry.name.toLowerCase().includes(query.trim().toLowerCase())),
   );
-  const visible_models = combine(
-    { provider: active_provider, query: model_query },
-    ({ provider, query }) =>
-      (provider.models || []).filter((model) =>
-        `${model.name} ${model.model}`
-          .toLowerCase()
-          .includes(query.trim().toLowerCase()),
-      ),
-  );
+  const visible_models = computed(active_provider, provider => provider.models || []);
   const role_entries = combine({ roles, providers }, ({ roles, providers }) => roles.map(role => {
     const provider = providers.find(provider => provider.id === role.provider_id);
     const model = provider?.models.find(model => model.id === role.model_id);
@@ -173,14 +164,10 @@ export function AISettingsModel({ store }) {
   const methods = {
     select_provider(id) {
       selected_provider.set(id);
-      model_query.set("");
       editing_model.set("");
       provider_advanced.set(false);
       test_model.set("");
       clear_test();
-    },
-    search_models(value) {
-      model_query.set(value);
     },
     search_providers(value) { provider_query.set(value); },
     set_provider_enabled(id, enabled) {
@@ -334,7 +321,6 @@ export function AISettingsModel({ store }) {
   return {
     state: {
       provider_query,
-      model_query,
       provider_entries,
       visible_providers,
       active_entry,

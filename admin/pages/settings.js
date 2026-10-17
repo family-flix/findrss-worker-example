@@ -1,254 +1,42 @@
 import { SettingsModel } from "./settings.model.js";
-import { DeviceTokensModel } from "./dashboard.model.js";
-import { DeviceTokensView } from "./dashboard.js";
-import { SnapshotSettingsModel } from "../components/snapshot_settings.model.js";
-import { PollPolicyView } from "../components/poll_policy.js";
-import { CookiePushSettingsModel } from "../components/cookie_push_settings.model.js";
-import { WebhookSettingsModel } from "../components/webhook_settings.model.js";
+import { SettingsPanelSider } from "../components/frui/settings-panel-sider.js";
 
-const { View, Button, Input, Textarea, Show, computed, AIPreferencesView } =
-  window.FindRSSAdminUI;
+const { View, Link, PageLayout, PageHeader, PageContent, computed } = window.FindRSSAdminUI;
 
-function CookiePushSettingsView({ state, methods }) {
-  return View({ class: "grid min-w-0 gap-space-3", attributes: { n: "settings-cookie-decryption" } }, [
-    View({ as: "h2", class: "m-0 text-sm", attributes: { n: "settings-cookie-heading" } }, ["Cookie 解密"]),
-    View({ class: "text-muted", attributes: { n: "settings-cookie-description" } }, [
-      "填写与 Cookie 推送端相同的 UUID 和密码，支持 AES-128-CBC 固定 IV 和 AES-256-CBC 兼容模式。",
+function SettingsPage(props) {
+  const model = SettingsModel(props);
+  const { routes, active_route } = model.state;
+  const subviews = Timeless.ui.KeepAliveSubViews(props);
+  return PageLayout({
+    class: "h-full min-h-0",
+    attributes: { n: "settings-layout" },
+    header: PageHeader({ title: "设置" }),
+    onUnmounted: model.methods.destroy,
+  }, [
+    PageContent({
+      class: "flex-1 max-640-grid-template-columns",
+      style: {
+        "grid-template-columns": "180px minmax(0, 1fr)",
+        "grid-template-rows": "minmax(0, 1fr)",
+        "--max-640-grid-template-columns": "112px minmax(0, 1fr)",
+      },
+    }, [
+      SettingsPanelSider({ attributes: { n: "settings-navigation", "aria-label": "设置分类" } },
+        routes.map(route => Link({
+          href: route.pathname,
+          class: computed(active_route, active => "box-border flex-shrink-0 rounded-control no-underline " +
+            (active === route.name ? "bg-selected text-link" : "text-muted")),
+          style: { padding: "var(--frui-space-2)" },
+          attributes: {
+            n: "settings-nav-" + route.id,
+            "aria-current": computed(active_route, active => active === route.name ? "page" : undefined),
+          },
+          onClick(event) {
+            model.methods.navigate(event, route.name);
+          },
+        }, [route.title]))),
+      View({ class: "relative min-w-0 min-h-0", attributes: { n: "settings-subviews" } }, [subviews]),
     ]),
-    Show({ when: state.loading, ok: () => View({ attributes: { n: "settings-cookie-loading", role: "status" } }, ["正在加载 Cookie 解密设置…"]) }),
-    Show({ when: state.loaded, ok: () => View({ class: "grid min-w-0 gap-space-3", attributes: { n: "settings-cookie-fields" } }, [
-      Input({ label: "Cookie 解密 UUID", value: state.uuid, disabled: state.busy, maxLength: 256,
-        attributes: { n: "settings-cookie-uuid" }, onChange: methods.set_uuid }),
-      Input({ label: "Cookie 解密密码", type: "text", value: state.password, disabled: state.busy, maxLength: 4096,
-        autoComplete: "off", attributes: { n: "settings-cookie-password" }, onChange: methods.set_password,
-        placeholder: computed(state.configured, configured => configured ? "已设置，留空保留" : "填写推送端密码"),
-        help: "密码不会回显；更换 UUID 时需重新填写密码。" }),
-      Button({ class: "justify-self-start", disabled: state.busy, attributes: { n: "settings-cookie-save" }, onClick: methods.save }, [
-        computed(state.busy, busy => busy ? "正在保存…" : "保存 Cookie 解密设置"),
-      ]),
-    ]) }),
-    Show({ when: computed(state.error, Boolean), ok: () => View({ class: "grid gap-space-2", attributes: { n: "settings-cookie-failure" } }, [
-      View({ class: "text-danger", attributes: { n: "settings-cookie-error", role: "alert" } }, [state.error]),
-      Show({ when: computed(state.loaded, loaded => !loaded), ok: () => Button({ disabled: state.loading,
-        attributes: { n: "settings-cookie-retry" }, onClick: methods.start }, ["重新加载 Cookie 解密设置"]) }),
-    ]) }),
-    View({ class: "text-muted", attributes: { n: "settings-cookie-message", role: "status" } }, [state.message]),
-  ]);
-}
-
-function WebhookSettingsView({ state, methods }) {
-  return View({ class: "grid min-w-0 gap-space-3", attributes: { n: "settings-webhook" } }, [
-    View({ as: "h2", class: "m-0 text-sm", attributes: { n: "settings-webhook-heading" } }, ["Webhook 消息推送"]),
-    View({ class: "text-muted", attributes: { n: "settings-webhook-description" } }, [
-      "新错误消息同时通过 POST JSON 推送到此地址，URL 留空关闭。Token 使用 Authorization: Bearer 发送，留空保留已保存的 Token。",
-    ]),
-    Show({ when: state.loading, ok: () => View({ attributes: { n: "settings-webhook-loading", role: "status" } }, ["正在加载 Webhook 设置…"]) }),
-    Show({ when: state.loaded, ok: () => View({ class: "grid min-w-0 gap-space-3", attributes: { n: "settings-webhook-fields" } }, [
-      Input({ label: "Webhook URL", type: "url", value: state.url, disabled: state.busy, maxLength: 4096,
-        attributes: { n: "settings-webhook-url" }, onChange: methods.set_url, placeholder: "https://notify.example.com/api/notify/…" }),
-      Input({ label: "Webhook Token", type: "password", value: state.token, disabled: state.busy, maxLength: 4096,
-        autoComplete: "new-password", attributes: { n: "settings-webhook-token" }, onChange: methods.set_token,
-        placeholder: computed(state.token_configured, configured => configured ? "已设置，留空保留" : "填写 Token（可选）") }),
-      Textarea({ label: "JSON 消息模板", value: state.template, disabled: state.busy, maxLength: 8192, rows: 5,
-        attributes: { n: "settings-webhook-template" }, onChange: methods.set_template,
-        help: '例如 {"text":"{{message}}\\n{{error_text}}"}。变量：{{message}} 错误描述、{{error_text}} 错误详情、{{script_name}} 脚本名、{{path}} 脚本路径、{{pathname}} 请求路径、{{route}} 脚本 ID、{{source}} 来源、{{phase}} 阶段、{{created_at}} 时间戳。' }),
-      Button({ class: "justify-self-start", disabled: state.busy, attributes: { n: "settings-webhook-save" }, onClick: methods.save }, [
-        computed(state.busy, busy => busy ? "正在保存…" : "保存 Webhook 设置"),
-      ]),
-    ]) }),
-    Show({ when: computed(state.error, Boolean), ok: () => View({ class: "grid gap-space-2", attributes: { n: "settings-webhook-failure" } }, [
-      View({ class: "text-danger", attributes: { n: "settings-webhook-error", role: "alert" } }, [state.error]),
-      Show({ when: computed(state.loaded, loaded => !loaded), ok: () => Button({ disabled: state.loading,
-        attributes: { n: "settings-webhook-retry" }, onClick: methods.start }, ["重新加载 Webhook 设置"]) }),
-    ]) }),
-    View({ class: "text-muted", attributes: { n: "settings-webhook-message", role: "status" } }, [state.message]),
-  ]);
-}
-
-function SettingsPage({ view } = {}) {
-  const model = SettingsModel();
-  const snapshots = SnapshotSettingsModel({ ui: window.FindRSSAdminUI });
-  const cookies = CookiePushSettingsModel({ ui: window.FindRSSAdminUI });
-  const webhook = WebhookSettingsModel({ ui: window.FindRSSAdminUI });
-  const device_tokens = DeviceTokensModel(({ title, message }) =>
-    window.confirm(title + "\n\n" + message),
-  );
-  const start = () => {
-    device_tokens.open.as(true);
-    return Promise.all([
-      model.methods.start(),
-      device_tokens.refresh(),
-      snapshots.methods.start(),
-      cookies.methods.start(),
-      webhook.methods.start(),
-    ]);
-  };
-  const leave = () => {
-    device_tokens.open.as(false);
-    device_tokens.dispose();
-    model.methods.leave();
-    snapshots.methods.leave();
-    cookies.methods.leave();
-    webhook.methods.leave();
-  };
-  let stop_show, stop_hide;
-  const content = View(
-    {
-      class: "box-border grid min-w-0 gap-space-4",
-      attributes: {
-        n: "settings-content",
-        "aria-busy": computed(model.state.loading, String),
-      },
-      onMounted() {
-        stop_show = view?.onShow(start);
-        stop_hide = view?.onBeforeHide(leave);
-        void start();
-      },
-      onUnmounted() {
-        stop_show?.();
-        stop_hide?.();
-        leave();
-        model.methods.destroy();
-      },
-    },
-    [
-      DeviceTokensView(device_tokens),
-      CookiePushSettingsView(cookies),
-      WebhookSettingsView(webhook),
-      View(
-        {
-          class: "box-border grid min-w-0 gap-space-3",
-          attributes: { n: "settings-snapshots" },
-        },
-        [
-          View({ as: "h2", class: "box-border m-0 text-sm", attributes: { n: "settings-fetch-title" } }, ["订阅源抓取"]),
-          View({ class: "text-muted" }, [
-            "默认每 1 小时抓取一次，单个订阅源可覆盖。公开源同时更新 XML 和广场预览；私密自有源按规则更新 XML，订阅访问仍需有效凭证，不发布文章预览。",
-          ]),
-          Show({
-            when: snapshots.state.loading,
-            ok: () =>
-              View({ attributes: { role: "status" } }, ["正在加载抓取规则…"]),
-          }),
-          Show({
-            when: snapshots.state.loaded,
-            ok: () =>
-              View({ class: "grid min-w-0 gap-space-3" }, [
-                PollPolicyView(snapshots.editor, {
-                  name: "settings-snapshot-policy",
-                  disabled: snapshots.state.busy,
-                }),
-                Button(
-                  {
-                    class: "justify-self-start",
-                    disabled: snapshots.state.busy,
-                    attributes: { n: "settings-snapshot-save" },
-                    onClick: snapshots.methods.save,
-                  },
-                  [
-                    computed(snapshots.state.busy, (busy) =>
-                      busy ? "正在保存…" : "保存抓取规则",
-                    ),
-                  ],
-                ),
-              ]),
-          }),
-          Show({
-            when: computed(snapshots.state.error, Boolean),
-            ok: () =>
-              View({ class: "grid gap-space-2" }, [
-                View({ class: "text-danger", attributes: { role: "alert" } }, [
-                  snapshots.state.error,
-                ]),
-                Show({
-                  when: computed(snapshots.state.loaded, (loaded) => !loaded),
-                  ok: () =>
-                    Button({ onClick: snapshots.methods.start }, [
-                      "重新加载抓取规则",
-                    ]),
-                }),
-              ]),
-          }),
-          View({ class: "text-muted", attributes: { role: "status" } }, [
-            snapshots.state.message,
-          ]),
-        ],
-      ),
-      View(
-        {
-          as: "h2",
-          class: "box-border m-0 text-sm",
-          attributes: { n: "settings-model-heading" },
-        },
-        ["大模型"],
-      ),
-      View(
-        {
-          class: "box-border text-muted",
-          attributes: { n: "settings-model-description" },
-        },
-        ["配置 XiaoxunAgent 使用的模型厂商、API Key 和模型参数。"],
-      ),
-      Show({
-        when: model.state.loading,
-        ok: () =>
-          View(
-            {
-              class: "box-border text-muted",
-              attributes: { n: "settings-loading", role: "status" },
-            },
-            ["正在加载大模型设置…"],
-          ),
-      }),
-      Show({
-        when: computed(model.state.error, Boolean),
-        ok: () =>
-          View(
-            {
-              class: "box-border grid gap-space-3",
-              attributes: { n: "settings-load-failure" },
-            },
-            [
-              View(
-                {
-                  class: "box-border text-danger",
-                  attributes: { n: "settings-load-error", role: "alert" },
-                },
-                [model.state.error],
-              ),
-              Button(
-                {
-                  class: "box-border justify-self-start",
-                  attributes: { n: "settings-retry-button" },
-                  onClick: model.methods.start,
-                },
-                ["重新加载"],
-              ),
-            ],
-          ),
-      }),
-      Show({
-        when: model.state.loaded,
-        ok: () =>
-          AIPreferencesView({
-            store: model.store,
-            style: {
-              height: "min(760px, 75dvh)",
-              "min-height": "480px",
-            },
-          }),
-      }),
-      View(
-        {
-          class: "box-border text-muted",
-          attributes: { n: "settings-message", role: "status" },
-        },
-        [model.store.state.settings_message],
-      ),
-    ],
-  );
-  return window.FindRSSAdminShell.Page({ page_id: "settings", title: "设置" }, [
-    content,
   ]);
 }
 

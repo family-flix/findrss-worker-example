@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SettingsModel } from "../pages/settings.model.js";
+import { SettingsModel } from "../pages/settings/models.model.js";
 
 function ref(value) {
   const listeners = new Set();

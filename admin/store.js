@@ -126,7 +126,7 @@ export const routes_configure = {
   admin: {
     title: "FindRSS 管理后台", pathname: "/admin/", page: "Layout",
     children: {
-      messages: { title: "消息", pathname: "/admin/messages", page: "Messages", options: { short_title: "消息", icon: "inbox" } },
+      messages: { title: "消息", pathname: "/admin/messages", page: "Messages", options: { short_title: "消息", icon: "bell" } },
       overview: { title: "运行概览", pathname: "/admin/overview", page: "Overview", is_default: true, options: { short_title: "概览", icon: "house" } },
       discovery: { title: "订阅源管理", pathname: "/admin/discovery", page: "Discovery", options: { short_title: "订阅源", icon: "rss", aliases: ["/admin/discovery-admin.html"] } },
       scripts: { title: "脚本管理", pathname: "/admin/scripts", page: "Scripts", options: { short_title: "脚本", icon: "file-code", aliases: ["/admin/rss-scripts.html"] } },
@@ -134,8 +134,18 @@ export const routes_configure = {
       tokens: { title: "Token", pathname: "/admin/tokens", page: "Tokens", options: { short_title: "Token", icon: "users" } },
       storage: { title: "存储", pathname: "/admin/storage", page: "Storage", options: { short_title: "存储", icon: "hard-drive" } },
       tasks: { title: "任务", pathname: "/admin/tasks", page: "Tasks", options: { short_title: "任务", icon: "activity" } },
-      network: { title: "网络测试", pathname: "/admin/network", page: "NetworkTest", options: { short_title: "网络测试", icon: "activity" } },
-      settings: { title: "设置", pathname: "/admin/settings", page: "Settings", options: { short_title: "设置", icon: "settings" } },
+      network: { title: "网络测试", pathname: "/admin/network", page: "NetworkTest", options: { short_title: "网络测试", icon: "earth" } },
+      settings: {
+        title: "设置", pathname: "/admin/settings", page: "Settings", options: { short_title: "设置", icon: "settings" },
+        children: {
+          device_tokens: { title: "设备 Token", pathname: "/admin/settings/device-tokens", page: "SettingsDeviceTokens", is_default: true },
+          cookies: { title: "Cookie 解密", pathname: "/admin/settings/cookies", page: "SettingsCookies" },
+          webhook: { title: "Webhook 消息推送", pathname: "/admin/settings/webhook", page: "SettingsWebhook" },
+          snapshots: { title: "订阅源抓取", pathname: "/admin/settings/snapshots", page: "SettingsSnapshots" },
+          models: { title: "大模型", pathname: "/admin/settings/models", page: "SettingsModels" },
+          about: { title: "关于", pathname: "/admin/settings/about", page: "SettingsAbout" },
+        },
+      },
       devices: { title: "设备管理", pathname: "/admin/devices", page: "Devices", options: { short_title: "设备", icon: "server", hidden: true, aliases: ["/admin/devices.html"] } },
       loadtest: { title: "并发请求", pathname: "/admin/loadtest", page: "LoadTest", options: { short_title: "并发", icon: "activity", hidden: true } },
       users: { title: "用户管理", pathname: "/admin/users", page: "Users", options: { short_title: "用户", icon: "users", hidden: true } },
@@ -187,14 +197,25 @@ export async function create_admin_store() {
     Storage: (await import("./pages/storage.js")).StoragePage,
     Tasks: (await import("./pages/tasks.js")).TasksPage,
     Settings: (await import("./pages/settings.js")).SettingsPage,
+    SettingsDeviceTokens: (await import("./pages/settings/device-tokens.js")).SettingsDeviceTokensPage,
+    SettingsCookies: (await import("./pages/settings/cookies.js")).SettingsCookiesPage,
+    SettingsWebhook: (await import("./pages/settings/webhook.js")).SettingsWebhookPage,
+    SettingsSnapshots: (await import("./pages/settings/snapshots.js")).SettingsSnapshotsPage,
+    SettingsModels: (await import("./pages/settings/models.js")).SettingsModelsPage,
+    SettingsAbout: (await import("./pages/settings/about.js")).SettingsAboutPage,
     Redemptions: (await import("./pages/redemptions.js")).RedemptionCardsPage,
   };
   return create_admin_routing(kit, components);
 }
 
 export function match_admin_route(route_table, pathname) {
-  const direct = route_table.routesWithPathname[pathname];
-  if (direct) return direct;
+  const direct = route_table.routesWithPathname[pathname] || route_table.routesWithPathname[pathname.replace(/\/+$/, "")];
   const alias = Object.entries(routes_configure.admin.children).find(([, route]) => route.options.aliases?.includes(pathname));
-  return alias ? route_table.routesWithPathname[alias[1].pathname] : null;
+  let route = direct || (alias ? route_table.routesWithPathname[alias[1].pathname] : null);
+  const visited = new Set();
+  while (route?.layout && route.defaultName && !visited.has(route.name)) {
+    visited.add(route.name);
+    route = route_table.routes[route.defaultName];
+  }
+  return route;
 }

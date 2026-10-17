@@ -3,6 +3,8 @@ import {
 } from "../components/frui/atomic.js";
 const {
   View,
+  Row,
+  Col,
   For,
   Show,
   computed,
@@ -286,16 +288,16 @@ function AISettingsEditor({
             ),
             attributes: {
               n: `settings-ai-model-configure-${id}`,
-              "aria-label": computed(
-                model,
-                (value) => `配置模型：${value.name}`,
+              "aria-label": combine(
+                { model, editing },
+                ({ model, editing }) => `${editing ? "收起" : "配置"}模型：${model.name}`,
               ),
               "aria-expanded": editing
             },
             onClick() {
               return methods.configure_model(id);
             }
-          }, ["配置"]),
+          }, [computed(editing, value => value ? "收起" : "配置")]),
           Switch({
             checked: model_enabled,
             disabled: combine({
@@ -464,21 +466,215 @@ function AISettingsEditor({
           "--font-size-12-pixels": "12px"
         }
       }),
+      SettingsPanelHeader({
+        title: "模型列表",
+        attributes: {
+          n: "settings-ai-model-heading"
+        },
+        title_attributes: {
+          n: "settings-ai-model-list-label"
+        },
+        actions: [
+          Show({
+            when: computed(state.active_entry, (value) => value.configured),
+            ok() {
+              return Button({
+                class: "",
+                disabled: busy,
+                attributes: {
+                  n: "settings-ai-model-add",
+                  "aria-label": "添加自定义模型"
+                },
+                onClick() {
+                  return methods.add_model();
+                }
+              }, ["添加自定义模型"]);
+            },
+          }),
+        ]
+      }),
+      node("border-block-start-1-pixels-solid-color-border", "settings-ai-model-list", [
+        For({
+          each: state.visible_models,
+          key: "id",
+          render: model_row
+        }),
+      ], {
+        style: {
+          "--border-block-start-1-pixels-solid-color-border": "1px solid var(--frui-color-border)"
+        }
+      }),
+      Show({
+        when: computed(state.visible_models, (value) => value.length === 0),
+        ok() {
+          return EmptyCard({
+            name: "settings-ai-model-empty",
+            variant: "inline",
+            title: "暂无模型",
+            description: "添加自定义模型。"
+          });
+        },
+      }),
       node("display-grid gap-space-2 padding-space-4 background-color-surface border-radius-radius-control",
         "settings-ai-provider-credentials", [
+          Row({ attributes: { n: "settings-ai-test-model-row" } }, [
+            Col({ flex: 1, class: "min-width-0" }, [
+              node("flex-1 min-width-0 display-grid gap-space-1", "settings-ai-test-model-field", [
+                node("color-color-text font-size-13-pixels font-weight-600", "settings-ai-test-model-label", ["测试模型"], {
+                  style: {
+                    "--font-size-13-pixels": "13px"
+                  }
+                }),
+                ModelSelect({
+                  choices: state.test_choices,
+                  value: state.test_model_value,
+                  busy: computed(state.test_state, (value) => value.busy),
+                  choose: methods.select_test_model,
+                  name: "settings-ai-test-model",
+                  label: "连接测试使用的模型",
+                }),
+              ]),
+            ]),
+          ]),
+          Show({
+            when: computed(state.active_entry, (value) => value.configured),
+            ok() {
+              return node(
+                "display-grid gap-space-3",
+                "settings-ai-connection-actions",
+                [
+                  Button({
+                    class: "",
+                    disabled: busy,
+                    attributes: {
+                      n: "settings-ai-provider-advanced-toggle",
+                      "aria-label": "高级设置",
+                      "aria-expanded": state.provider_advanced
+                    },
+                    onClick() {
+                      return methods.toggle_advanced();
+                    }
+                  }, ["高级设置"]),
+                  Show({
+                    when: state.provider_advanced,
+                    ok() {
+                      return node(
+                        "display-grid gap-space-3",
+                        "settings-ai-provider-advanced",
+                        [
+                          field(
+                            "厂商名称",
+                            "settings-ai-provider-name-input",
+                            computed(active, (value) => value.name || ""),
+                            (name) => methods.update_provider({
+                              name
+                            }),
+                          ),
+                          Show({
+                            when: computed(
+                              active,
+                              (value) => value.type === "openai_compat",
+                            ),
+                            ok() {
+                              return node(
+                                "display-grid gap-space-3",
+                                "settings-ai-endpoint",
+                                [
+                                  field(
+                                    "接口地址",
+                                    "settings-ai-base-url",
+                                    computed(
+                                      active,
+                                      (value) => value.base_url || "",
+                                    ),
+                                    (base_url) =>
+                                    methods.update_provider({
+                                      base_url
+                                    }),
+                                    "https://api.example.com/v1",
+                                  ),
+                                  field(
+                                    "部署密钥名",
+                                    "settings-ai-secret-name",
+                                    computed(
+                                      active,
+                                      (value) => value.api_key_secret_name || "",
+                                    ),
+                                    (api_key_secret_name) =>
+                                    methods.update_provider({
+                                      api_key_secret_name,
+                                    }),
+                                    "READER_AI_API_KEY",
+                                  ),
+                                  node("color-color-muted font-size-12-pixels font-weight-400 line-height-1-6",
+                                    "settings-ai-secret-hint", [
+                                      "填写 Worker 环境中的 READER_AI_ 密钥名，接口地址后自动拼接 /chat/completions。",
+                                    ], {
+                                      style: {
+                                        "--font-size-12-pixels": "12px"
+                                      }
+                                    }),
+                                ],
+                              );
+                            },
+                          }),
+                        ],
+                      );
+                    },
+                  }),
+                ],
+              );
+            },
+          }),
+          Row({ align: "end", class: "gap-space-2 min-width-0", attributes: { n: "settings-ai-test-credentials-row" } }, [
+            Col({ flex: 1, class: "min-width-0" }, [
+              Show({
+                when: computed(active, (value) => value.type === "openai_compat"),
+                ok() {
+                  return node("", "settings-ai-key-config", [
+                    field(
+                      "API Key",
+                      "settings-ai-api-key",
+                      state.key_value,
+                      methods.set_api_key,
+                      "填写该厂商的 API Key",
+                      false,
+                      "password",
+                    ),
+                  ]);
+                },
+              }),
+            ]),
+            Col({ flex: "none" }, [
+              Button({
+                class: "",
+                disabled: combine({
+                    busy,
+                    test: state.test_state,
+                    choices: state.test_choices
+                  },
+                  ({
+                    busy,
+                    test,
+                    choices
+                  }) => busy || test.busy || !choices.length,
+                ),
+                attributes: {
+                  n: "settings-ai-test-button",
+                  "aria-label": "测试连接"
+                },
+                onClick() {
+                  return methods.test_connection();
+                }
+              }, [computed(state.test_state, (value) =>
+                value.busy ? "正在测试…" : "测试连接",
+              )]),
+            ]),
+          ]),
           Show({
             when: computed(active, (value) => value.type === "openai_compat"),
             ok() {
-              return node("", "settings-ai-key-config", [
-                field(
-                  "API Key",
-                  "settings-ai-api-key",
-                  state.key_value,
-                  methods.set_api_key,
-                  "填写该厂商的 API Key",
-                  false,
-                  "password",
-                ),
+              return node("display-grid gap-space-1", "settings-ai-key-feedback", [
                 node("color-color-muted font-size-12-pixels font-weight-400 line-height-1-6", "settings-ai-key-status", [
                   state.key_status,
                 ], {
@@ -515,44 +711,6 @@ function AISettingsEditor({
               ]);
             },
           }),
-          node("flex-1 min-width-0 display-grid gap-space-1", "settings-ai-test-model-field", [
-            node("color-color-text font-size-13-pixels font-weight-600", "settings-ai-test-model-label", ["测试模型"], {
-              style: {
-                "--font-size-13-pixels": "13px"
-              }
-            }),
-            ModelSelect({
-              choices: state.test_choices,
-              value: state.test_model_value,
-              busy: computed(state.test_state, (value) => value.busy),
-              choose: methods.select_test_model,
-              name: "settings-ai-test-model",
-              label: "连接测试使用的模型",
-            }),
-          ]),
-          Button({
-            class: "",
-            disabled: combine({
-                busy,
-                test: state.test_state,
-                choices: state.test_choices
-              },
-              ({
-                busy,
-                test,
-                choices
-              }) => busy || test.busy || !choices.length,
-            ),
-            attributes: {
-              n: "settings-ai-test-button",
-              "aria-label": "测试连接"
-            },
-            onClick() {
-              return methods.test_connection();
-            }
-          }, [computed(state.test_state, (value) =>
-            value.busy ? "正在测试…" : "测试连接",
-          )]),
           node(
             "success-message",
             "settings-ai-test-success",
@@ -581,154 +739,6 @@ function AISettingsEditor({
             }
           }),
         ]),
-      Show({
-        when: computed(state.active_entry, (value) => value.configured),
-        ok() {
-          return node(
-            "display-grid gap-space-3",
-            "settings-ai-connection-actions",
-            [
-              Button({
-                class: "",
-                disabled: busy,
-                attributes: {
-                  n: "settings-ai-provider-advanced-toggle",
-                  "aria-label": "高级设置",
-                  "aria-expanded": state.provider_advanced
-                },
-                onClick() {
-                  return methods.toggle_advanced();
-                }
-              }, ["高级设置"]),
-              Show({
-                when: state.provider_advanced,
-                ok() {
-                  return node(
-                    "display-grid gap-space-3",
-                    "settings-ai-provider-advanced",
-                    [
-                      field(
-                        "厂商名称",
-                        "settings-ai-provider-name-input",
-                        computed(active, (value) => value.name || ""),
-                        (name) => methods.update_provider({
-                          name
-                        }),
-                      ),
-                      Show({
-                        when: computed(
-                          active,
-                          (value) => value.type === "openai_compat",
-                        ),
-                        ok() {
-                          return node(
-                            "display-grid gap-space-3",
-                            "settings-ai-endpoint",
-                            [
-                              field(
-                                "接口地址",
-                                "settings-ai-base-url",
-                                computed(
-                                  active,
-                                  (value) => value.base_url || "",
-                                ),
-                                (base_url) =>
-                                methods.update_provider({
-                                  base_url
-                                }),
-                                "https://api.example.com/v1",
-                              ),
-                              field(
-                                "部署密钥名",
-                                "settings-ai-secret-name",
-                                computed(
-                                  active,
-                                  (value) => value.api_key_secret_name || "",
-                                ),
-                                (api_key_secret_name) =>
-                                methods.update_provider({
-                                  api_key_secret_name,
-                                }),
-                                "READER_AI_API_KEY",
-                              ),
-                              node("color-color-muted font-size-12-pixels font-weight-400 line-height-1-6",
-                                "settings-ai-secret-hint", [
-                                  "填写 Worker 环境中的 READER_AI_ 密钥名，接口地址后自动拼接 /chat/completions。",
-                                ], {
-                                  style: {
-                                    "--font-size-12-pixels": "12px"
-                                  }
-                                }),
-                            ],
-                          );
-                        },
-                      }),
-                    ],
-                  );
-                },
-              }),
-            ],
-          );
-        },
-      }),
-      SettingsPanelHeader({
-        title: "模型列表",
-        attributes: {
-          n: "settings-ai-model-heading"
-        },
-        title_attributes: {
-          n: "settings-ai-model-list-label"
-        },
-        actions: [
-          Show({
-            when: computed(state.active_entry, (value) => value.configured),
-            ok() {
-              return Button({
-                class: "",
-                disabled: busy,
-                attributes: {
-                  n: "settings-ai-model-add",
-                  "aria-label": "添加自定义模型"
-                },
-                onClick() {
-                  return methods.add_model();
-                }
-              }, ["添加自定义模型"]);
-            },
-          }),
-        ]
-      }),
-      field(
-        "搜索模型",
-        "settings-ai-model-search",
-        state.model_query,
-        methods.search_models,
-        "按名称或模型 ID 搜索",
-        false,
-        "search",
-      ),
-      node("border-block-start-1-pixels-solid-color-border", "settings-ai-model-list", [
-        For({
-          each: state.visible_models,
-          key: "id",
-          render: model_row
-        }),
-      ], {
-        style: {
-          "--border-block-start-1-pixels-solid-color-border": "1px solid var(--frui-color-border)"
-        }
-      }),
-      Show({
-        when: computed(state.visible_models, (value) => value.length === 0),
-        ok() {
-          return EmptyCard({
-            name: "settings-ai-model-empty",
-            variant: "inline",
-            title: "暂无模型",
-            description: "调整搜索或添加自定义模型。"
-          });
-        },
-      }),
     ]);
   }
 
