@@ -1,7 +1,17 @@
 import { format_datetime } from "../../server/lib/datetime.js";
 
+export const task_status_options = [
+  { value: "", label: "全部状态" },
+  { value: "running", label: "进行中" },
+  { value: "completed", label: "已完成" },
+  { value: "failed", label: "失败" },
+  { value: "cancelled", label: "已终止" },
+];
+
 export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) => window.FindRSSAdminAuth.fetch(...args) } = {}) {
-  const state = { tasks: ui.ref([]), loading: ui.ref(false), error: ui.ref(""), cancelling: ui.ref([]) };
+  const state = { tasks: ui.ref([]), status: ui.ref(""), loading: ui.ref(false), error: ui.ref(""), cancelling: ui.ref([]) };
+  state.visible_tasks = ui.combine({ tasks: state.tasks, status: state.status }, ({ tasks, status }) =>
+    status ? tasks.filter(task => task.status === status) : tasks);
   let controller = null;
   const status_labels = { running: "进行中", completed: "已完成", failed: "失败", cancelled: "已终止" };
   function task_value(task) {
@@ -32,6 +42,9 @@ export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
   }
   const methods = {
     load,
+    set_status(status) {
+      if (task_status_options.some(option => option.value === status)) state.status.as(status);
+    },
     async cancel(id) {
       if (state.cancelling.value.includes(id) || !state.tasks.value.some(task => task.id === id && task.cancellable)) return;
       state.cancelling.as([...state.cancelling.value, id]);

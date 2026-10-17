@@ -1,6 +1,6 @@
-import { TasksModel } from "./tasks.model.js";
+import { TasksModel, task_status_options } from "./tasks.model.js";
 
-const { View, Button, Badge, Show, For, computed, combine } = window.FindRSSAdminUI;
+const { View, Button, Badge, Select, Show, For, computed, combine } = window.FindRSSAdminUI;
 
 export function TasksPage({ view } = {}) {
   const { state, methods } = TasksModel();
@@ -8,17 +8,25 @@ export function TasksPage({ view } = {}) {
   return window.FindRSSAdminShell.Page({ page_id: "tasks", title: "任务", actions: [
     Button({ disabled: state.loading, attributes: { n: "tasks-refresh" }, onClick: methods.load }, ["刷新"]),
   ] }, [
-    View({ class: "grid min-w-0 gap-space-4", attributes: { n: "tasks-page", "aria-busy": computed(state.loading, String) },
+    View({ class: "grid min-w-0 gap-space-3", attributes: { n: "tasks-page", "aria-busy": computed(state.loading, String) },
       onMounted() { stop_show = view?.onShow(methods.load); stop_hide = view?.onBeforeHide(methods.stop); void methods.load(); },
       onUnmounted() { stop_show?.(); stop_hide?.(); methods.stop(); } }, [
       View({ class: "text-muted text-sm", attributes: { n: "tasks-description" } }, ["展示最近 100 条后台任务，点击刷新更新任务状态。终止刷新会保留上次成功保存的快照；下次定时刷新仍按原计划执行。"]),
+      View({ class: "flex flex-wrap items-center gap-space-2", attributes: { n: "tasks-filters" } }, [
+        View({ class: "text-muted text-sm", attributes: { n: "tasks-status-label", id: "tasks-status-label" } }, ["状态"]),
+        Select({ value: state.status, options: task_status_options, style: { width: "10rem" },
+          attributes: { n: "tasks-status-filter", "aria-labelledby": "tasks-status-label", "aria-label": "任务状态" },
+          onChange: event => methods.set_status(event.target.value) }),
+      ]),
       View({ class: "text-danger text-sm whitespace-pre-wrap break-anywhere", attributes: { n: "tasks-error", role: "alert" } }, [state.error]),
-      Show({ when: combine({ tasks: state.tasks, loading: state.loading, error: state.error }, value => !value.tasks.length && !value.loading && !value.error),
-        ok: () => View({ class: "text-muted", attributes: { n: "tasks-empty", role: "status" } }, ["暂无后台任务"]) }),
+      Show({ when: combine({ tasks: state.visible_tasks, loading: state.loading, error: state.error }, value => !value.tasks.length && !value.loading && !value.error),
+        ok: () => View({ class: "text-muted", attributes: { n: "tasks-empty", role: "status" } }, [
+          computed(state.status, status => status ? "暂无该状态的后台任务" : "暂无后台任务"),
+        ]) }),
       View({ class: "grid min-w-0 gap-space-3", attributes: { n: "tasks-list" } }, [
-        For({ each: state.tasks, render(value) {
+        For({ each: state.visible_tasks, render(value) {
           const task = value?.__is_ref ? value.value : value;
-          return View({ class: "grid min-w-0 gap-space-2 bg-surface-raised rounded-card", style: { padding: "16px" }, attributes: { n: "tasks-item" } }, [
+          return View({ class: "grid min-w-0 gap-space-2 bg-surface-raised rounded-card", style: { padding: "var(--frui-space-3)" }, attributes: { n: "tasks-item" } }, [
             View({ class: "flex flex-wrap items-center justify-between gap-space-2", attributes: { n: "tasks-item-heading" } }, [
               View({ as: "h2", class: "m-0 text-sm break-anywhere", attributes: { n: "tasks-item-title" } }, [task.title]),
               Badge({ tone: task.tone, attributes: { n: "tasks-item-status" } }, [task.status_label]),

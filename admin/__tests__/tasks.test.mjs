@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { TasksModel } from "../pages/tasks.model.js";
 
-const ui = { ref: value => ({ value, as(next) { this.value = next; } }) };
+const ui = {
+  ref: value => ({ value, as(next) { this.value = next; } }),
+  combine: (sources, read) => ({ get value() {
+    return read(Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.value])));
+  } }),
+};
 const task = { id: "one", title: "刷新快照", status: "running", started_at: Date.now() - 2000, finished_at: 0 };
 
 test("任务状态、耗时和取消操作由 Model 维护，取消重复点击只提交一次", async () => {
@@ -51,4 +56,39 @@ test("手动加载避免重复请求，停止后忽略迟到响应，并可再�
   assert.equal(model.state.tasks.value.length, 1);
   assert.equal(calls, 2);
   model.methods.stop();
+});
+
+test("状态筛选覆盖全部状态和空结果，刷新保留筛选，清除后恢复完整列表", async () => {
+  const statuses = ["running", "completed", "failed", "cancelled"];
+  let tasks = statuses.map(status => ({ ...task, id: status, status }));
+  let calls = 0;
+  const model = TasksModel({ ui, fetch_impl: async () => { calls++; return Response.json({ tasks }); } });
+  await model.methods.load();
+  assert.equal(model.state.visible_tasks.value.length, 4);
+  for (const status of statuses) {
+    model.methods.set_status(status);
+    assert.deepEqual(model.state.visible_tasks.value.map(task => task.id), [status]);
+  }
+  assert.equal(calls, 1);
+  model.methods.set_status("unknown");
+  assert.equal(model.state.status.value, "cancelled");
+  tasks = tasks.filter(task => task.status !== "cancelled");
+  await model.methods.load();
+  assert.equal(model.state.status.value, "cancelled");
+  assert.deepEqual(model.state.visible_tasks.value, []);
+  model.methods.set_status("");
+  assert.equal(model.state.visible_tasks.value.length, 3);
+});
+
+test("终止任务后立即从进行中筛选移除，并出现在已终止筛选中", async () => {
+  const model = TasksModel({ ui, fetch_impl: async (_url, options) => options.method === "POST"
+    ? Response.json({ task: { ...task, status: "cancelled", finished_at: Date.now() } })
+    : Response.json({ tasks: [task] }) });
+  await model.methods.load();
+  model.methods.set_status("running");
+  assert.equal(model.state.visible_tasks.value.length, 1);
+  await model.methods.cancel(task.id);
+  assert.deepEqual(model.state.visible_tasks.value, []);
+  model.methods.set_status("cancelled");
+  assert.deepEqual(model.state.visible_tasks.value.map(task => task.id), [task.id]);
 });
