@@ -25,6 +25,16 @@ test("arrayBuffer 往返", async () => {
   assert.deepEqual([...new Uint8Array(await object.arrayBuffer())], [1, 2, 3]);
 });
 
+test("条件写入仅创建新对象，已存在时返回 null 并保留原文和元数据", async () => {
+  const bucket = create_memory_bucket();
+  const options = { onlyIf: { etagDoesNotMatch: "*" }, httpMetadata: { contentType: "application/javascript" } };
+  assert.ok(await bucket.put("version.js", "first", options));
+  assert.equal(await bucket.put("version.js", "other", { onlyIf: options.onlyIf }), null);
+  const object = await bucket.get("version.js");
+  assert.equal(await object.text(), "first");
+  assert.equal(object.httpMetadata.contentType, "application/javascript");
+});
+
 test("delete([]) 抛错（模拟 R2 10027）", async () => {
   const bucket = create_memory_bucket();
   await assert.rejects(() => bucket.delete([]));

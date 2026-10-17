@@ -81,6 +81,7 @@ export function create_memory_bucket() {
       calls.put += 1;
       maybe_fail("put");
       const name = String(key);
+      if (options.onlyIf?.etagDoesNotMatch === "*" && objects.has(name)) return null;
       const size = byte_length(value);
       objects.set(name, {
         value,
