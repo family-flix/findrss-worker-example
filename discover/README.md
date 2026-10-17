@@ -91,7 +91,7 @@ DISCOVERY_API_ORIGIN=https://your-worker.example FINDRSS_HOSTNAME=https://feeds.
 
 快照更新时，`server/infra/discovery_snapshot.js` 在原有宽高读取链路上获取 JPEG／PNG／WebP 的完整封面，经 WASM 解码、64px 降采样，计算 4×3 BlurHash 并保存为 `cover_blurhash`；浏览器与 SSR 使用同一纯函数生成占位图，无需额外接口。每张封面最多下载 2 MiB、最多解码 400 万像素，解码串行执行，同一批快照的重复 URL 只读取一次。GIF、过大图片或解码失败仍保留可用宽高和原图；旧快照要等下一次定时更新或后台手动刷新后才有 BlurHash。
 
-自有公开源由 DO alarm 每 10 分钟生成完整 RSS/Atom XML 和文章预览，请求只读取 XML 快照。首次尚未生成的源或新参数返回 `503 + Retry-After: 5`，新参数登记后台定时任务；更新失败保留上次 XML。私密源需有效凭证，请求生成后复用 10 分钟。XML 与 feed JSON 一同持久化，DO 重建后不重新渲染；`rel="self"` 使用 `FINDRSS_HOSTNAME` 的规范地址（未配置时使用生成时的公开地址），不包含 token。脚本、Cookie 授权或源访问权限变更会使快照失效。
+自有公开源由 DO alarm 每 10 分钟生成完整 RSS/Atom XML 和文章预览，请求只读取 XML 快照。首次尚未生成的源或新参数返回 `503 + Retry-After: 5`，新参数登记后台定时任务；更新失败保留上次 XML。私密源需有效凭证，请求生成后复用 10 分钟。feed JSON、RSS XML 和 Atom XML 分别持久化为 R2 的 `rss/snapshots/<版本 UUID>/feed.json`、`feed.xml`、`feed.atom`，全部上传成功后才切换版本；旧打包 JSON 在下次成功刷新时迁移，DO 重建后不重新渲染。`rel="self"` 使用 `FINDRSS_HOSTNAME` 的规范地址（未配置时使用生成时的公开地址），不包含 token。脚本、Cookie 授权或源访问权限变更会使快照失效。
 
 
 卡片只保留“复制 RSS”操作：默认显示 RSS 图标，复制成功后变为绿色勾选，2 秒后恢复。状态和计时器按订阅地址独立保存，复制失败不会显示成功状态。首页的预览抽屉已移除，文章列表直接使用静态快照。

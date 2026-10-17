@@ -21,7 +21,7 @@ export class RepositoryRssRouteCache {
 
   /**
    * @param {string} key
-   * @returns {{ output_json: string, invoked: number, expires_at: number, saved_at?: number, rendered?: [string, string][], object_key?: string, bytes?: number } | null}
+   * @returns {{ output_json: string, invoked: number, expires_at: number, saved_at?: number, rendered?: [string, string][], object_key?: string, object_rendered?: [string, string][], bytes?: number } | null}
    */
   read(key) {
     const row = (
@@ -42,6 +42,7 @@ export class RepositoryRssRouteCache {
       row.rendered = snapshot.rendered;
       row.saved_at = snapshot.saved_at;
       row.object_key = snapshot.object_key;
+      row.object_rendered = snapshot.object_rendered;
       row.bytes = snapshot.bytes;
     }
     return row;
@@ -52,12 +53,12 @@ export class RepositoryRssRouteCache {
    * 变成最新（那会让热点条目永远不被淘汰、冷条目被反复挤出）。
    * @param {{
    *   key: string, output_json: string, invoked: number, expires_at: number, created_at: number,
-   *   saved_at?: number, rendered?: [string, string][], object_key?: string, bytes?: number,
+   *   saved_at?: number, rendered?: [string, string][], object_key?: string, object_rendered?: [string, string][], bytes?: number,
    * }} entry
    * @returns {void}
    */
   write(entry) {
-    const body = entry.object_key ? snapshot_prefix + JSON.stringify({ object_key: entry.object_key, saved_at: entry.saved_at, bytes: entry.bytes })
+    const body = entry.object_key ? snapshot_prefix + JSON.stringify({ object_key: entry.object_key, object_rendered: entry.object_rendered, saved_at: entry.saved_at, bytes: entry.bytes })
       : entry.rendered ? snapshot_prefix + JSON.stringify({ output: entry.output_json, rendered: entry.rendered, saved_at: entry.saved_at }) : entry.output_json;
     const chunked = entry.rendered && body.length > chunk_size;
     this.transaction(() => {

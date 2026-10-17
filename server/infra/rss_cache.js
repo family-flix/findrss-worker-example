@@ -19,10 +19,24 @@ function is_xml_key(key) {
   return key.startsWith("public-snapshot:") || key.startsWith("private-snapshot:");
 }
 
+function snapshot_object_keys(entry) {
+  return [entry?.object_key, ...(entry?.object_rendered || []).map(([, object_key]) => object_key)];
+}
+
+function snapshot_format(format) {
+  const types = {
+    rss: ["xml", "application/rss+xml"],
+    atom: ["atom", "application/atom+xml"],
+    html: ["html", "text/html"],
+  };
+  return Object.hasOwn(types, format) ? types[format]
+    : [encodeURIComponent(format), "text/plain"];
+}
+
 /**
  * @typedef {object} RouteCacheStore L2：SQLite 正文或 R2 指针的同步读写接口。
- * @property {(key: string) => { output_json: string, invoked: number, expires_at: number, saved_at?: number, rendered?: [string, string][], object_key?: string, bytes?: number } | null} read
- * @property {(entry: { key: string, output_json: string, invoked: number, expires_at: number, created_at: number, saved_at?: number, rendered?: [string, string][], object_key?: string, bytes?: number }) => void} write
+ * @property {(key: string) => { output_json: string, invoked: number, expires_at: number, saved_at?: number, rendered?: [string, string][], object_key?: string, object_rendered?: [string, string][], bytes?: number } | null} read
+ * @property {(entry: { key: string, output_json: string, invoked: number, expires_at: number, created_at: number, saved_at?: number, rendered?: [string, string][], object_key?: string, object_rendered?: [string, string][], bytes?: number }) => void} write
  * @property {(now: number) => void} delete_expired
  * @property {() => void} clear
  * @property {() => number} count
@@ -61,7 +75,7 @@ export function rss_route_cache_key(pathname, params) {
  * @property {number} saved_at 最后成功生成的时间
  * @property {number} bytes 近似内存占用（output + 已渲染的正文）
  * @property {Map<string, string>} rendered `format + "\n" + self_url` → 渲染后的正文
- * @property {boolean} snapshot 是否持久化两种 XML
+ * @property {boolean} snapshot 是否持久化渲染结果
  */
 
 /**
@@ -141,16 +155,7 @@ export class RssRouteCache {
       const object_key = stored.object_key;
       let pending = this.loading.get(object_key);
       if (!pending) {
-        pending = this.object_store.get(object_key)
-          .then(async object => {
-            if (!object) return null;
-            const snapshot = JSON.parse(await object.text());
-            if (!snapshot || typeof snapshot.output_json !== "string" || !Array.isArray(snapshot.rendered)
-              || snapshot.rendered.some(pair => !Array.isArray(pair) || pair.length !== 2 || pair.some(value => typeof value !== "string"))) {
-              throw new Error("RSS snapshot is invalid");
-            }
-            return snapshot;
-          })
+        pending = this.read_snapshot(stored)
           .finally(() => this.loading.delete(object_key));
         this.loading.set(object_key, pending);
       }
@@ -172,6 +177,26 @@ export class RssRouteCache {
     }, now);
     return { output: stored.output_json, invoked: Number(stored.invoked) !== 0,
       ...(stored.rendered ? { rendered: new Map(stored.rendered) } : {}) };
+  }
+
+  /** 新版按文件读取正文；没有格式指针的旧对象仍按打包 JSON 解析。 */
+  async read_snapshot(stored) {
+    if (stored.object_rendered !== undefined) {
+      const objects = await Promise.all(snapshot_object_keys(stored).map(async object_key => {
+        const object = await this.object_store.get(object_key);
+        return object ? object.text() : null;
+      }));
+      if (objects.some(body => body === null)) return null;
+      return { output_json: objects[0], rendered: stored.object_rendered.map(([render_key], index) => [render_key, objects[index + 1]]) };
+    }
+    const object = await this.object_store.get(stored.object_key);
+    if (!object) return null;
+    const snapshot = JSON.parse(await object.text());
+    if (!snapshot || typeof snapshot.output_json !== "string" || !Array.isArray(snapshot.rendered)
+      || snapshot.rendered.some(pair => !Array.isArray(pair) || pair.length !== 2 || pair.some(value => typeof value !== "string"))) {
+      throw new Error("RSS snapshot is invalid");
+    }
+    return snapshot;
   }
 
   /**
@@ -198,6 +223,7 @@ export class RssRouteCache {
           signal?.throwIfAborted();
           // 失效发生在执行期间时（如脚本刚被更新）不回填，避免旧内容重新进入缓存。
           if (this.inflight.get(key) === pending) {
+            result.assert_current?.();
             const completed_at = this.clock();
             const value = { ...result, saved_at: completed_at, expires_at: is_xml_key(key) ? 0 : completed_at + this.ttl_ms };
             // 先持久化再替换内存；刷新失败时仍可读取旧快照。
@@ -240,10 +266,10 @@ export class RssRouteCache {
   }
 
   /** 配置变更只使普通缓存失效，保留已生成和正在生成的 XML。 */
-  invalidate_all() {
+  invalidate_all(cancel_refreshes = false) {
     this.generation += 1;
     for (const key of this.entries.keys()) if (!is_xml_key(key)) this.drop(key);
-    for (const key of this.inflight.keys()) if (!is_xml_key(key)) this.inflight.delete(key);
+    for (const key of this.inflight.keys()) if (cancel_refreshes || !is_xml_key(key)) this.inflight.delete(key);
     if (this.store !== null) this.store.clear();
   }
 
@@ -309,6 +335,7 @@ export class RssRouteCache {
    */
   async persist(key, result, signal) {
     signal?.throwIfAborted();
+    result.assert_current?.();
     if (this.store === null) return;
     if (!result.rendered && result.output.length > this.persist_max_bytes) return;
     const entry = {
@@ -322,18 +349,32 @@ export class RssRouteCache {
     };
     if (is_xml_key(key) && result.rendered && this.object_store?.available) {
       const previous = this.store.read(key);
-      const object_key = "rss/snapshots/" + crypto.randomUUID() + ".json";
-      await this.object_store.put(object_key, JSON.stringify({ output_json: entry.output_json, rendered: entry.rendered }),
-        { httpMetadata: { contentType: "application/json; charset=utf-8" } });
+      const prefix = "rss/snapshots/" + crypto.randomUUID() + "/";
+      const object_key = prefix + "feed.json";
+      const files = [{ key: object_key, body: entry.output_json, content_type: "application/json" }];
+      const object_rendered = entry.rendered.map(([render_key, body]) => {
+        const [extension, content_type] = snapshot_format(render_key.split("\n", 1)[0]);
+        // 同格式的不同 self_url 分别保存，避免覆盖；通常每种格式只有一份。
+        let file_key = prefix + "feed." + extension;
+        for (let index = 2; files.some(file => file.key === file_key); index++) file_key = prefix + "feed-" + index + "." + extension;
+        files.push({ key: file_key, body, content_type });
+        return [render_key, file_key];
+      });
       try {
+        for (const file of files) {
+          signal?.throwIfAborted();
+          await this.object_store.put(file.key, file.body,
+            { httpMetadata: { contentType: file.content_type + "; charset=utf-8" } });
+        }
         signal?.throwIfAborted();
-        this.store.write({ ...entry, output_json: "", rendered: undefined, object_key,
+        result.assert_current?.();
+        this.store.write({ ...entry, output_json: "", rendered: undefined, object_key, object_rendered,
           bytes: result.output.length + entry.rendered.reduce((total, [, body]) => total + body.length, 0) });
       } catch (error) {
-        await this.object_store.delete_many([object_key], { best_effort: true });
+        await this.object_store.delete_many(files.map(file => file.key), { best_effort: true });
         throw error;
       }
-      await this.object_store.delete_many([previous?.object_key], { best_effort: true });
+      await this.object_store.delete_many(snapshot_object_keys(previous), { best_effort: true });
     } else {
       this.store.write(entry);
     }

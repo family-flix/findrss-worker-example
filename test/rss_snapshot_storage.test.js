@@ -22,15 +22,26 @@ test("公开和私密大快照存 R2，SQLite 只存指针；重启、清理后�
   for (const key of ["public-snapshot:/large", "private-snapshot:/large"]) {
     await writer.run(key, 1000, async () => value);
     const stored = f.repo.read(key);
-    assert.match(stored.object_key, /^rss\/snapshots\/[\w-]+\.json$/);
+    assert.match(stored.object_key, /^rss\/snapshots\/[\w-]+\/feed\.json$/);
+    const prefix = stored.object_key.slice(0, -"feed.json".length);
+    assert.deepEqual(stored.object_rendered, [["rss\n", prefix + "feed.xml"], ["atom\n", prefix + "feed.atom"]]);
+    for (const [file, body, content_type] of [
+      ["feed.json", value.output, "application/json"],
+      ["feed.xml", xml, "application/rss+xml"],
+      ["feed.atom", xml, "application/atom+xml"],
+    ]) {
+      const object = await f.object_store.get(prefix + file);
+      assert.equal(await object.text(), body);
+      assert.equal(object.httpMetadata.contentType, content_type + "; charset=utf-8");
+    }
     assert.equal(stored.output_json, "");
     assert.equal(stored.rendered, undefined);
     assert.equal(stored.bytes, value.output.length + xml.length * 2);
     const row = f.db.prepare("SELECT output_json FROM rss_route_cache WHERE key = ?").get(key);
     assert.doesNotMatch(row.output_json, /订阅内容/);
-    assert.ok(row.output_json.length < 300);
+    assert.ok(row.output_json.length < 600);
   }
-  assert.equal(f.bucket.objects.size, 2);
+  assert.equal(f.bucket.objects.size, 6);
   assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM rss_route_cache_chunks").get().n, 0);
   assert.equal(writer.stats().entries, 0);
   f.repo.delete_expired(Date.now() + 86400000);
@@ -43,10 +54,10 @@ test("公开和私密大快照存 R2，SQLite 只存指针；重启、清理后�
     assert.equal(reader.inspect(key).persistent, true);
     assert.equal(f.bucket.calls.get, gets);
     const reads = await Promise.all(Array.from({ length: 10 }, () => reader.resolve(key, Date.now())));
-    assert.equal(f.bucket.calls.get, gets + 1);
+    assert.equal(f.bucket.calls.get, gets + 3);
     assert.ok(reads.every(result => result.rendered.get("rss\n") === xml && result.rendered.get("atom\n") === xml));
     assert.equal((await reader.run(key, Date.now(), () => assert.fail("不应执行脚本"))).cached, true);
-    assert.equal(f.bucket.calls.get, gets + 1);
+    assert.equal(f.bucket.calls.get, gets + 3);
   }
 });
 
@@ -72,6 +83,7 @@ test("普通脚本和预览仍按 TTL 存 SQLite，旧版分块 XML 在成功刷
   for (const key of ["/ordinary", "discovery-preview:example"]) {
     await cache.run(key, Date.now(), async () => snapshot("临时内容"));
     assert.equal(f.repo.read(key).object_key, undefined);
+    assert.equal(f.repo.read(key).object_rendered, undefined);
     assert.equal((await f.cache().resolve(key, Date.now())).output, snapshot("临时内容").output);
     assert.equal(await f.cache().resolve(key, Date.now() + 2000), null);
   }
@@ -84,6 +96,7 @@ test("上传或 SQLite 提交失败保留旧指针和内存，提交失败删除
   const cache = f.cache();
   await cache.run(key, 1000, async () => snapshot("旧内容"));
   const old_key = f.repo.read(key).object_key;
+  const old_keys = [...f.bucket.objects.keys()];
   f.bucket.fail_next({ op: "put" });
   await assert.rejects(cache.run(key, 2000, async () => snapshot("新内容"), { force: true }), /put failed/);
   assert.equal(f.repo.read(key).object_key, old_key);
@@ -91,36 +104,35 @@ test("上传或 SQLite 提交失败保留旧指针和内存，提交失败删除
   const write = t.mock.method(f.repo, "write", () => { throw new Error("database failed"); });
   await assert.rejects(cache.run(key, 2000, async () => snapshot("新内容"), { force: true }), /database failed/);
   write.mock.restore();
-  assert.deepEqual([...f.bucket.objects.keys()], [old_key]);
+  assert.deepEqual([...f.bucket.objects.keys()], old_keys);
   assert.equal(f.repo.read(key).object_key, old_key);
   assert.equal((await f.cache().resolve(key, 2000)).rendered.get("rss\n"), "旧内容");
   await cache.run(key, 2000, async () => snapshot("新内容"), { force: true });
   assert.notEqual(f.repo.read(key).object_key, old_key);
-  assert.equal(f.bucket.objects.has(old_key), false);
-  assert.equal(f.bucket.objects.size, 1);
+  assert.ok(old_keys.every(key => !f.bucket.objects.has(key)));
+  assert.equal(f.bucket.objects.size, 3);
   assert.equal((await f.cache().resolve(key, 2000)).rendered.get("rss\n"), "新内容");
 });
 
-test("R2 暂时不可读或快照损坏时不重新执行脚本；对象缺失时允许重新生成", async t => {
+test("R2 暂时不可读时不重新执行脚本；任一格式文件缺失时允许重新生成", async t => {
   const f = fixture(t);
   const key = "private-snapshot:/unavailable";
   await f.cache().run(key, 1000, async () => snapshot("原内容"));
-  const object_key = f.repo.read(key).object_key;
   await assert.rejects(f.cache({ object_store: null }).resolve(key, 2000), /storage is unavailable/);
   const cache = f.cache();
   f.bucket.fail_next({ op: "get" });
   await assert.rejects(cache.run(key, 2000, () => assert.fail("不应执行脚本")), /get failed/);
   assert.equal(cache.loading.size, 0);
   assert.equal((await cache.resolve(key, 2000)).rendered.get("rss\n"), "原内容");
-  for (const body of ["broken JSON", "null", "false", "0", "[]", JSON.stringify({ output_json: "{}", rendered: [["rss\n", 123]] })]) {
-    await f.object_store.put(object_key, body);
-    await assert.rejects(f.cache().run(key, 2000, () => assert.fail("不应执行脚本")));
-    assert.equal(f.repo.read(key).object_key, object_key);
+  for (const index of [0, 1, 2]) {
+    const stored = f.repo.read(key);
+    const object_keys = [stored.object_key, ...stored.object_rendered.map(([, key]) => key)];
+    await f.object_store.delete(object_keys[index]);
+    assert.equal(await f.cache().resolve(key, 2000), null);
+    await f.cache().run(key, 2000, async () => snapshot("重新生成"));
+    assert.equal((await f.cache().resolve(key, 2000)).rendered.get("rss\n"), "重新生成");
+    assert.equal(f.bucket.objects.size, 3);
   }
-  await f.object_store.delete(object_key);
-  assert.equal(await f.cache().resolve(key, 2000), null);
-  await f.cache().run(key, 2000, async () => snapshot("重新生成"));
-  assert.equal((await f.cache().resolve(key, 2000)).rendered.get("rss\n"), "重新生成");
 });
 
 test("读取旧 R2 对象期间刷新完成，即使新快照超出内存预算，也不会回填旧版本", async t => {
@@ -143,7 +155,74 @@ test("读取旧 R2 对象期间刷新完成，即使新快照超出内存预算�
   release();
   assert.equal((await old_read).rendered.get("rss\n"), "新内容");
   assert.equal((await cache.resolve(key, 2000)).rendered.get("atom\n"), "新内容");
-  assert.equal(f.bucket.objects.size, 1);
+  assert.equal(f.bucket.objects.size, 3);
+});
+
+test("旧 R2 打包 JSON 仍可读取，损坏时报错，成功刷新才迁移为独立文件", async t => {
+  const f = fixture(t);
+  const key = "public-snapshot:/legacy-r2";
+  const object_key = "rss/snapshots/legacy.json";
+  const old = snapshot("旧打包内容");
+  const body = JSON.stringify({ output_json: old.output, rendered: [...old.rendered] });
+  await f.object_store.put(object_key, body);
+  f.repo.write({ key, object_key, output_json: "", invoked: 0, expires_at: 0, saved_at: 1000, created_at: 1000 });
+  const cache = f.cache();
+  assert.equal((await cache.resolve(key, 2000)).rendered.get("rss\n"), "旧打包内容");
+  assert.equal(f.bucket.calls.put, 1);
+  for (const invalid of ["broken JSON", "null", "false", "0", "[]", JSON.stringify({ output_json: "{}", rendered: [["rss\n", 123]] })]) {
+    await f.object_store.put(object_key, invalid);
+    await assert.rejects(f.cache().run(key, 2000, () => assert.fail("不应执行脚本")));
+    assert.equal(f.repo.read(key).object_key, object_key);
+  }
+  await f.object_store.put(object_key, body);
+  f.bucket.fail_next({ op: "put" });
+  await assert.rejects(cache.run(key, 2000, async () => snapshot("新内容"), { force: true }), /put failed/);
+  assert.equal((await f.cache().resolve(key, 2000)).output, old.output);
+  await cache.run(key, 2000, async () => snapshot("新内容"), { force: true });
+  assert.equal(f.bucket.objects.has(object_key), false);
+  assert.equal(f.bucket.objects.size, 3);
+  assert.equal((await f.cache().resolve(key, 2000)).rendered.get("atom\n"), "新内容");
+});
+
+test("部分文件上传失败会清理整组新文件，并保留原快照", async t => {
+  const f = fixture(t);
+  const key = "public-snapshot:/partial-upload";
+  const cache = f.cache();
+  await cache.run(key, 1000, async () => snapshot("旧内容"));
+  const previous = f.repo.read(key);
+  const old_keys = [...f.bucket.objects.keys()];
+  const put = f.object_store.put.bind(f.object_store);
+  for (const fail_at of [2, 3]) {
+    let calls = 0;
+    const failing = t.mock.method(f.object_store, "put", async (...args) => {
+      await put(...args);
+      if (++calls === fail_at) throw new Error("partial upload failed");
+    });
+    await assert.rejects(cache.run(key, 2000, async () => snapshot("新内容"), { force: true }), /partial upload failed/);
+    failing.mock.restore();
+    assert.deepEqual(f.repo.read(key), previous);
+    assert.deepEqual([...f.bucket.objects.keys()], old_keys);
+    assert.equal((await f.cache().resolve(key, 2000)).rendered.get("atom\n"), "旧内容");
+  }
+});
+
+test("格式指针支持 HTML、其他格式和同格式不同 self_url，重启后独立还原", async t => {
+  const f = fixture(t);
+  const key = "public-snapshot:/formats";
+  const value = snapshot("XML");
+  value.rendered.set("html\n", "<html><body>内容</body></html>");
+  value.rendered.set("text\n", "纯文本");
+  value.rendered.set("rss\nhttps://alias.example.com/rss", "别名 XML");
+  await f.cache().run(key, 1000, async () => value);
+  const stored = f.repo.read(key);
+  const prefix = stored.object_key.slice(0, -"feed.json".length);
+  assert.equal(await (await f.object_store.get(prefix + "feed.html")).text(), value.rendered.get("html\n"));
+  assert.equal((await f.object_store.get(prefix + "feed.html")).httpMetadata.contentType, "text/html; charset=utf-8");
+  assert.ok(f.bucket.objects.has(prefix + "feed.text"));
+  assert.ok(f.bucket.objects.has(prefix + "feed-2.xml"));
+  const restored = await f.cache().resolve(key, 2000);
+  assert.equal(restored.output, value.output);
+  assert.deepEqual(restored.rendered, value.rendered);
 });
 
 test("清理旧对象失败不影响已发布的新快照", async t => {

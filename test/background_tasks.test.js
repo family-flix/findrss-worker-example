@@ -82,6 +82,7 @@ test("取消生成和 R2 上传中的 XML，保留旧指针与缓存并清理新
   const result = title => ({ output: title, invoked: false, rendered: new Map([["rss\n", title]]) });
   await cache.run(key, Date.now(), async () => result("旧内容"));
   const old_key = f.repo.read(key).object_key;
+  const old_keys = [...f.bucket.objects.keys()];
   let resolve;
   const controller = new AbortController();
   const generating = cache.run(key, Date.now(), () => new Promise(done => { resolve = done; }), { force: true, signal: controller.signal });
@@ -92,7 +93,7 @@ test("取消生成和 R2 上传中的 XML，保留旧指针与缓存并清理新
   f.object_store.put = async (...args) => { await put(...args); uploading_controller.abort(new Error("上传时终止")); };
   await assert.rejects(cache.run(key, Date.now(), async () => result("新内容"), { force: true, signal: uploading_controller.signal }), /上传时终止/);
   assert.equal(f.repo.read(key).object_key, old_key);
-  assert.deepEqual([...f.bucket.objects.keys()], [old_key]);
+  assert.deepEqual([...f.bucket.objects.keys()], old_keys);
   assert.equal((await cache.resolve(key, Date.now())).rendered.get("rss\n"), "旧内容");
 });
 
