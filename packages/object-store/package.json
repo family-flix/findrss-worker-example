@@ -13,5 +13,5 @@
   "scripts": {
     "test": "node --test test/*.test.js"
   },
-  "license": "ISC"
+  "license": "MIT"
 }

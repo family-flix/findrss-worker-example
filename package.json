@@ -13,7 +13,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "@findrss/feed-fetch": "file:./packages/feed-fetch",
     "@findrss/object-store": "file:./packages/object-store",
