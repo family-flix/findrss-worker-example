@@ -4,6 +4,8 @@
 
 <h1 align="center">FindRSS</h1>
 
+<p align="center">v1.1.0</p>
+
 <p align="center">自己部署 · 自定义采集 · 生成订阅</p>
 
 <p align="center">
