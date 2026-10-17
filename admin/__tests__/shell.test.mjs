@@ -96,7 +96,7 @@ test("Shell 渲染侧边栏、当前菜单和子页面内容", () => {
   assert.equal(navigation.length, 10);
   const main_navigation = walk(root).find(node => node.props?.attributes?.n === "admin-shell-nav");
   assert.deepEqual(walk(main_navigation).filter(node => node.type === "a").map(node => node.props.attributes.n),
-    ["overview", "discovery", "scripts", "cookies", "tokens", "storage", "tasks", "network", "settings"].map(id => "admin-shell-nav-" + id));
+    ["overview", "discovery", "scripts", "cookies", "tokens", "storage", "tasks", "network"].map(id => "admin-shell-nav-" + id));
   assert.equal(
     navigation.filter((node) => node.props.attributes["aria-current"] === "page").length,
     1,
@@ -113,13 +113,15 @@ test("Shell 渲染侧边栏、当前菜单和子页面内容", () => {
   );
 });
 
-test("侧边栏底部在消息下方直接显示退出登录，点击调用认证模块", () => {
+test("侧边栏底部依次显示消息、设置和退出登录，点击退出调用认证模块", () => {
   const root = window.FindRSSAdminShell.View({ page_id: "overview" }, []);
   const navigation = walk(root).find(node => node.props?.attributes?.n === "admin-shell-nav");
   assert.equal(walk(navigation).some(node => node.props?.attributes?.n === "admin-shell-nav-messages"), false);
+  assert.equal(walk(navigation).some(node => node.props?.attributes?.n === "admin-shell-nav-settings"), false);
   const footer = walk(root).find(node => node.props?.attributes?.n === "admin-shell-footer");
   assert.equal(footer.children[0].props.attributes.n, "admin-shell-nav-messages");
-  const logout = footer.children[1];
+  assert.equal(footer.children[1].props.attributes.n, "admin-shell-nav-settings");
+  const logout = footer.children[2];
   assert.equal(logout.props.attributes.n, "admin-shell-logout");
   assert.equal(logout.type, "button");
   assert.equal(logout.props.attributes.type, "button");

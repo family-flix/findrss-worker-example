@@ -57,11 +57,12 @@ const FindRSSAdminShell = (function create_admin_shell() {
         [page.short_title],
       ),
       page.id === "messages" && window.FindRSSAdminMessages
-        ? View({ class: computed(window.FindRSSAdminMessages.state.badge, value => "box-border " + (value ? "absolute bg-surface-raised text-on-primary rounded-card" : "hidden")), style: {
-          top: "5px",
+        ? View({ class: computed(window.FindRSSAdminMessages.state.badge, value => "box-border " + (value ? "absolute inline-flex items-center justify-center top-50-percent transform-translatey-negative-50-percent bg-surface-raised text-on-primary rounded-card" : "hidden")), style: {
           right: "5px",
-          padding: "1px 6px",
-          "font-size": "11px"
+          "min-height": "20px",
+          padding: "0 var(--frui-space-2)",
+          "font-size": "11px",
+          "line-height": "1"
         }, attributes: { n: "admin-messages-badge", "aria-label": "未读消息" } }, [window.FindRSSAdminMessages.state.badge])
         : null,
     ];
@@ -161,7 +162,7 @@ const FindRSSAdminShell = (function create_admin_shell() {
             "--max-640-gap": "4px",
             "--max-640-overflow-x": "auto"
           }, attributes: { n: "admin-shell-nav", "aria-label": "页面导航" } },
-          pages.filter(page => page.id !== "messages").map((page) => SidebarItemView(page, current_page, history)),
+          pages.filter(page => !["messages", "settings"].includes(page.id)).map((page) => SidebarItemView(page, current_page, history)),
         ),
         View({ class: "box-border grid flex-none max-640-display max-640-align-items max-640-gap max-640-padding max-640-border-top max-640-border-left", style: {
           "gap": "10px",
@@ -175,6 +176,7 @@ const FindRSSAdminShell = (function create_admin_shell() {
           "--max-640-border-left": "1px solid var(--frui-color-border-soft)"
         }, attributes: { n: "admin-shell-footer" } }, [
           SidebarItemView(pages.find(page => page.id === "messages"), current_page, history),
+          SidebarItemView(pages.find(page => page.id === "settings"), current_page, history),
           LogoutView(model),
         ]),
       ],
