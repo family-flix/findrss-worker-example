@@ -165,7 +165,7 @@ function DiscoveryAdminViewModel() {
   const draft_tags_ = ref("");
   const draft_sort_order_ = ref("0");
   const draft_enabled_ = ref(true);
-  const draft_require_token_ = ref(false);
+  const draft_require_token_ = ref(true);
   const draft_credit_cost_ = ref("1");
   const draft_source_type_ = ref("website");
   // 手改过「来源」之后就不再按地址自动预判（否则用户的选择会被下一次输入覆盖）。
@@ -653,13 +653,15 @@ function DiscoveryAdminViewModel() {
           { method: "POST" },
         );
         if (selected_ids_.value.includes(source_id)) selected_sources.set(source_id, { ...source,
-          snapshot: result.snapshot, cache: result.cache || source.cache });
+          snapshot: result.snapshot, cache: result.cache || source.cache,
+          ...(result.avatar_url === undefined ? {} : { avatar_url: result.avatar_url }) });
         sources_.as(
           sources_.value.map((item) =>
             item.id === source_id
               ? {
                   ...item,
                   snapshot: result.snapshot,
+                  ...(result.avatar_url === undefined ? {} : { avatar_url: result.avatar_url }),
                   cache: result.cache || item.cache,
                   ...(result.next_snapshot_at === undefined
                     ? {}
@@ -901,7 +903,7 @@ function DiscoveryAdminViewModel() {
       tags_touched_.set(false);
       draft_sort_order_.set("0");
       draft_enabled_.set(true);
-      draft_require_token_.set(false);
+      draft_require_token_.set(true);
       draft_credit_cost_.set("1");
       draft_source_type_.set("website");
       poll_editor.methods.reset();

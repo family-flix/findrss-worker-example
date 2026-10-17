@@ -67,7 +67,7 @@ test("读取结果跨缓存重建复用，保存即发布广场文章和 RSS/Ato
   await assert.rejects(f.serve(), { status: 401 });
   f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache, object_store: f.object_store });
   f.app.discovery.route_cache = f.ports.route_cache;
-  const source = await f.save(feed_url, data.preview_id, { poll_policy: { mode: "manual" } });
+  const source = await f.save(feed_url, data.preview_id, { poll_policy: { mode: "manual" }, require_token: false });
   assert.equal(source.snapshot.articles[0].title, "预览文章");
   assert.ok(source.snapshot.saved_at > 0);
   assert.equal(source.cache.status, "fresh");
@@ -92,7 +92,7 @@ test("新增、改为私密与删除订阅源都保留已有持久 XML，私密�
     rendered: new Map([["rss\n", "快手 XML"]]) }));
   const feed_url = "{{hostname}}/rss/preview/1?a=1&b=2";
   const data = await (await f.preview(feed_url)).json();
-  const source = await f.save(feed_url, data.preview_id);
+  const source = await f.save(feed_url, data.preview_id, { require_token: false });
   assert.ok(f.repo.rss_route_cache.read(key));
   await f.app.discovery.update_discovery_source(new Request("https://internal/source", {
     method: "PATCH", body: JSON.stringify({ require_token: true }),
@@ -111,7 +111,9 @@ test("预览保存为私密源只复用私密 XML，不发布文章，清理和�
   const f = fixture(t);
   const feed_url = "{{hostname}}/rss/preview/1?a=1&b=2";
   const data = await (await f.preview(feed_url)).json();
-  const source = await f.save(feed_url, data.preview_id, { require_token: true });
+  const source = await f.save(feed_url, data.preview_id);
+  assert.equal(source.require_token, true);
+  assert.equal(source.credit_cost, 1);
   assert.equal(source.snapshot.saved_at, 0);
   assert.deepEqual(source.snapshot.articles, []);
   assert.equal(source.cache.status, "fresh");
@@ -161,7 +163,7 @@ test("已有 Cookie 授权在新增公开源后继续有效，保存即发布文
   const feed_url = "{{hostname}}/rss/preview/1?a=1&b=2";
   const response = await f.preview(feed_url);
   assert.equal(response.status, 200);
-  const source = await f.save(feed_url, (await response.json()).preview_id);
+  const source = await f.save(feed_url, (await response.json()).preview_id, { require_token: false });
   assert.ok(source.snapshot.saved_at > 0);
   assert.equal(source.snapshot.error, "");
   assert.equal(source.snapshot.articles[0].title, "预览文章");
@@ -184,7 +186,7 @@ test("读取信息后撤销 Cookie 授权，保存仍阻止发布预览文章和
   const response = await f.preview(feed_url);
   assert.equal(response.status, 200);
   grant = null;
-  const source = await f.save(feed_url, (await response.json()).preview_id);
+  const source = await f.save(feed_url, (await response.json()).preview_id, { require_token: false });
   assert.equal(source.snapshot.saved_at, 0);
   assert.match(source.snapshot.error, /Cookie 权限/);
   assert.equal(source.cache.status, "empty");

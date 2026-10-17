@@ -293,6 +293,7 @@ export class ServiceDiscovery {
     const previous = this.repo.discovery.snapshot_get(source_id) || {};
     this.repo.discovery.snapshot_attempt(source_id, source.feed_url, Date.now());
     const pending = (async () => {
+      let avatar_changed = false;
       try {
         const origin = await this.snapshot_origin(public_url);
         signal?.throwIfAborted();
@@ -314,6 +315,19 @@ export class ServiceDiscovery {
                 : articles.filter(article => !old.has(article.link || article.title)).length,
             }));
           }
+          if (result.avatar) {
+            try {
+              avatar_changed = await this.sync_snapshot_avatar(source, result.avatar, () => {
+                const latest = this.repo.discovery.find(source_id);
+                return this.snapshot_pending.get(source_id) === pending && latest?.feed_url === source.feed_url
+                  && Boolean(latest.require_token) === Boolean(source.require_token)
+                  && Number(latest.avatar_updated_at || 0) === Number(source.avatar_updated_at || 0);
+              }, signal);
+            } catch (error) {
+              signal?.throwIfAborted();
+              console.warn("discovery snapshot avatar save failed", error.message);
+            }
+          }
         }
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
@@ -325,11 +339,11 @@ export class ServiceDiscovery {
         await this.schedule_alarm?.();
       }
       signal?.throwIfAborted();
-      if (!source.require_token) await this.publish_catalog();
+      if (!source.require_token || avatar_changed) await this.publish_catalog();
       const latest = this.repo.discovery.snapshot_get(source_id) || {};
-      const value = this.source_value({ ...source, ...latest, snapshot_attempted_at: latest.attempted_at }, true);
+      const value = this.source_value({ ...(this.repo.discovery.find(source_id) || source), ...latest, snapshot_attempted_at: latest.attempted_at }, true);
       return { snapshot: source.require_token ? { saved_at: 0, articles: [], error: String(latest.error || "") }
-        : snapshot_value(latest, true), cache: value.cache, poll_effective: value.poll_effective, next_snapshot_at: value.next_snapshot_at };
+        : snapshot_value(latest, true), avatar_url: value.avatar_url, cache: value.cache, poll_effective: value.poll_effective, next_snapshot_at: value.next_snapshot_at };
     })();
     this.snapshot_pending.set(source_id, pending);
     return pending;
@@ -548,12 +562,31 @@ export class ServiceDiscovery {
     return { bytes, content_type: String(row.content_type) }
   }
 
+  async sync_snapshot_avatar(source, avatar, can_commit, signal) {
+    signal?.throwIfAborted();
+    if (!can_commit()) return;
+    const payload = Uint8Array.from(atob(avatar.data), char => char.charCodeAt(0));
+    if (Number(source.avatar_updated_at || 0)) {
+      let current;
+      try { current = await this.get_discovery_avatar(source.id); }
+      catch (error) { if (error.status !== 404) throw error; }
+      if (current) {
+        const bytes = new Uint8Array(current.bytes);
+        if (bytes.length === payload.length && bytes.every((value, index) => value === payload[index])) return;
+      }
+    }
+    return Boolean(await this.put_discovery_avatar(new Request("https://internal/avatar", { method: "PUT", body: payload }),
+      source.id, { can_commit, signal, publish: false }));
+  }
+
   /**
    * @param {Request} request
    * @param {string} source_id
    * @returns {Promise<Record<string, unknown>>}
    */
-  async put_discovery_avatar(request, source_id) {
+  async put_discovery_avatar(request, source_id, { can_commit = () => true, signal, publish = true } = {}) {
+    signal?.throwIfAborted();
+    if (!can_commit()) return;
     const existing = this.repo.discovery.find(source_id);
     if (existing === undefined) {
       throw do_error("discovery source not found", 404);
@@ -584,6 +617,8 @@ export class ServiceDiscovery {
       this.storage.transactionSync(() => {
         const current = this.repo.discovery.find(source_id);
         if (current === undefined) throw do_error("discovery source not found", 404);
+        signal?.throwIfAborted();
+        if (!can_commit()) throw do_error("订阅源或头像已变更，跳过旧快照图标", 409);
         previous = this.repo.discovery.avatar_get(source_id);
         const now = Math.max(Date.now(), Number(current.avatar_updated_at || 0) + 1);
         // R2 保存字节，SQLite 只保留指针；无绑定时沿用旧存储。
@@ -596,7 +631,7 @@ export class ServiceDiscovery {
       throw error;
     }
     await this.delete_avatar_object(previous);
-    await this.publish_catalog();
+    if (publish) await this.publish_catalog();
     const snapshot = this.repo.discovery.snapshot_get(source_id) || {};
     return { source: this.source_value({ ...row, ...snapshot, snapshot_attempted_at: snapshot.attempted_at }, true) }
   }

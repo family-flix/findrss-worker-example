@@ -58,7 +58,7 @@ Browser
 
 XML 默认持久保存，无需开启“不清理”选项。脚本发布、修改、删除、Cookie 变更、授权撤销以及订阅源配置变更都不删除已有 XML，仅在下一次成功刷新时覆盖。停用、删除脚本或撤销授权后仍按当前路由和权限拒绝访问；转为私密后仍需凭证。普通临时缓存继续随配置变更失效。
 
-订阅源管理（`/admin/discovery`）勾选「需要 token 访问」后可设置「每次访问消耗积分」（`credit_cost`），默认为 1，允许 0 到 1000000000 的整数。自有源每次成功访问按该源配置扣费，包含 RSS/Atom 缓存命中；0 表示需要 token 但不扣积分。余额不足返回 402，XML 尚未生成或访问失败不扣费；后台刷新和同次访问中的设备调用不重复扣费。公开源免费，外部源遵循原站权限与计费。旧源默认消耗 1，编辑与 JSON 导入导出保留此配置。
+新增订阅源时，后台默认勾选「需要 token 访问」（非公开），API 未传 `require_token` 时也默认为 `true`；「每次访问消耗积分」（`credit_cost`）默认为 1，允许 0 到 1000000000 的整数。可取消勾选或显式传入 `require_token: false` 设为公开。自有源每次成功访问按该源配置扣费，包含 RSS/Atom 缓存命中；0 表示需要 token 但不扣积分。余额不足返回 402，XML 尚未生成或访问失败不扣费；后台刷新和同次访问中的设备调用不重复扣费。公开源免费，外部源遵循原站权限与计费。旧源默认消耗 1，编辑与 JSON 导入导出保留此配置。
 
 “Token”子页面（`/admin/tokens`）调用 `/admin/api/access-tokens`，创建、立即过期和移除用户凭证。Token 可以留空自动生成，也可以手动指定；用途或使用人可选填，还可成对填写 email + password 作为 Reader 的第二种登录方式。用户 Token 明文只在创建响应中出现一次并仅保存 SHA-256 摘要；密码使用随机盐和 PBKDF2-SHA-256 保存。
 
@@ -115,7 +115,7 @@ Debug 的卡片预览支持同一草稿内尚未发布的图片代理路由（�
 
 媒体 handler 返回 `{ kind: "img" | "video" | "audio", url: "https://…", headers?: { Referer: "https://…" } }`，也可用 `Result.Ok(...)` 包装。公开直链可省略 `allowed_hosts`，浏览器直接读取；需要代理或自定义请求头时，在路由声明 `allowed_hosts`，Debug 使用受管理员会话保护的本次返回值快照，视频和音频支持 Range、HEAD 和流式读取。媒体返回值的 `kind` 与模块级 `export const kind = "rss" | "hot"` 的脚本分类不同。
 
-“设置”使用 `pages/settings.js` 作为 layout，通过 `KeepAliveSubViews` 承载六个子路由：设备 Token（`/admin/settings/device-tokens`）、Cookie 解密（`/admin/settings/cookies`）、Webhook 消息推送（`/admin/settings/webhook`）、订阅源抓取（`/admin/settings/snapshots`）、大模型（`/admin/settings/models`）和关于（`/admin/settings/about`）。关于页展示项目 Logo、描述、GitHub 仓库链接和当前版本号 `v1.1.0`。`/admin/settings` 与 `/admin/settings/` 默认进入设备 Token；各子页面位于 `pages/settings/`，只在激活时加载对应配置，支持直接访问和前进后退。大模型页可配置厂商、API Key、模型与参数，并测试连接、保存或恢复默认。设置页和 XiaoxunAgent 的“大模型设置”共用 `pages/settings.ai.component.js` 编辑器与 `components/ai_settings.js` 状态逻辑，读写同一个 `/admin/api/scripts/agent/settings` 接口，连接测试使用 `/admin/api/scripts/agent/test`。读取失败时提供重试，加载完成前不显示编辑表单；离开对应子页面时丢弃未保存草稿和临时密钥，返回时重新读取最新配置。
+“设置”使用 `pages/settings.js` 作为 layout，通过 `KeepAliveSubViews` 承载六个子路由：设备 Token（`/admin/settings/device-tokens`）、Cookie 解密（`/admin/settings/cookies`）、Webhook 消息推送（`/admin/settings/webhook`）、订阅源抓取（`/admin/settings/snapshots`）、大模型（`/admin/settings/models`）和关于（`/admin/settings/about`）。关于页展示项目 Logo、描述、GitHub 仓库链接和当前版本号 `v1.2.0`。`/admin/settings` 与 `/admin/settings/` 默认进入设备 Token；各子页面位于 `pages/settings/`，只在激活时加载对应配置，支持直接访问和前进后退。大模型页可配置厂商、API Key、模型与参数，并测试连接、保存或恢复默认。设置页和 XiaoxunAgent 的“大模型设置”共用 `pages/settings.ai.component.js` 编辑器与 `components/ai_settings.js` 状态逻辑，读写同一个 `/admin/api/scripts/agent/settings` 接口，连接测试使用 `/admin/api/scripts/agent/test`。读取失败时提供重试，加载完成前不显示编辑表单；离开对应子页面时丢弃未保存草稿和临时密钥，返回时重新读取最新配置。
 
 `/admin/*` 先交给 Worker 处理；GET / HEAD 页面路径在静态资源不存在时回退 `/admin/index.html`，由前端路由决定页面。API、认证路径、静态文件与写请求不走页面回退。SPA 入口使用 `/admin/` 下的绝对资源地址，直接访问嵌套路由或带尾斜杠的路径也能正确加载脚本和样式。
 

@@ -38,6 +38,8 @@ test("社媒主页新增保存、编辑回填与清空，关闭表单清除草�
   model.methods.set_draft("social_url", " https://x.com/unique-home ");
   await model.methods.save_source();
   assert.equal(writes[0].method, "POST");
+  assert.equal(writes[0].body.require_token, true);
+  assert.equal(writes[0].body.credit_cost, 1);
   assert.deepEqual(notifications, ["源 已保存。"]);
   assert.equal(writes[0].body.social_url, "https://x.com/unique-home");
   assert.equal(model.state.draft_social_url.value, "");
@@ -113,7 +115,7 @@ test("多主页 JSON 导出后重新导入保留全部地址和顺序", async ()
   assert.equal(writes[0].social_url, social_urls[0]);
 });
 
-test("手动刷新保持加载状态，完成后更新当前记录的快照与缓存", async () => {
+test("手动刷新保持加载状态，完成后更新当前记录的快照、缓存与头像", async () => {
   const snapshot = { saved_at: 123, articles: [{ title: "旧文章" }] };
   let finish;
   const model = modal_model(async (url, options) => {
@@ -126,11 +128,13 @@ test("手动刷新保持加载状态，完成后更新当前记录的快照与�
   assert.deepEqual(Array.from(model.state.snapshot_refreshing.value), ["one"]);
   assert.equal(model.state.sources.value[0].snapshot.saved_at, 123);
   finish(Response.json({ snapshot: { saved_at: 456, articles: [{ title: "新文章" }], error: "" },
+    avatar_url: "/api/avatar/one?v=456",
     cache: { status: "fresh", saved_at: 456 }, next_snapshot_at: 789, poll_effective: { mode: "interval", interval: 300 } }));
   assert.equal(await pending, true);
   assert.equal(model.state.sources.value[0].snapshot.saved_at, 456);
   assert.equal(model.state.sources.value[0].snapshot.articles[0].title, "新文章");
   assert.equal(model.state.sources.value[0].cache.saved_at, 456);
+  assert.equal(model.state.sources.value[0].avatar_url, "/api/avatar/one?v=456");
   assert.equal(model.state.sources.value[0].next_snapshot_at, 789);
   assert.equal(model.state.sources.value[0].poll_effective.interval, 300);
   assert.equal(model.state.sources.value[1].snapshot.saved_at, 123);
@@ -371,14 +375,17 @@ test("JSON 导入先检查结构与必填项，格式错误不发请求", async 
 
 test("访问积分新增默认 1，编辑回填并保存配置，空值和非法金额不提交，零积分可保存", async () => {
   const writes = [];
+  let source = { id: "paid", title: "付费源", feed_url: "{{hostname}}/rss/demo", enabled: true, require_token: true, credit_cost: 5 };
   const model = modal_model(async (url, options) => {
-    if (!options?.body) return Response.json({ sources: [{ id: "paid", title: "付费源", feed_url: "{{hostname}}/rss/demo", enabled: true, require_token: true, credit_cost: 5 }] });
+    if (!options?.body) return Response.json({ sources: [source] });
     const body = JSON.parse(options.body);
     writes.push(body);
-    return Response.json({ source: { ...body, id: "paid" } });
+    source = { ...body, id: "paid" };
+    return Response.json({ source });
   });
   await model.methods.refresh_list();
   model.methods.create_source();
+  assert.equal(model.state.draft_require_token.value, true);
   assert.equal(model.state.draft_credit_cost.value, "1");
   model.methods.close_form();
   model.methods.edit_source("paid");
@@ -394,9 +401,14 @@ test("访问积分新增默认 1，编辑回填并保存配置，空值和非法
     assert.equal(writes.length, 1);
   }
   model.methods.set_draft("credit_cost", "0");
+  model.methods.set_draft("require_token", false);
   await model.methods.save_source();
   assert.equal(writes[1].credit_cost, 0);
+  assert.equal(writes[1].require_token, false);
+  model.methods.edit_source("paid");
+  assert.equal(model.state.draft_require_token.value, false);
   model.methods.create_source();
+  assert.equal(model.state.draft_require_token.value, true);
   assert.equal(model.state.draft_credit_cost.value, "1");
 });
 

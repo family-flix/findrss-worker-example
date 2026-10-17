@@ -373,7 +373,7 @@ DiscoverySourceModel.validate = (body, source_types = DISCOVERY_SOURCE_TYPES, in
   if (body.require_token !== undefined && typeof body.require_token !== "boolean") {
     return invalid("require_token must be a boolean");
   }
-  const require_token = body.require_token === true;
+  const require_token = body.require_token === undefined ? true : body.require_token;
   const credit_cost = body.credit_cost === undefined ? CreditModel.DEFAULT_COST : body.credit_cost;
   if (!Number.isInteger(credit_cost) || credit_cost < 0 || credit_cost > CreditModel.MAX_BALANCE) {
     return invalid("credit_cost must be an integer between 0 and " + CreditModel.MAX_BALANCE);

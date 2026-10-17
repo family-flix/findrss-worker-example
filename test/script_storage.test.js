@@ -361,7 +361,7 @@ test("发布强制刷新关联订阅源，旧的广场文章任务迟到也不�
     } });
   discovery.publish_catalog = async () => {};
   f.service.app.discovery = discovery;
-  const source_id = (await discovery.create_discovery_source(edit({ title: "源", feed_url: "{{hostname}}/rss/stored" }))).data.source.id;
+  const source_id = (await discovery.create_discovery_source(edit({ title: "源", feed_url: "{{hostname}}/rss/stored", require_token: false }))).data.source.id;
   const previous = discovery.refresh_discovery_snapshot(source_id);
   await waiting;
   const tasks = [];

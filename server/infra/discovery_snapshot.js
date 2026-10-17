@@ -1,6 +1,9 @@
 import { proxy_target_url } from "@findrss/feed-fetch";
 import { public_http_url } from "../lib/proxy_url.js";
-import { discovery_feed_preview, fetch_discovery_document } from "./feed_fetch.js";
+import { discovery_feed_preview, fetch_discovery_document, fetch_discovery_avatar } from "./feed_fetch.js";
+import { fetch_script_image } from "./image_proxy.js";
+import { script_output } from "../lib/script_output.js";
+import { FINDRSS_LOGO_PNG } from "../lib/brand.js";
 import { encode_cover_blurhash } from "./cover_blurhash.js";
 import { SourceAddressModel } from "../domain/source_address.js";
 import { sha256_hex } from "../lib/crypto.js";
@@ -24,10 +27,34 @@ export async function load_discovery_snapshot(source, origin, serve_route, signa
     xml = result.xml;
   }
   signal?.throwIfAborted();
-  if (source.require_token) {
-    return { articles: [], fingerprint: await discovery_snapshot_fingerprint(xml, feed_url) };
+  const result = source.require_token
+    ? { articles: [], fingerprint: await discovery_snapshot_fingerprint(xml, feed_url) }
+    : { articles: await discovery_snapshot_articles(xml, feed_url, url => fetch_cover_metadata(url, decode_cover, signal)) };
+  const avatar_url = discovery_feed_preview(xml, feed_url).icon;
+  if (avatar_url) {
+    try {
+      result.avatar = await fetch_discovery_avatar(avatar_url, {
+        signal, local_origin: origin ? new URL(origin).origin : "",
+        fetch_local: async (url, options) => {
+          const avatar = new URL(url);
+          if (avatar.pathname === "/findrss-logo.png") return new Response(FINDRSS_LOGO_PNG);
+          const internal = new URL("https://internal/_public/feed/raw" + avatar.pathname + avatar.search);
+          const output = await serve_route("raw", avatar.pathname,
+            new Request(internal, { headers: { "X-Feed-Public-URL": url } }), { signal: options.signal });
+          const value = script_output(output.route, output.raw);
+          if (!value.descriptor || value.kind && value.kind !== "img") throw new Error("头像路由未返回图片");
+          const image = await fetch_script_image(output.route, value.descriptor, (url, request) => fetch(url, {
+            ...request, signal: AbortSignal.any([request.signal, options.signal]),
+          }));
+          return new Response(image.body, { headers: { "Content-Type": image.content_type } });
+        },
+      });
+    } catch (error) {
+      signal?.throwIfAborted();
+      console.warn("discovery snapshot avatar fetch failed", error.message);
+    }
   }
-  return { articles: await discovery_snapshot_articles(xml, feed_url, url => fetch_cover_metadata(url, decode_cover, signal)) };
+  return result;
 }
 
 export async function discovery_snapshot_fingerprint(xml, feed_url) {

@@ -1,4 +1,5 @@
 /** HOT */
+export const version = "1.0.0";
 export const platform = {"name": "网页"};
 import { utils } from '@findrss/util';
 /*

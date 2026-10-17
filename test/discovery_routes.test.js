@@ -28,6 +28,21 @@ const request = (body, method = "POST") => new Request("https://internal/_admin/
   method, body: JSON.stringify(body),
 });
 
+test("新增源默认非公开且消耗 1 积分，显式公开或零积分可保存，局部编辑保留配置", async () => {
+  const { service, rows } = fixture();
+  for (const fields of [{}, { require_token: false, credit_cost: 0 }]) {
+    const created = await service.create_discovery_source(request({ title: "源", feed_url: "{{hostname}}/rss/news/123", ...fields }));
+    const source = created.data.source;
+    assert.equal(source.require_token, fields.require_token ?? true);
+    assert.equal(source.credit_cost, fields.credit_cost ?? 1);
+    assert.equal(rows.get(source.id).require_token, source.require_token ? 1 : 0);
+    assert.equal(rows.get(source.id).credit_cost, source.credit_cost);
+    const updated = await service.update_discovery_source(request({ title: "改名" }, "PATCH"), source.id);
+    assert.equal(updated.source.require_token, source.require_token);
+    assert.equal(updated.source.credit_cost, source.credit_cost);
+  }
+});
+
 test("社媒主页随新增和编辑保存，局部修改保留原值，空串可清除", async () => {
   const { service, rows } = fixture();
   const social_url = "https://www.douyin.com/user/example?a=1&b=2";
