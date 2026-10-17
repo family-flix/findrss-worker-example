@@ -93,10 +93,7 @@ function AdminMessagesModel() {
       if (!script_id) { error.set("该消息没有关联已保存的脚本"); return; }
       opening_script.set(true);
       try {
-        await editor.methods.start();
-        if (editor.state.list_error.value) throw new Error(editor.state.list_error.value);
-        if (!editor.state.scripts.value.some(script => script.id === script_id)) throw new Error("脚本已删除或不存在，无法编辑");
-        editor.methods.edit_script(script_id);
+        await editor.methods.open_script(script_id);
       } catch (failure) {
         error.set(failure instanceof Error ? failure.message : String(failure));
       } finally {
