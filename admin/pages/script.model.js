@@ -693,7 +693,12 @@ function ScriptViewModel() {
       return load();
     },
     set_draft(name, value) {
-      if (name === "script") draft_script_.set(String(value));
+      if (name === "script") {
+        const source = String(value);
+        draft_script_.set(source);
+        const version = source.match(/^[ \t]*export\s+const\s+version\s*=\s*(["'])([^"'\\\r\n]*)\1\s*(?:;|$)/m);
+        if (version) draft_version_.set(version[2]);
+      }
       if (name === "version") draft_version_.set(String(value));
 
       if (name === "enabled") draft_enabled_.set(value === true);
