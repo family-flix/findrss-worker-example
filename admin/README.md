@@ -60,7 +60,7 @@ XML 默认持久保存，无需开启“不清理”选项。脚本发布、修�
 
 新增订阅源时，后台默认勾选「需要 token 访问」（非公开），API 未传 `require_token` 时也默认为 `true`；「每次访问消耗积分」（`credit_cost`）默认为 1，允许 0 到 1000000000 的整数。可取消勾选或显式传入 `require_token: false` 设为公开。自有源每次成功访问按该源配置扣费，包含 RSS/Atom 缓存命中；0 表示需要 token 但不扣积分。余额不足返回 402，XML 尚未生成或访问失败不扣费；后台刷新和同次访问中的设备调用不重复扣费。公开源免费，外部源遵循原站权限与计费。旧源默认消耗 1，编辑与 JSON 导入导出保留此配置。
 
-“Token”子页面（`/admin/tokens`）调用 `/admin/api/access-tokens`，创建、立即过期和移除用户凭证。Token 可以留空自动生成，也可以手动指定；用途或使用人可选填，还可成对填写 email + password 作为 Reader 的第二种登录方式。用户 Token 明文只在创建响应中出现一次并仅保存 SHA-256 摘要；密码使用随机盐和 PBKDF2-SHA-256 保存。
+“Token”子页面（`/admin/tokens`）调用 `/admin/api/access-tokens`，创建、立即过期和移除用户凭证。Token 可以留空自动生成（无 `api_call_` 前缀），也可以手动指定；用途或使用人可选填，还可成对填写 email + password 作为 Reader 的第二种登录方式。列表不显示脱敏 Token，点击「查看」通过 `/admin/api/credit-transactions?access_token_id=…` 打开该 Token 的积分消耗日志，按时间倒序展示扣费、退款和充值记录、积分变动及余额，支持刷新和加载更早记录。用户 Token 明文只在创建响应中出现一次并仅保存 SHA-256 摘要；密码使用随机盐和 PBKDF2-SHA-256 保存。
 
 “设置 → Device Token”和“设备管理 → Device Token”共用管理界面，通过 `/admin/api/device-tokens` 管理多个设备接入凭证，支持名称、备注、有效期、最近使用时间和撤销。创建成功后自动获取明文并在弹窗展示，支持复制；关闭弹窗或离开设置页清除弹窗明文。列表默认不展示 Token 内容，管理员点击「查看明文」时才通过独立的 `POST /admin/api/device-tokens/:id/reveal` 接口获取解密结果，30 秒自动隐藏；撤销删除密文并断开关联连接。旧 `DEVICE_TOKEN` 自动导入，部署时不再必填。设备 Token 与用户 Token 分开保存；设备 Token 的加密副本依赖部署的 `ADMIN_PASSWORD`，轮换后台密码后应创建新设备 Token 替换原凭证。
 

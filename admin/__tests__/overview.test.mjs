@@ -5,7 +5,7 @@ import test from "node:test";
 import vm from "node:vm";
 import { readFileSync } from "node:fs";
 
-function fixture(create_response, page_id = "overview") {
+function fixture(create_response, page_id = "overview", credit_response) {
   const requests = [];
   const intervals = [];
   const access_tokens = [];
@@ -13,7 +13,7 @@ function fixture(create_response, page_id = "overview") {
     script_count: 200, source_count: 700, source_call_count: 1234,
     cookie_count: 3, route_count: 8, platform_count: 4, tag_count: 6,
     sources: [{ id: "a", title: "源", feed_url: "https://feeds.example/rss/a", enabled: true, tracked: true, call_count: 1234 }] };
-  const context = vm.createContext({ ListPaginationModel, PaginationView, URL, setTimeout: () => 0, clearTimeout() {},
+  const context = vm.createContext({ ListPaginationModel, PaginationView, URL, URLSearchParams, setTimeout: () => 0, clearTimeout() {},
     setInterval(callback, milliseconds) { intervals.push({ callback, milliseconds }); return intervals.length; }, clearInterval() {} });
   context.window = context;
   context.document = { querySelector: () => null };
@@ -26,13 +26,14 @@ function fixture(create_response, page_id = "overview") {
     EmptyCard: props => element({ attributes: { n: props.name } }, [props.title, props.description, ...props.actions]),
     Dialog: (props, children) => element(props, [...children, ...props.footer]),
     Show: ({ when, ok }) => ({ props: {}, get children() { return when.value ? [ok()] : []; } }),
-    For: ({ each, render }) => element({}, each.value.map((row, index) => render(row, { value: index }))) });
+    For: ({ each, render }) => ({ props: {}, get children() { return each.value.map((row, index) => render(row, { value: index })); } }) });
   context.FindRSSAdminUI = { ...ui, ui: { ...ui.ui, DialogPrimitive: { Root: props => element(props) } } };
   Object.assign(context, { vm: ui.vm, kit: ui.kit, ui: context.FindRSSAdminUI.ui });
   context.FindRSSAdminShell = { Page: element };
   context.FindRSSAdminPages = {};
   context.FindRSSAdminAuth = { fetch: async (url, options) => {
     requests.push(url);
+    if (url.startsWith("/admin/api/credit-transactions?")) return credit_response(url, options);
     if (options?.method === "POST") return create_response(options);
     if (url.startsWith("/admin/api/access-tokens?")) {
       const params = new URL(url, "https://admin").searchParams;
@@ -206,4 +207,104 @@ test("Token 页面使用 ListCore 后端分页，翻页与修改条数不读取�
   assert.equal(f.model.state.access_tokens.value.length, 10);
   assert.ok(f.requests.every(url => url.startsWith("/admin/api/access-tokens?")));
   f.model.methods.dispose();
+});
+
+test("Token 列表隐藏脱敏值，查看按钮按 Token 查询积分流水并展示金额、余额与分页", async () => {
+  const pages = [
+    { credit_transactions: [{ id: "c2", type: "charge", amount: -2, balance_after: 8, subject: "订阅源 A", created_at: 2000 }], next_cursor: "2000_c2" },
+    { credit_transactions: [{ id: "c1", type: "grant", amount: 10, balance_after: 10, note: "初始积分", created_at: 1000 }], next_cursor: null },
+  ];
+  const f = fixture(undefined, "tokens", (url, options) => {
+    assert.equal(new URL(url, "https://admin").searchParams.get("access_token_id"), "t1");
+    assert.equal(options.cache, "no-store");
+    return Response.json(pages.shift());
+  });
+  f.access_tokens.push({ id: "t1", name: "合作方", token_hint: "abcd…wxyz" });
+  await f.model.methods.refresh();
+  const view = f.context.token_view({ store: f.model });
+  assert.equal(nodes(view).some(node => node.props.attributes?.n === "access-token-hint"), false);
+  const button = nodes(view).find(node => node.props.attributes?.n === "view-access-token-button");
+  assert.deepEqual(Array.from(button.children), ["查看"]);
+  await button.props.onClick();
+  const log_nodes = nodes(view);
+  assert.ok(log_nodes.some(node => node.props.attributes?.n === "access-token-logs-dialog"));
+  assert.ok(log_nodes.some(node => node.props.attributes?.n === "access-token-log-subject" && node.children[0] === "订阅源 A"));
+  assert.ok(log_nodes.some(node => node.props.attributes?.n === "access-token-log-amount" && node.children[0] === "-2 积分"));
+  assert.ok(log_nodes.some(node => node.props.attributes?.n === "access-token-log-balance" && node.children[0] === "余额 8"));
+  await log_nodes.find(node => node.props.attributes?.n === "load-more-access-token-logs-button").props.onClick();
+  assert.equal(new URL(f.requests.at(-1), "https://admin").searchParams.get("cursor"), "2000_c2");
+  assert.deepEqual(Array.from(f.model.state.access_token_logs.value, row => row.id), ["c2", "c1"]);
+  assert.equal(nodes(view).some(node => node.props.attributes?.n === "load-more-access-token-logs-button"), false);
+  nodes(view).find(node => node.props.attributes?.n === "close-access-token-logs-button").props.onClick();
+  assert.equal(f.model.state.access_token_logs.value.length, 0);
+  assert.equal(nodes(view).some(node => node.props.attributes?.n === "access-token-logs-dialog"), false);
+  f.model.methods.dispose();
+});
+
+test("积分日志区分加载、空结果和错误，失败可重试，阻止重复加载", async () => {
+  let finish;
+  const f = fixture(undefined, "tokens", () => new Promise(resolve => { finish = resolve; }));
+  f.access_tokens.push({ id: "t1", name: "测试" });
+  await f.model.methods.refresh();
+  const pending = f.model.methods.openAccessTokenLogs("t1");
+  const view = f.context.token_view({ store: f.model });
+  assert.ok(nodes(view).some(node => node.props.attributes?.n === "access-token-logs-loading"));
+  assert.equal(nodes(view).some(node => node.props.attributes?.n === "access-token-logs-empty"), false);
+  await f.model.methods.refreshAccessTokenLogs();
+  assert.equal(f.requests.length, 2);
+  finish(Response.json({ error: "读取失败" }, { status: 500 }));
+  await pending;
+  assert.equal(f.model.state.access_token_log_state.value.error, "读取失败");
+  assert.equal(nodes(view).some(node => node.props.attributes?.n === "access-token-logs-empty"), false);
+  const retry = f.model.methods.refreshAccessTokenLogs();
+  finish(Response.json({ credit_transactions: [], next_cursor: null }));
+  await retry;
+  assert.equal(f.model.state.access_token_log_state.value.error, "");
+  assert.ok(nodes(view).some(node => node.props.attributes?.n === "access-token-logs-empty"));
+  f.model.methods.dispose();
+});
+
+test("切换 Token、关闭和销毁后忽略迟到的积分日志响应", async () => {
+  const pending_responses = [];
+  const f = fixture(undefined, "tokens", () => new Promise(resolve => pending_responses.push(resolve)));
+  f.access_tokens.push({ id: "t1", name: "一" }, { id: "t2", name: "二" });
+  await f.model.methods.refresh();
+  const first = f.model.methods.openAccessTokenLogs("t1");
+  const second = f.model.methods.openAccessTokenLogs("t2");
+  pending_responses[1](Response.json({ credit_transactions: [{ id: "second" }], next_cursor: null }));
+  await second;
+  pending_responses[0](Response.json({ credit_transactions: [{ id: "first" }], next_cursor: "old" }));
+  await first;
+  assert.equal(f.model.state.access_token_logs.value[0].id, "second");
+  const closed = f.model.methods.refreshAccessTokenLogs();
+  f.model.methods.closeAccessTokenLogs();
+  pending_responses[2](Response.json({ credit_transactions: [{ id: "late" }], next_cursor: null }));
+  await closed;
+  assert.equal(f.model.state.access_token_logs.value.length, 0);
+  assert.equal(f.model.state.access_token_log_state.value.open, false);
+  const disposed = f.model.methods.openAccessTokenLogs("t1");
+  f.model.methods.dispose();
+  pending_responses[3](Response.json({ error: "迟到错误" }, { status: 500 }));
+  await disposed;
+  assert.equal(f.model.state.access_token_log_state.value.error, "");
+});
+
+test("离开保活 Token 页面时关闭日志弹窗并丢弃未完成的响应", async () => {
+  let hide, finish, stopped = false;
+  const f = fixture(undefined, "tokens", () => new Promise(resolve => { finish = resolve; }));
+  f.access_tokens.push({ id: "t1", name: "测试" });
+  const page = f.context.TokensPage({ view: { onBeforeHide(callback) {
+    hide = callback;
+    return () => { stopped = true; };
+  } } });
+  page.children[0].props.onMounted();
+  await new Promise(resolve => setImmediate(resolve));
+  const pending = nodes(page).find(node => node.props.attributes?.n === "view-access-token-button").props.onClick();
+  assert.ok(nodes(page).some(node => node.props.attributes?.n === "access-token-logs-dialog"));
+  hide();
+  finish(Response.json({ credit_transactions: [{ id: "late" }], next_cursor: null }));
+  await pending;
+  assert.equal(nodes(page).some(node => node.props.attributes?.n === "access-token-logs-dialog"), false);
+  page.children[0].props.onUnmounted();
+  assert.equal(stopped, true);
 });

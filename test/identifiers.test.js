@@ -6,10 +6,21 @@ import {
   MIN_ACCESS_TOKEN_LENGTH,
   access_token_hint,
   decode_identifier,
+  generate_access_token,
   safe_equal,
   valid_access_token,
   valid_identifier,
 } from "../server/lib/identifiers.js";
+
+test("自动生成的访问 Token 为 32 字节 base64url，无 api_call_ 前缀", () => {
+  const tokens = Array.from({ length: 16 }, () => generate_access_token());
+  assert.equal(new Set(tokens).size, tokens.length);
+  for (const token of tokens) {
+    assert.match(token, /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(token.startsWith("api_call_"), false);
+    assert.equal(valid_access_token(token), true);
+  }
+});
 
 test("valid_identifier 接受 UUID、带前缀的 token 与冒号分段", () => {
   assert.equal(valid_identifier("6f1c5f0a-1111-4222-8333-444455556666"), true);

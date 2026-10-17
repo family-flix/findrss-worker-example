@@ -7,6 +7,8 @@ import { RepositoryAccessToken } from "../server/repository/access_token.js";
 import { RepositoryScript } from "../server/repository/script.js";
 import { ServiceDiscovery } from "../server/service/durable_object/discovery.js";
 import { ServiceAccessToken } from "../server/service/durable_object/access_tokens.js";
+import { ServiceCredit } from "../server/service/durable_object/credits.js";
+import { RepositoryCredit } from "../server/repository/credit.js";
 register("./support/quickjs_wasm_hook.js", import.meta.url);
 const { ServiceScript } = await import("../server/service/durable_object/scripts.js");
 const { default: worker } = await import("../api.js");
@@ -69,4 +71,28 @@ test("Token 后端分页包括已过期项、排除撤销项，并透传 Worker 
   assert.equal(result.access_tokens[0].status, "expired");
   assert.equal("token_hash" in result.access_tokens[0], false);
   assert.equal(service.list_access_tokens().access_tokens.length, 41);
+});
+
+test("Token 积分日志要求管理员身份，按 Token 隔离并透传游标读取更早记录", async t => {
+  const store = snapshot_store();
+  t.after(() => store.db.close());
+  const credit = new RepositoryCredit(store);
+  for (const [id, token, time] of [["c1", "t1", 1000], ["c2", "t1", 2000], ["c3", "t2", 3000]]) {
+    credit.insert({ id, access_token_id: token, task_id: null, type: "charge", amount: -1,
+      balance_after: 9, method: "get_feed", subject: "订阅源", note: "Feed access", created_at: time });
+  }
+  const service = new ServiceCredit({ repo: { credit } });
+  const env = { ADMIN_PASSWORD: "admin-test", API: { getByName: () => ({ fetch: request => route(request, { credit: service }) }) } };
+  const url = "https://feeds.example/admin/api/credit-transactions?access_token_id=t1&limit=1";
+  assert.equal((await worker.fetch(new Request(url), env)).status, 401);
+  const read = query => worker.fetch(new Request(url + query, { headers: { Authorization: "Bearer admin-test" } }), env);
+  const first = await read("");
+  assert.equal(first.status, 200);
+  assert.equal(first.headers.get("Cache-Control"), "no-store");
+  const page = await first.json();
+  assert.deepEqual(page.credit_transactions.map(row => row.id), ["c2"]);
+  assert.ok(page.next_cursor);
+  const second = await (await read("&cursor=" + encodeURIComponent(page.next_cursor))).json();
+  assert.deepEqual(second.credit_transactions.map(row => row.id), ["c1"]);
+  assert.equal(second.next_cursor, null);
 });

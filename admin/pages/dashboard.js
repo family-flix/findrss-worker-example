@@ -736,10 +736,6 @@ function AccessTokenCardView(props) {
   const access_token_ = props.access_token;
   const access_token_id = String(access_token_.value.id);
   const name_ = computed(access_token_, (access_token) => access_token.name);
-  const hint_ = computed(
-    access_token_,
-    (access_token) => access_token.token_hint,
-  );
   const email_ = computed(access_token_, (access_token) =>
     access_token.email ? "邮箱登录 · " + access_token.email : "仅 Token 登录",
   );
@@ -828,17 +824,6 @@ function AccessTokenCardView(props) {
               attributes: { n: "access-token-name" },
             },
             [name_],
-          ),
-          View(
-            {
-              class: "box-border text-muted break-anywhere",
-              style: {
-                "margin-top": "5px",
-                font: "11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace",
-              },
-              attributes: { n: "access-token-hint" },
-            },
-            [hint_],
           ),
           View(
             {
@@ -936,6 +921,11 @@ function AccessTokenCardView(props) {
           attributes: { n: "access-token-card-actions" },
         },
         [
+          Button({
+            variant: "secondary",
+            attributes: { n: "view-access-token-button", "aria-label": "查看积分消耗日志" },
+            onClick: () => vm$.methods.openAccessTokenLogs(access_token_id),
+          }, ["查看"]),
           Button(
             {
               class: "box-border",
@@ -974,6 +964,65 @@ function AccessTokenCardView(props) {
       ),
     ],
   );
+}
+
+function AccessTokenLogsView({ store: vm$ }) {
+  const state = vm$.state.access_token_log_state;
+  const busy = computed(state, value => value.loading || value.loading_more);
+  const error = computed(state, value => value.error);
+  return Dialog({
+    open: computed(state, value => value.open),
+    title: computed(state, value => "积分消耗日志 · " + value.name),
+    description: "按时间倒序显示此 Token 的扣费、退款和充值记录。",
+    style: { "--width-min-480-pixels-calc-100-vw-32-pixels": "min(760px,calc(100vw - 32px))" },
+    attributes: { n: "access-token-logs-dialog", "aria-label": "Token 积分消耗日志" },
+    onClose: vm$.methods.closeAccessTokenLogs,
+    footer: [
+      Button({ variant: "secondary", disabled: busy,
+        attributes: { n: "refresh-access-token-logs-button" },
+        onClick: vm$.methods.refreshAccessTokenLogs }, ["刷新"]),
+      Button({ attributes: { n: "close-access-token-logs-button" },
+        onClick: vm$.methods.closeAccessTokenLogs }, ["关闭"]),
+    ],
+  }, [
+    View({ class: "grid min-w-0 gap-space-3", attributes: {
+      n: "access-token-logs", "aria-busy": computed(busy, String),
+    } }, [
+      Show({ when: computed(error, Boolean), ok: () => View({ class: "text-danger",
+        attributes: { n: "access-token-logs-error", role: "alert" } }, [error]) }),
+      Show({ when: computed(state, value => value.loading), ok: () => View({ class: "text-muted",
+        attributes: { n: "access-token-logs-loading", role: "status" } }, ["正在加载积分日志…"]) }),
+      Show({ when: combine({ state, rows: vm$.state.access_token_logs },
+        ({ state, rows }) => !state.loading && !state.error && !rows.length),
+        ok: () => View({ class: "text-muted", attributes: { n: "access-token-logs-empty" } }, ["暂无积分记录"]),
+      }),
+      For({ each: vm$.state.access_token_logs, render(row_ref) {
+        const row = source_value(row_ref);
+        const amount = Number(row.amount) || 0;
+        const type = { charge: "扣费", refund: "退款", grant: "充值", adjustment: "调整", redemption: "兑换" }[row.type] || "积分变动";
+        return View({ class: "grid min-w-0 gap-space-2 rounded-card bg-surface-raised padding-space-3",
+          attributes: { n: "access-token-log-row", "data-transaction-id": row.id } }, [
+          View({ class: "flex flex-wrap items-center justify-between gap-space-2" }, [
+            View({ class: "text-muted tabular-nums", attributes: { n: "access-token-log-time" } }, [format_time(row.created_at)]),
+            View({ class: "text-muted", attributes: { n: "access-token-log-type" } }, [type]),
+          ]),
+          View({ class: "break-anywhere", attributes: { n: "access-token-log-subject" } }, [
+            String(row.subject || row.note || row.method || type),
+          ]),
+          View({ class: "flex flex-wrap items-center justify-between gap-space-2 tabular-nums" }, [
+            View({ class: amount < 0 ? "text-danger" : "text-success", attributes: { n: "access-token-log-amount" } }, [
+              (amount > 0 ? "+" : "") + amount + " 积分",
+            ]),
+            View({ class: "text-muted", attributes: { n: "access-token-log-balance" } }, ["余额 " + Number(row.balance_after || 0)]),
+          ]),
+        ]);
+      } }),
+      Show({ when: computed(state, value => Boolean(value.next_cursor)), ok: () => Button({
+        variant: "secondary", disabled: busy, attributes: { n: "load-more-access-token-logs-button" },
+        onClick: vm$.methods.loadMoreAccessTokenLogs,
+      }, [computed(state, value => value.loading_more ? "正在加载…" : "加载更早记录")]) }),
+    ]),
+  ]);
 }
 
 function AccessTokenCreateView(props) {
@@ -1305,6 +1354,8 @@ function AccessTokenManagementView(props) {
   );
   return View({ class: "box-border", attributes: { n: "access-token-management", "aria-label": "用户 Token 管理" } }, [
     Show({ when: vm$.state.access_token_form_open, ok: () => AccessTokenCreateView({ store: vm$ }) }),
+    Show({ when: computed(vm$.state.access_token_log_state, state => state.open),
+      ok: () => AccessTokenLogsView({ store: vm$ }) }),
       Show({
         when: combine({ error: error_, open: vm$.state.access_token_form_open }, state => Boolean(state.error) && !state.open),
         ok() {
@@ -3338,10 +3389,11 @@ function DeviceTokensView(model) {
   );
 }
 
-function DashboardApplicationView(page_id = "overview", embedded = false) {
+function DashboardApplicationView(page_id = "overview", embedded = false, route_view) {
   const is_device_page = page_id === "devices";
   const is_token_page = page_id === "tokens";
   const vm$ = DashboardViewModel(page_id);
+  let stop_hide;
   const device_tokens = is_device_page
     ? DeviceTokensModel()
     : null;
@@ -3413,9 +3465,11 @@ function DashboardApplicationView(page_id = "overview", embedded = false) {
         n: is_device_page ? "device-management-view" : is_token_page ? "token-management-view" : "dashboard-view",
       },
       onMounted() {
+        stop_hide = route_view?.onBeforeHide(vm$.methods.closeAccessTokenLogs);
         vm$.methods.ready();
       },
       onUnmounted() {
+        stop_hide?.();
         device_tokens?.dispose();
         vm$.methods.dispose();
       },
@@ -3512,8 +3566,8 @@ function DevicesPage() {
   return DashboardApplicationView("devices", true);
 }
 
-function TokensPage() {
-  return DashboardApplicationView("tokens", true);
+function TokensPage({ view } = {}) {
+  return DashboardApplicationView("tokens", true, view);
 }
 
 export { OverviewPage, DevicesPage, TokensPage, DeviceTokensView };

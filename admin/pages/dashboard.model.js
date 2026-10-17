@@ -53,6 +53,12 @@ function DashboardViewModel(page_id = "overview") {
     copy_message: "",
     error: "",
   });
+  const access_token_logs_ = refarr([]);
+  const access_token_log_state_ = refobj({
+    id: "", name: "", open: false, loading: false, loading_more: false,
+    next_cursor: "", error: "",
+  });
+  let access_token_log_generation = 0;
   const device_logs_ = refarr([]);
   const device_log_state_ = refobj({
     device_id: "",
@@ -572,6 +578,51 @@ function DashboardViewModel(page_id = "overview") {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  function close_access_token_logs() {
+    access_token_log_generation += 1;
+    access_token_logs_.assign([]);
+    access_token_log_state_.as({
+      id: "", name: "", open: false, loading: false, loading_more: false,
+      next_cursor: "", error: "",
+    });
+  }
+
+  async function load_access_token_logs(more = false) {
+    const state = access_token_log_state_.value;
+    if (!state.open || state.loading || state.loading_more || (more && !state.next_cursor)) return;
+    const generation = ++access_token_log_generation;
+    access_token_log_state_.as({ ...state, loading: !more, loading_more: more, error: "" });
+    const params = new URLSearchParams({ access_token_id: state.id, limit: "50" });
+    if (more) params.set("cursor", state.next_cursor);
+    try {
+      const response = await fetch("/admin/api/credit-transactions?" + params, { cache: "no-store" });
+      const value = await response.json();
+      if (generation !== access_token_log_generation) return;
+      if (!response.ok) throw new Error(value.error || "加载积分日志失败：HTTP " + response.status);
+      if (!Array.isArray(value.credit_transactions)) throw new Error("积分日志接口返回格式不正确");
+      access_token_logs_.assign(more
+        ? [...access_token_logs_.value, ...value.credit_transactions]
+        : value.credit_transactions);
+      access_token_log_state_.as({ ...access_token_log_state_.value, next_cursor: value.next_cursor || "" });
+    } catch (failure) {
+      if (generation === access_token_log_generation) {
+        access_token_log_state_.as({ ...access_token_log_state_.value, error: failure.message || String(failure) });
+      }
+    } finally {
+      if (generation === access_token_log_generation) {
+        access_token_log_state_.as({ ...access_token_log_state_.value, loading: false, loading_more: false });
+      }
+    }
+  }
+
+  function open_access_token_logs(access_token_id) {
+    const token = access_tokens_.value.find(candidate => candidate.id === access_token_id);
+    if (!token) return;
+    close_access_token_logs();
+    access_token_log_state_.as({ ...access_token_log_state_.value, id: token.id, name: token.name, open: true });
+    return load_access_token_logs();
   }
 
   async function expire_access_token(access_token_id) {
@@ -1278,6 +1329,7 @@ function DashboardViewModel(page_id = "overview") {
   }
 
   function dispose() {
+    close_access_token_logs();
     token_pagination?.destroy();
     started = false;
     if (refresh_timer !== null) clearInterval(refresh_timer);
@@ -1323,6 +1375,8 @@ function DashboardViewModel(page_id = "overview") {
     access_token_form_open: access_token_form_open_,
     access_token_draft: access_token_draft_,
     access_token_action: access_token_action_,
+    access_token_logs: access_token_logs_,
+    access_token_log_state: access_token_log_state_,
     device_logs: device_logs_,
     device_log_state: device_log_state_,
     test_drafts: test_drafts_,
@@ -1362,6 +1416,10 @@ function DashboardViewModel(page_id = "overview") {
       set_access_token_action({ error: "" });
     },
     createAccessToken: create_access_token,
+    openAccessTokenLogs: open_access_token_logs,
+    closeAccessTokenLogs: close_access_token_logs,
+    refreshAccessTokenLogs: () => load_access_token_logs(),
+    loadMoreAccessTokenLogs: () => load_access_token_logs(true),
     grantAccessTokenCredits: grant_access_token_credits,
     expireAccessToken: expire_access_token,
     removeAccessToken: remove_access_token,

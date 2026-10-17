@@ -77,12 +77,12 @@ export function access_token_hint(token) {
   return token.slice(0, visible_prefix_length) + "…" + token.slice(-4);
 }
 
-// 访问 token 本体：32 字节随机 → base64url，前缀 api_call_ 便于肉眼识别来源。
+// 访问 token 本体：32 字节随机 → base64url。
 /** @returns {string} */
 export function generate_access_token() {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return "api_call_" + btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
