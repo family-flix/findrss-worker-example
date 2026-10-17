@@ -9,6 +9,7 @@ import { source_value, subscribe_source, dispose_all } from "./frui/shared.js";
 
 function CodeEditor({ value, disabled, readOnly = false, mode = "javascript", attributes, onInput, wrapperStyle = {}, rootStyle, style }) {
   let editor = null;
+  let resize_observer = null;
   let unlistens = [];
   const readonly_value = () => source_value(disabled, false) ? "nocursor" : Boolean(source_value(readOnly, false));
   return Textarea({class: "box-border",  value, disabled, readOnly, attributes, onInput, rootStyle, style,
@@ -34,7 +35,6 @@ function CodeEditor({ value, disabled, readOnly = false, mode = "javascript", at
             token.style.color = `var(--frui-color-${color})`;
           }
         });
-        editor.refresh();
       }
       editor.on("change", (_, change) => {
         if (change.origin !== "setValue" && !readonly_value()) onInput?.({ target: { value: editor.getValue() } });
@@ -49,8 +49,16 @@ function CodeEditor({ value, disabled, readOnly = false, mode = "javascript", at
         subscribe_source(readOnly, () => editor.setOption("readOnly", readonly_value())),
         subscribe_source(mode, next => editor.setOption("mode", next || "text/plain")),
       ];
+      // fromTextArea measures the default size before wrapperStyle is applied.
+      editor.refresh();
+      if (typeof ResizeObserver === "function") {
+        resize_observer = new ResizeObserver(() => editor?.refresh());
+        resize_observer.observe(wrapper);
+      }
     },
     onUnmounted() {
+      resize_observer?.disconnect();
+      resize_observer = null;
       dispose_all(unlistens);
       editor?.toTextArea();
       editor = null;

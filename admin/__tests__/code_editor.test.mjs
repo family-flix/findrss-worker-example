@@ -15,21 +15,32 @@ test("CodeMirror 同步 Model 草稿、只读状态，并在卸载时释放订�
   const value = ref("export const route = {};");
   const disabled = ref(true);
   const wrapper = new Map(), input = new Map(), wrapper_style = {};
-  let options, change_handler, text, resets = 0, destroyed = false;
+  let options, change_handler, text, resets = 0, destroyed = false, refreshes = 0;
+  let resize_callback, observed_wrapper, disconnected = false;
+  const wrapper_element = { style: wrapper_style, setAttribute: (key, value) => wrapper.set(key, value) };
   const editor = {
-    getWrapperElement: () => ({ style: wrapper_style, setAttribute: (key, value) => wrapper.set(key, value) }),
+    getWrapperElement: () => wrapper_element,
     getInputField: () => ({ setAttribute: (key, value) => input.set(key, value) }),
     getValue: () => text,
     setValue(next) { text = next; change_handler(editor, { origin: "setValue" }); },
     clearHistory() { resets++; },
     on(name, handler) { assert.equal(name, "change"); change_handler = handler; },
     setOption(key, value) { options[key] = value; },
+    refresh() {
+      assert.equal(wrapper_style.height, "360px", "刷新时已应用调用方的高度");
+      refreshes++;
+    },
     toTextArea() { destroyed = true; },
   };
   const CodeEditor = vm.runInNewContext(
     "(" + readFileSync(new URL("../components/code_editor.js", import.meta.url), "utf8")
       .match(/function CodeEditor\([^]*?\n\}/)[0] + ")",
     { Textarea: props => props, source_value, subscribe_source, dispose_all,
+      ResizeObserver: class {
+        constructor(callback) { resize_callback = callback; }
+        observe(element) { observed_wrapper = element; }
+        disconnect() { disconnected = true; }
+      },
       CodeMirror: { fromTextArea(textarea, config) { text = textarea.value; options = config; return editor; } } },
   );
   let changes = 0;
@@ -40,6 +51,10 @@ test("CodeMirror 同步 Model 草稿、只读状态，并在卸载时释放订�
   view.onMounted({ target: { get$elm: () => ({ value: value.value }) } });
   assert.equal(options.mode, "javascript");
   assert.equal(wrapper_style.height, "360px");
+  assert.equal(refreshes, 1);
+  assert.equal(observed_wrapper, wrapper_element);
+  resize_callback();
+  assert.equal(refreshes, 2, "容器尺寸改变后重新测量编辑器");
   assert.equal(options.lineNumbers, true);
   assert.equal(options.readOnly, "nocursor");
   assert.equal(options.extraKeys.Tab, false);
@@ -63,6 +78,9 @@ test("CodeMirror 同步 Model 草稿、只读状态，并在卸载时释放订�
   assert.equal(options.readOnly, "nocursor");
   view.onUnmounted();
   assert.equal(destroyed, true);
+  assert.equal(disconnected, true);
+  resize_callback();
+  assert.equal(refreshes, 2, "卸载后的迟到回调不刷新已销毁的编辑器");
   assert.equal(value.handlers.size, 0);
   assert.equal(disabled.handlers.size, 0);
 });
@@ -115,6 +133,7 @@ test("只读输出允许选择复制，响应类型切换时更新 mode，并释
   const editor = {
     getWrapperElement: () => ({ style: {}, setAttribute() {} }), getInputField: () => ({ setAttribute() {} }),
     getValue: () => '{}', on(_name, handler) { change_handler = handler; },
+    refresh() {},
     setOption(key, value) { options[key] = value; }, toTextArea() {},
   };
   const CodeEditor = vm.runInNewContext(

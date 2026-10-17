@@ -1,5 +1,6 @@
 import { format_bytes } from "../utils.js";
 import { format_datetime } from "../../server/lib/datetime.js";
+import { ScriptDebugOutputModel } from "../components/script_output.js";
 
 export function StorageModel() {
   const { ref, computed } = window.FindRSSAdminUI;
@@ -98,7 +99,9 @@ export function StorageModel() {
     close_preview();
     const controller = new AbortController();
     preview_request = controller;
-    const value = { ...node, loading: true, text: "", kind: "", error: "", truncated: false };
+    const extension = /\.(json|xml|js)$/i.exec(node.key)?.[1].toLowerCase();
+    const mode = extension ? "application/" + (extension === "js" ? "javascript" : extension) : "";
+    const value = { ...node, loading: true, text: "", formatted: "", mode, kind: "", error: "", truncated: false };
     preview.as(value);
     const current = () => !disposed && preview_request === controller;
     const path = "/file?key=" + encodeURIComponent(node.key);
@@ -106,11 +109,11 @@ export function StorageModel() {
       const head = await request(path, { method: "HEAD", signal: controller.signal });
       if (!current()) return;
       const content_type = head.headers.get("Content-Type") || "";
-      if (/^image\//i.test(content_type)) {
+      if (!mode && /^image\//i.test(content_type)) {
         preview.as({ ...value, loading: false, kind: "image", src: "/admin/api/storage" + path });
         return;
       }
-      if (!/^(text\/|application\/json)/i.test(content_type)) {
+      if (!mode && !/^(text\/|application\/json)/i.test(content_type)) {
         preview.as({ ...value, loading: false, kind: "unsupported" });
         return;
       }
@@ -131,7 +134,11 @@ export function StorageModel() {
         }
         text += decoder.decode();
       } finally { reader.releaseLock(); }
-      if (current()) preview.as({ ...value, loading: false, kind: "text", text, truncated });
+      if (current()) {
+        const formatted = mode && !truncated
+          ? ScriptDebugOutputModel(JSON.stringify({ body: text, content_type: mode })).formatted : text;
+        preview.as({ ...value, loading: false, kind: "text", text, formatted, truncated });
+      }
     } catch (failure) {
       if (current()) preview.as({ ...value, loading: false, error: failure.message || String(failure) });
     }

@@ -1,11 +1,11 @@
-const { View, Img, Icon, Button, ListViewV2, Show, computed, combine } = window.FindRSSAdminUI;
+const { View, Img, Icon, Button, EmptyCard, CodeEditor, ListViewV2, Show, computed, combine } = window.FindRSSAdminUI;
 
 export function StorageTreeView({ model }) {
   const { state, methods } = model;
   const tree = ListViewV2({
     each: state.rows, key: "id", itemHeight: 40, buffer: 6,
-    class: "min-w-0 overflow-auto",
-    style: { height: "min(60dvh, 560px)", "min-height": "240px", "overflow-anchor": "none" },
+    class: "flex-1 min-w-0 min-h-0 overflow-auto",
+    style: { "overflow-anchor": "none" },
     attributes: { n: "storage-tree", role: "tree", tabindex: "0", "aria-label": "R2 文件树",
       "aria-activedescendant": computed(state.active_key, key => key ? "storage-row-" + encodeURIComponent(key) : undefined),
     },
@@ -21,7 +21,7 @@ export function StorageTreeView({ model }) {
     render(value) {
       const read = map => computed(value, map);
       return View({
-        class: combine({ active: state.active_key, row: value }, ({ active, row }) => "box-border flex items-center gap-space-2 min-w-0 cursor-pointer rounded-control " + (active === row.id ? "bg-selected text-link" : "")),
+        class: combine({ active: state.active_key, row: value }, ({ active, row }) => "box-border flex items-center gap-space-2 min-w-0 cursor-pointer rounded-control " + (active === row.id ? "bg-selected text-link" : "hover-background-color-surface-hover")),
         style: { height: "40px", "padding-right": "12px", "padding-left": read(row => (12 + row.depth * 18) + "px") },
         attributes: { n: "storage-tree-row", role: "treeitem", id: read(row => "storage-row-" + encodeURIComponent(row.id)),
           title: read(row => row.more ? row.title : row.key), "aria-level": read(row => row.depth + 1),
@@ -40,8 +40,8 @@ export function StorageTreeView({ model }) {
       ]);
     },
   });
-  return View({ class: "grid min-w-0 gap-space-2", attributes: { n: "storage-tree-panel" } }, [
-    View({ class: "text-muted text-sm", attributes: { n: "storage-tree-help" } }, ["展开文件夹，选择文件预览；支持方向键和 Enter。"]),
+  return View({ class: "box-border flex flex-col min-w-0 min-h-0 overflow-hidden rounded-card bg-surface-raised gap-space-2",
+    style: { padding: "var(--frui-space-2)" }, attributes: { n: "storage-tree-panel" } }, [
     tree,
     Show({ when: combine({ rows: state.rows, busy: state.busy }, value => !value.busy && !value.rows.length),
       ok: () => View({ class: "text-muted text-sm", attributes: { n: "storage-empty" } }, ["暂无文件"]) }),
@@ -51,13 +51,17 @@ export function StorageTreeView({ model }) {
 export function StoragePreviewView({ model }) {
   const { state, methods } = model;
   const read = map => computed(state.preview, value => value ? map(value) : "");
-  return View({ class: "box-border grid min-w-0 rounded-card bg-surface-raised gap-space-3", style: { padding: "16px", "align-content": "start" },
+  return View({ class: "box-border grid min-w-0 min-h-0 overflow-auto rounded-card bg-surface-raised gap-space-3", style: { padding: "var(--frui-space-4)", "align-content": "start" },
     attributes: { n: "storage-preview", "aria-label": "文件预览", "aria-busy": read(value => String(value.loading)) } }, [
-    Show({ when: computed(state.preview, value => !value), ok: () => View({ class: "text-muted text-sm", attributes: { n: "storage-preview-empty" } }, ["选择左侧文件查看内容"]) }),
+    Show({ when: computed(state.preview, value => !value), ok: () => EmptyCard({
+      name: "storage-preview-empty", variant: "inline", size: "medium",
+      illustration: "/brand/select-file.svg", title: "请选择文件",
+      description: "选择左侧文件，查看文件内容与详情。",
+    }) }),
     Show({ when: state.preview, ok: () => View({ class: "grid min-w-0 gap-space-3", attributes: { n: "storage-preview-content" } }, [
       View({ class: "flex items-center justify-between gap-space-2", attributes: { n: "storage-preview-heading" } }, [
         View({ class: "min-w-0 break-anywhere text-sm", attributes: { n: "storage-preview-key" } }, [read(value => value.key)]),
-        Button({ size: "small", attributes: { n: "storage-preview-close", "aria-label": "关闭预览" }, onClick: methods.close_preview }, ["关闭"]),
+        Button({ size: "small", icon: Icon("x", 16), attributes: { n: "storage-preview-close", "aria-label": "关闭预览" }, onClick: methods.close_preview }, []),
       ]),
       View({ class: "text-muted text-sm", attributes: { n: "storage-preview-details" } }, [read(value => value.size_label + " · 上传于 " + value.uploaded_label)]),
       Show({ when: read(value => value.loading), ok: () => View({ class: "text-muted text-sm", attributes: { n: "storage-preview-loading", role: "status" } }, ["正在读取预览…"]) }),
@@ -69,7 +73,12 @@ export function StoragePreviewView({ model }) {
           attributes: { n: "storage-preview-image", alt: read(value => value.title) }, onError: () => methods.preview_error(key),
         });
       } }),
-      Show({ when: read(value => value.kind === "text"), ok: () => View({ as: "pre", class: "box-border m-0 min-w-0 overflow-auto whitespace-pre-wrap break-anywhere text-sm",
+      Show({ when: read(value => value.kind === "text" && Boolean(value.mode)), ok: () => CodeEditor({
+        value: read(value => value.formatted), mode: read(value => value.mode), readOnly: true,
+        attributes: { n: "storage-preview-code", "aria-label": "文件文本内容" },
+        wrapperStyle: { height: "min(50dvh, 480px)", width: "100%" },
+      }) }),
+      Show({ when: read(value => value.kind === "text" && !value.mode), ok: () => View({ as: "pre", class: "box-border m-0 min-w-0 overflow-auto whitespace-pre-wrap break-anywhere text-sm",
         style: { "max-height": "min(50dvh, 480px)", "font-family": "ui-monospace, monospace" },
         attributes: { n: "storage-preview-text", tabindex: "0", "aria-label": "文件文本内容" } }, [read(value => value.text)]) }),
       Show({ when: read(value => value.truncated), ok: () => View({ class: "text-muted text-sm", attributes: { n: "storage-preview-truncated", role: "status" } }, ["文件较大，仅预览前 1 MiB 内容。"]) }),

@@ -7,15 +7,19 @@ export function StoragePage({ view } = {}) {
   const model = StorageModel();
   const { state, methods } = model;
   let stop_hide;
-  return window.FindRSSAdminShell.Page({ page_id: "storage", title: "存储", actions: [
-    Button({ attributes: { n: "storage-refresh" },
-      disabled: combine({ busy: state.busy, usage_busy: state.usage_busy }, value => value.busy || value.usage_busy),
-      onClick: methods.refresh }, ["刷新"]),
-  ] }, [
-    View({ class: "grid min-w-0 gap-space-4", attributes: { n: "storage-page" },
+  return window.FindRSSAdminShell.Page({ page_id: "storage", title: "存储",
+    class: "h-full min-h-0 overflow-hidden",
+    contentProps: { class: "flex-1 overflow-hidden", style: { "grid-template-rows": "minmax(0, 1fr)" } },
+    actions: [
+      Button({ attributes: { n: "storage-refresh" },
+        disabled: combine({ busy: state.busy, usage_busy: state.usage_busy }, value => value.busy || value.usage_busy),
+        onClick: methods.refresh }, ["刷新"]),
+    ] }, [
+    View({ class: "grid min-w-0 min-h-0 gap-space-3", style: { "grid-template-rows": "auto auto minmax(0, 1fr)" },
+      attributes: { n: "storage-page" },
       onMounted() { stop_hide = view?.onBeforeHide(methods.close_preview); void methods.refresh(); },
       onUnmounted() { stop_hide?.(); methods.dispose(); } }, [
-      View({ class: "grid gap-space-2 rounded-card bg-surface-raised", style: { padding: "20px" },
+      View({ class: "grid gap-space-2 rounded-card bg-surface-raised", style: { padding: "var(--frui-space-3)" },
         attributes: { n: "storage-summary", "aria-busy": computed(state.usage_busy, String) } }, [
         View({ class: "text-muted text-sm", attributes: { n: "storage-usage-label" } }, ["R2 已用空间"]),
         View({ style: { "font-size": "24px" }, attributes: { n: "storage-usage" } }, [state.usage_label]),
@@ -26,9 +30,10 @@ export function StoragePage({ view } = {}) {
         View({ class: "text-danger text-sm", attributes: { n: "storage-usage-error", role: "alert" } }, [state.usage_error]),
       ]),
       View({ class: "text-danger text-sm", attributes: { n: "storage-error", role: "alert" } }, [state.error]),
-      View({ class: "grid min-w-0 gap-space-4 max-760-grid-template-columns", style: {
-        "grid-template-columns": "minmax(240px, 2fr) minmax(0, 3fr)", "align-items": "start",
+      View({ class: "grid min-w-0 min-h-0 overflow-auto gap-space-3 max-760-grid-template-columns max-760-grid-template-rows", style: {
+        "grid-template-columns": "minmax(240px, 2fr) minmax(0, 3fr)", "grid-template-rows": "minmax(0, 1fr)",
         "--max-760-grid-template-columns": "minmax(0, 1fr)",
+        "--max-760-grid-template-rows": "repeat(2, minmax(240px, 1fr))",
       }, attributes: { n: "storage-workspace" } }, [StorageTreeView({ model }), StoragePreviewView({ model })]),
     ]),
   ]);

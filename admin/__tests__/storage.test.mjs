@@ -121,6 +121,58 @@ test("预览图片、纯文本、空文件和不支持的类型，大文本限�
   f.methods.dispose();
 });
 
+test("JSON、XML 按后缀识别并格式化，不受大小写或 Content-Type 影响", async () => {
+  const json = '{"id":9007199254740993123,"body":"原文","items":[1,2]}';
+  const xml = '<?xml version="1.0"?><feed xmlns:media="urn:media"><entry><media:title><![CDATA[<p>原文</p>]]></media:title></entry></feed>';
+  const f = await fixture([["data.json", json, "application/octet-stream"], ["DATA.JSON", json, "text/plain"],
+    ["feed.xml", xml, "application/xml"], ["FEED.XML", xml, "image/svg+xml"],
+    ["broken.json", '{"broken":'], ["plain.txt", json], ["data.json.bak", json]]);
+  for (const key of ["data.json", "DATA.JSON"]) {
+    await f.methods.activate(id(key));
+    const value = f.state.preview.value;
+    assert.equal(value.kind, "text");
+    assert.equal(value.mode, "application/json");
+    assert.equal(value.text, json);
+    assert.match(value.formatted, /\n  "id": 9007199254740993123,/);
+    assert.match(value.formatted, /"body": "原文"/);
+  }
+  for (const key of ["feed.xml", "FEED.XML"]) {
+    await f.methods.activate(id(key));
+    const value = f.state.preview.value;
+    assert.equal(value.kind, "text");
+    assert.equal(value.mode, "application/xml");
+    assert.equal(value.text, xml);
+    assert.match(value.formatted, /\n  <entry>\n    <media:title>/);
+    assert.match(value.formatted, /<!\[CDATA\[<p>原文<\/p>\]\]>/);
+  }
+  await f.methods.activate(id("broken.json"));
+  assert.equal(f.state.preview.value.mode, "application/json");
+  assert.equal(f.state.preview.value.formatted, '{"broken":');
+  for (const key of ["plain.txt", "data.json.bak"]) {
+    await f.methods.activate(id(key));
+    assert.equal(f.state.preview.value.mode, "");
+    assert.equal(f.state.preview.value.text, json);
+  }
+  assert.equal(f.bucket.calls.put, 7, "格式化只影响展示，不写回存储");
+  f.methods.dispose();
+});
+
+test("截断的 JSON、XML 保留已读取原文并保持高亮模式", async () => {
+  const limit = 1024 * 1024;
+  const f = await fixture([["large.json", '{"text":"' + "x".repeat(limit) + '"}'],
+    ["large.xml", "<feed><entry>" + "x".repeat(limit) + "</entry></feed>"]]);
+  for (const key of ["large.json", "large.xml"]) {
+    await f.methods.activate(id(key));
+    const value = f.state.preview.value;
+    assert.equal(value.kind, "text");
+    assert.equal(value.truncated, true);
+    assert.equal(value.text.length, limit);
+    assert.equal(value.formatted, value.text);
+    assert.equal(value.mode, key.endsWith("json") ? "application/json" : "application/xml");
+  }
+  f.methods.dispose();
+});
+
 test("关闭或切换预览取消请求，迟到响应不覆盖当前文件", async () => {
   const f = await fixture([["a", "first"], ["b", "second"]]);
   let resolve_head, first_signal;
