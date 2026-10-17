@@ -1,6 +1,6 @@
 {
   "name": "findrss-worker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "可自行部署到 Cloudflare Workers 的爬虫脚本平台，用于创建 RSS / Atom 订阅源",
   "type": "module",
   "main": "index.js",
