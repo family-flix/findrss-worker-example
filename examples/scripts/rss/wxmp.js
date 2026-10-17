@@ -49,6 +49,11 @@ export class WechatOfficialRSS extends RSSScript {
     } catch {}
     return article_url;
   }
+  static article_idx_of(article_url) {
+    const match = article_url.split("#", 1)[0].match(/[?&]idx=(\d+)(?:&|$)/);
+    const idx = match ? Number(match[1]) : NaN;
+    return Number.isSafeInteger(idx) && idx > 0 ? idx : Number.MAX_SAFE_INTEGER;
+  }
   static escape_html_attribute(value) {
     return value
       .replace(/&/g, "&amp;")
@@ -280,7 +285,12 @@ export class WechatOfficialRSS extends RSSScript {
         return time < 1_000_000_000_000 ? time * 1000 : time;
       };
       items.sort(function (left, right) {
-        return published_ms(right) - published_ms(left);
+        // 同一批推送发布时间相同，按 idx 升序排列，头条在前。
+        return (
+          published_ms(right) - published_ms(left) ||
+          WechatOfficialRSS.article_idx_of(left.link) -
+            WechatOfficialRSS.article_idx_of(right.link)
+        );
       });
       const channel_title = String(
         account.NickName || account.UserName || username,
