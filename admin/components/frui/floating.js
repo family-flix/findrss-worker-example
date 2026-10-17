@@ -140,6 +140,9 @@ function FloatingModel({
       cancel_hover();
       store.cancelShow?.();
       store.cancelHide?.();
+      // 删除列表项会先销毁触发器；在取消订阅前关闭 Portal 内的菜单。
+      hide();
+      update();
       dispose_all(unlistens);
       presence.unmount();
       if (owned) store.unmount();

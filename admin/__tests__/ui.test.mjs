@@ -102,6 +102,39 @@ test("Popconfirm 取消不提交，确认期间阻止重复操作并响应禁用
   } finally { root.onUnmounted(); disabled.destroy(); }
 });
 
+test("Popconfirm 删除列表项后在确认回调完成前移除浮层", async () => {
+  const rows = ui.refarr([{ id: "delete-row" }]);
+  let finish_delete, finish_reload, popup_visible = true;
+  const deleted = new Promise(resolve => { finish_delete = resolve; });
+  const reloaded = new Promise(resolve => { finish_reload = resolve; });
+  const root = ui.For({ each: rows, render: () => ui.View({}, [ui.Popconfirm({
+    title: "删除此记录？", attributes: { n: "delete-row-confirmation" },
+    trigger: props => ui.Button({ ...props, attributes: { ...props.attributes, n: "delete-row-button" } }, ["删除"]),
+    async onConfirm() {
+      await deleted;
+      rows.as([]);
+      await reloaded;
+    },
+  })]) });
+  try {
+    find(root, "delete-row-button").events.onClick();
+    const popup = root.children[0].children[0].children[1].children[0];
+    assert.equal(popup.t, "show");
+    assert.ok(find(popup, "delete-row-confirmation-confirm"));
+    // 模拟挂在 Portal 下的 DOM；列表项销毁必须主动移除这些节点。
+    popup.$elm = { removeChildren() { popup_visible = false; } };
+    const submitted = find(popup, "delete-row-confirmation-confirm").events.onClick();
+    finish_delete();
+    await new Promise(setImmediate);
+    assert.equal(root.children.length, 0);
+    assert.equal(popup_visible, false);
+    assert.equal(find(popup, "delete-row-confirmation-confirm"), null);
+    finish_reload();
+    await submitted;
+    assert.equal(popup_visible, false);
+  } finally { finish_delete(); finish_reload(); root.destroy(); rows.destroy(); }
+});
+
 test("存储文件树使用虚拟窗口，目录可展开且只提供预览", async () => {
   const storage_bundle = await build({
     entryPoints: [fileURLToPath(new URL("../pages/storage.js", import.meta.url))],

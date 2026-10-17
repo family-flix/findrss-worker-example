@@ -43,7 +43,7 @@ function Popconfirm({
       close
     }) {
       return View({
-        class: "max-width-min-280-pixels-calc-100-vw-32-pixels padding-space-3 color-color-text font-size-font-size",
+        class: "box-sizing-border-box max-width-min-280-pixels-calc-100-vw-32-pixels padding-space-3 color-color-text font-size-font-size",
         attributes: {
           n: `${name}-content`
         },
@@ -58,12 +58,13 @@ function Popconfirm({
         }
       }, [
         View({
+          class: "white-space-normal overflow-wrap-anywhere",
           attributes: {
             n: `${name}-title`
           }
         }, [title]),
         View({
-          class: "display-flex justify-content-flex-end gap-space-2 margin-top-space-3",
+          class: "display-flex flex-wrap-wrap justify-content-flex-end gap-space-2 margin-top-space-3",
           attributes: {
             n: `${name}-actions`
           }
