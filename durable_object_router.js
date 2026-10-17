@@ -384,6 +384,13 @@ async function dispatch(request, app) {
     return app.scripts.list_script_logs(url);
   }
   const script_match = url.pathname.match(/^\/_admin\/scripts\/([a-z0-9/_-]+)$/);
+  const script_versions_match = url.pathname.match(/^\/_admin\/scripts\/([^/]+)\/versions(?:\/([^/]+))?$/);
+  if (script_versions_match && request.method === "GET") return script_versions_match[2]
+    ? app.scripts.get_script_version(script_versions_match[1], script_versions_match[2])
+    : app.scripts.list_script_versions(script_versions_match[1]);
+  const script_rollback_match = url.pathname.match(/^\/_admin\/scripts\/([^/]+)\/rollback$/);
+  if (script_rollback_match && request.method === "POST") return app.scripts.rollback_script(request, script_rollback_match[1]);
+  if (script_match && request.method === "GET") return app.scripts.get_script(script_match[1]);
   if (script_match && request.method === "PATCH") {
     return app.scripts.update_script(request, script_match[1]);
   }

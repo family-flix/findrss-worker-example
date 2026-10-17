@@ -370,9 +370,14 @@ export default {
       );
       if (
         admin_script_match &&
-        (request.method === "PATCH" || request.method === "DELETE")
+        (request.method === "GET" || request.method === "PATCH" || request.method === "DELETE")
       ) {
         return admin_script_request(env, request, "/" + admin_script_match[1]);
+      }
+      const script_versions_match = url.pathname.match(/^\/admin\/api\/scripts\/([^/]+)\/(versions(?:\/[^/]+)?|rollback)$/);
+      if (script_versions_match && (request.method === "GET" && script_versions_match[2].startsWith("versions")
+          || request.method === "POST" && script_versions_match[2] === "rollback")) {
+        return admin_script_request(env, request, "/" + script_versions_match[1] + "/" + script_versions_match[2]);
       }
       const admin_access_token_credits_match = url.pathname.match(
         /^\/admin\/api\/access-tokens\/([A-Za-z0-9-]+)\/credits$/,

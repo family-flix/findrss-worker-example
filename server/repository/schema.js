@@ -54,6 +54,8 @@ export const API_TABLE_NAMES = Object.freeze([
   "discovery_source_snapshots",
   "discovery_source_calls",
   "scripts",
+  "script_releases",
+  "script_release_events",
   "rss_cookie_store",
   "script_logs",
   "rss_route_cache",
@@ -348,6 +350,19 @@ export const API_SCHEMA_SQL = `
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS script_releases (
+    id TEXT PRIMARY KEY, script_id TEXT NOT NULL, version TEXT NOT NULL,
+    script_hash TEXT NOT NULL, bytes INTEGER NOT NULL,
+    script TEXT NOT NULL DEFAULT '', metadata_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(script_id, version)
+  );
+  CREATE INDEX IF NOT EXISTS script_releases_script ON script_releases(script_id, created_at);
+  CREATE TABLE IF NOT EXISTS script_release_events (
+    id TEXT PRIMARY KEY, script_id TEXT NOT NULL, action TEXT NOT NULL,
+    from_id TEXT NOT NULL DEFAULT '', to_id TEXT NOT NULL, created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS script_release_events_script ON script_release_events(script_id, created_at);
   CREATE TABLE IF NOT EXISTS rss_cookie_store (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     cookies_json TEXT NOT NULL,

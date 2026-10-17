@@ -147,7 +147,7 @@ test("ScriptModel.covers 命中同一条 route 模式", () => {
 
 test("ScriptModel 的上限常量、名字截断与 path 冲突文案", () => {
   assert.equal(ScriptModel.MAX_SCRIPTS, 200);
-  assert.equal(ScriptModel.MAX_BYTES, 128 * 1024);
+  assert.equal(ScriptModel.MAX_BYTES, 10 * 1024 * 1024);
   assert.equal(
     ScriptModel.truncate_name("x".repeat(ScriptModel.NAME_MAX_LENGTH + 5)).length,
     ScriptModel.NAME_MAX_LENGTH,

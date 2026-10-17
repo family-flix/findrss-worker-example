@@ -268,19 +268,20 @@ export class ServiceDiscovery {
     }).filter(Boolean));
   }
 
-  snapshot_task(source_id, public_url = "", { automatic = false } = {}) {
+  snapshot_task(source_id, public_url = "", { automatic = false, force = false } = {}) {
     const source = this.repo.discovery.find(source_id);
     if (!source) throw do_error("discovery source not found", 404);
     if (source.require_token && !SourceAddressModel(source.feed_url).is_route()) throw do_error("外部私密源的快照由上游管理", 400);
     if (!this.load_snapshot) throw do_error("snapshot service is unavailable", 503);
-    return this.background_tasks.start("discovery:" + source_id, {
+    return this.background_tasks.start("discovery:" + source_id + (force ? ":" + crypto.randomUUID() : ""), {
       kind: "snapshot", title: "刷新快照：" + source.title, target: source.feed_url,
-    }, signal => this.refresh_discovery_snapshot(source_id, public_url, { automatic, signal }));
+    }, signal => this.refresh_discovery_snapshot(source_id, public_url, { automatic, signal, force }));
   }
 
-  async refresh_discovery_snapshot(source_id, public_url = "", { automatic = false, signal } = {}) {
-    if (this.background_tasks && !signal) return this.snapshot_task(source_id, public_url, { automatic }).promise;
+  async refresh_discovery_snapshot(source_id, public_url = "", { automatic = false, signal, force = false } = {}) {
+    if (this.background_tasks && !signal) return this.snapshot_task(source_id, public_url, { automatic, force }).promise;
     signal?.throwIfAborted();
+    if (force) this.snapshot_pending.delete(source_id);
     if (this.snapshot_pending.has(source_id)) return this.snapshot_pending.get(source_id);
     const source = this.repo.discovery.find(source_id);
     if (!source) throw do_error("discovery source not found", 404);
@@ -298,7 +299,7 @@ export class ServiceDiscovery {
         signal?.throwIfAborted();
         // 抓取期间编辑 / 删除源时，不能把旧地址的内容重新发布到新卡片。
         const current = this.repo.discovery.find(source_id);
-        if (current?.feed_url === source.feed_url && Boolean(current.require_token) === Boolean(source.require_token)) {
+        if (this.snapshot_pending.get(source_id) === pending && current?.feed_url === source.feed_url && Boolean(current.require_token) === Boolean(source.require_token)) {
           this.repo.discovery.snapshot_save(source_id, source.feed_url, source.require_token ? [] : articles, Date.now(), "", fingerprint);
           const policy = snapshot_policy(current, this.snapshot_settings());
           if (policy.mode === "adaptive") {
@@ -313,9 +314,13 @@ export class ServiceDiscovery {
         }
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
-        this.repo.discovery.snapshot_save(source_id, source.feed_url, [], 0, String(error.message || "快照更新失败").slice(0, 240));
+        if (this.snapshot_pending.get(source_id) === pending)
+          this.repo.discovery.snapshot_save(source_id, source.feed_url, [], 0, String(error.message || "快照更新失败").slice(0, 240));
         if (source.require_token && !automatic) throw error;
-      } finally { this.snapshot_pending.delete(source_id); await this.schedule_alarm?.(); }
+      } finally {
+        if (this.snapshot_pending.get(source_id) === pending) this.snapshot_pending.delete(source_id);
+        await this.schedule_alarm?.();
+      }
       signal?.throwIfAborted();
       if (!source.require_token) await this.publish_catalog();
       const latest = this.repo.discovery.snapshot_get(source_id) || {};
@@ -410,7 +415,7 @@ export class ServiceDiscovery {
         const selected = RssRouteSelectionModel((this.repo.scripts.list() || []).filter(row => ScriptModel.fromRow(row).is_servable()), address.route_pathname).best();
         try {
           if (!selected) throw do_error("订阅源路由已失效", 404);
-          // 新公开源会改变 Cookie 授权范围，复用前仍需按保存后的目录校验。
+          // 复用前仍验证脚本版本和授权，防止预览后修改源码或撤销权限。
           await this.check_cookie_permissions?.(selected.row.route);
         } catch (error) { permission_error = String(error.message || "Cookie 权限校验失败").slice(0, 240); }
         const url = new URL(source.feed_url.replace("{{hostname}}", "https://template.invalid"));

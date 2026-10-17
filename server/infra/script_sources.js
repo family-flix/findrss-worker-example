@@ -327,5 +327,6 @@ const __metadata = __entries.map((entry, route_index) => {
 const __scriptType = typeof kind !== "undefined" ? kind : typeof script_type === "undefined" ? ${JSON.stringify(default_type)} : script_type;
 if (__scriptType !== "hot" && __scriptType !== "rss") throw new Error("kind/script_type 必须是 hot 或 rss");
 globalThis.__routeMetadataJSON = JSON.stringify({ ...__metadata[0], kind: __scriptType, script_type: __scriptType, routes: __metadata, permissions: typeof permissions === "undefined" ? {} : permissions,
+  ...(typeof version === "undefined" ? {} : { version }),
   ...(typeof config_schema === "undefined" ? {} : { config_schema }) });`;
 }

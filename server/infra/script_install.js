@@ -22,7 +22,7 @@ export async function fetch_install_script(input, fetch_impl = fetch) {
     }
     if (Number(response.headers.get("Content-Length")) > MAX_SCRIPT_BYTES) {
       await response.body?.cancel();
-      throw new Error("脚本超过 128KB 限制");
+      throw new Error("脚本超过 10MB 限制");
     }
     const reader = response.body?.getReader();
     if (!reader) throw new Error("下载的脚本内容为空");
@@ -33,7 +33,7 @@ export async function fetch_install_script(input, fetch_impl = fetch) {
         const { done, value } = await reader.read();
         if (done) break;
         size += value.byteLength;
-        if (size > MAX_SCRIPT_BYTES) throw new Error("脚本超过 128KB 限制");
+        if (size > MAX_SCRIPT_BYTES) throw new Error("脚本超过 10MB 限制");
         script += decoder.decode(value, { stream: true });
       }
       script += decoder.decode();

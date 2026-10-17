@@ -64,7 +64,7 @@ export const MAX_DISCOVERY_SOURCES = 1000;
 /** 详情页 `/s/<id>` 的「同类订阅源」条数。是内部链接网，不是内容列表，不需要更多。 */
 export const DISCOVERY_RELATED_LIMIT = 12;
 export const MAX_SCRIPTS = 200;
-export const MAX_SCRIPT_BYTES = 128 * 1024;
+export const MAX_SCRIPT_BYTES = 10 * 1024 * 1024;
 export const MAX_RSS_ROUTE_PATH_BYTES = 512;
 export const SCRIPT_MODULE_ROUTE_EXPORT = /\bexport\s+const\s+routes?\s*=/;
 export const SCRIPT_FETCH_TIMEOUT_MS = 10000;

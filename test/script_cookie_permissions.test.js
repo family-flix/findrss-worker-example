@@ -99,8 +99,11 @@ test("管理员确认精确源码版本；发布及缓存命中均验证授权�
   let info;
   await assert.rejects(service.update_script(edit({ status: "published", version: "1.0.0" }), id), error => { info = error.details.cookie_permissions; return error.status === 409 && !!info; });
   await assert.rejects(service.approve_cookie_grant(edit({ ...info, script: script + "\n", confirmed: true })), error => error.status === 409);
+  await assert.rejects(service.approve_cookie_grant(edit({ ...info, visibility: { ...info.visibility, routes: [] }, script, confirmed: true })), error => error.status === 409);
   assert.equal(info.version, "1.0.0");
-  let approved = await service.approve_cookie_grant(edit({ ...info, script, confirmed: true }));
+  assert.equal(info.visibility.public_sources, undefined);
+  let approved = await service.approve_cookie_grant(edit({ ...info, visibility: { ...info.visibility, public_sources: ["/cookie-test"] }, script, confirmed: true }));
+  assert.equal(JSON.parse(grants.get(approved.cookie_grant_id).permissions_json).visibility.public_sources, undefined);
   await service.update_script(edit({ status: "published", version: "1.0.0", cookie_grant_id: approved.cookie_grant_id }), id);
   await assert.rejects(service.cookie_access(script, { ...JSON.parse(rows[0].metadata_json) }, "other-script", approved.cookie_grant_id), error => error.status === 409);
   let next_info;
@@ -115,6 +118,23 @@ test("管理员确认精确源码版本；发布及缓存命中均验证授权�
   await service.update_script(edit({ status: "published", version: "1.0.1", cookie_grant_id: next_grant.cookie_grant_id }), id);
   await assert.rejects(service.cookie_access(script, JSON.parse(rows[0].metadata_json), id, approved.cookie_grant_id), error => error.status === 409);
   approved = next_grant;
+  const draft_source = script + "\n// 尚未发布的新代码";
+  const with_draft = (await service.update_script(edit({ script: draft_source, status: "draft", version: "1.0.2",
+    cookie_grant_id: "unapproved-draft-grant" }), id)).script;
+  assert.equal(with_draft.cookie_grant_id, approved.cookie_grant_id);
+  assert.equal(with_draft.draft.cookie_grant_id, "unapproved-draft-grant");
+  assert.equal(with_draft.script, script);
+  assert.equal((await service.check_cookie_permissions(id)).cookie_authorization.status, "active");
+  // 升级前保存的授权可能仍包含旧公开源列表；无需迁移或重新确认。
+  const grant = grants.get(approved.cookie_grant_id);
+  const legacy_permissions = JSON.parse(grant.permissions_json);
+  legacy_permissions.visibility.public_sources = ["/cookie-test/old"];
+  grant.permissions_json = JSON.stringify(legacy_permissions);
+  const metadata = JSON.parse(rows[0].metadata_json);
+  await assert.rejects(service.cookie_access(script, { ...metadata,
+    permissions: { cookies: [{ ...permissions.cookies[0], names: ["OTHER"] }] } }, id, approved.cookie_grant_id), error => error.status === 409);
+  await assert.rejects(service.cookie_access(script, { ...metadata,
+    routes: metadata.routes.map(entry => ({ ...entry, public: true })) }, id, approved.cookie_grant_id), error => error.status === 409);
   const original_fetch = globalThis.fetch;
   globalThis.fetch = async () => new Response("ok");
   const serve = () => route(new Request("https://internal/_public/feed/rss/cookie-test", {
@@ -132,10 +152,8 @@ test("管理员确认精确源码版本；发布及缓存命中均验证授权�
     public_sources = [{ id: "source", feed_url: "{{hostname}}/rss/cookie-test", enabled: 1, require_token: 0 }];
     const listed = (await service.list_scripts()).scripts[0];
     assert.equal(listed.cookie_grant_id, approved.cookie_grant_id);
-    assert.equal(listed.cookie_authorization.status, "required", "存在授权 ID 不代表当前公开范围已获授权");
-    const visibility_failure = await serve();
-    assert.equal(visibility_failure.status, 409);
-    assert.equal((await visibility_failure.json()).code, "SCRIPT_COOKIE_PERMISSION_REQUIRED");
+    assert.equal(listed.cookie_authorization.status, "active", "新增公开源不影响已有 Cookie 授权");
+    assert.equal((await serve()).status, 200);
     let snapshot = {};
     Object.assign(repo.discovery, {
       find: id => public_sources.find(source => source.id === id), snapshot_attempt() {}, snapshot_get: () => snapshot,
@@ -144,21 +162,18 @@ test("管理员确认精确源码版本；发布及缓存命中均验证授权�
     const discovery = new ServiceDiscovery({ repo, load_snapshot: async () => {
       await generate(); return [{ title: "示例文章" }];
     } });
-    const failed_snapshot = await discovery.refresh_discovery_snapshot("source");
-    assert.match(failed_snapshot.snapshot.error, /Cookie 权限/);
     const challenge = await route(new Request("https://internal/_admin/scripts/" + id + "/cookie-permissions", { method: "POST" }), { scripts: service });
-    assert.equal(challenge.status, 409);
-    const confirmation = (await challenge.json()).cookie_permissions;
-    assert.equal(confirmation.version, "1.0.1");
-    assert.deepEqual(confirmation.visibility.public_sources, ["/cookie-test"]);
-    approved = await service.approve_cookie_grant(edit({ ...confirmation, script, confirmed: true }));
-    assert.equal(JSON.parse(rows[0].metadata_json).version, "1.0.1", "重新确认不需要升级或发布版本");
+    assert.equal(challenge.status, 200);
+    assert.equal((await challenge.json()).cookie_authorization.status, "active");
     assert.equal((await service.list_scripts()).scripts[0].cookie_authorization.status, "active");
     assert.equal((await service.check_cookie_permissions(id)).cookie_authorization.status, "active");
     const refreshed_snapshot = await discovery.refresh_discovery_snapshot("source");
     assert.equal(refreshed_snapshot.snapshot.error, "");
     assert.ok(refreshed_snapshot.snapshot.saved_at > 0);
     assert.equal(refreshed_snapshot.snapshot.articles[0].title, "示例文章");
+    public_sources = [];
+    assert.equal((await service.check_cookie_permissions(id)).cookie_authorization.status, "active", "删除或改为私密也不影响授权");
+    assert.equal(JSON.parse(rows[0].metadata_json).cookie_grant_id, approved.cookie_grant_id);
     grants.delete(approved.cookie_grant_id);
     assert.equal((await serve()).status, 409); // 即便已有缓存也不能绕过撤销。
     await service.revoke_cookie_grant(id);

@@ -37,6 +37,7 @@ function parse_metadata_json(value) {
 export function ScriptModel(row) {
   const source = row ?? {};
   const metadata = parse_metadata_json(source.metadata_json);
+  const draft = metadata.draft && (typeof metadata.draft.script === "string" || metadata.draft.source_ref) ? metadata.draft : null;
   const state = Object.freeze({
     id: String(source.route || ""),
     path: String(metadata.path || source.path || ""),
@@ -71,6 +72,16 @@ export function ScriptModel(row) {
     status: metadata.status === "draft" ? "draft" : "published",
     kind: script_type(source.script, metadata.kind ?? metadata.script_type),
     script: String(source.script || ""),
+    draft: draft ? Object.freeze({
+      script: String(draft.script || ""),
+      version: String(draft.version || ""),
+      kind: script_type(draft.script, draft.kind),
+      enabled: draft.enabled === undefined ? Number(source.enabled) === 1 : draft.enabled === true,
+      debug: draft.debug === true,
+      cookie_grant_id: String(draft.cookie_grant_id || ""),
+      updated_at: Number(draft.updated_at || 0),
+      ...(draft.source_ref ? { source_ref: draft.source_ref } : {}),
+    }) : null,
     enabled: Number(source.enabled) === 1,
     created_at: Number(source.created_at || 0),
     updated_at: Number(source.updated_at || 0),
@@ -114,10 +125,14 @@ export function ScriptModel(row) {
       published_version: state.published_version,
       published_script: state.published_script,
       script_hash: state.script_hash,
+      ...(metadata.source_ref ? { script_bytes: metadata.source_ref.bytes, source_loaded: source.source_loaded === true || source.script !== "" } : {}),
+      ...(metadata.current_release_id ? { current_release_id: metadata.current_release_id,
+        max_published_version: metadata.max_published_version || state.published_version } : {}),
       status: state.status,
       kind: state.kind,
       script_type: state.kind,
       script: state.script,
+      ...(state.draft ? { draft: { ...state.draft } } : {}),
       enabled: state.enabled,
       created_at: state.created_at,
       updated_at: state.updated_at,

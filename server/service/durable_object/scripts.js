@@ -14,6 +14,7 @@ import { RssRouteSelectionModel } from "../../domain/rss_route_selection.js";
 import { SourceAddressModel } from "../../domain/source_address.js";
 import { ScriptCookiePermissionsModel } from "../../domain/script_cookie_permissions.js";
 import { ScriptCookieAccess } from "../../infra/script_cookie_access.js";
+import { list_pagination, pagination_value } from "../../lib/list_pagination.js";
 import { ScriptPreviewAssets } from "../../infra/script_preview_assets.js";
 import { image_proxy_descriptor } from "../../lib/image_proxy.js";
 import { script_output } from "../../lib/script_output.js";
@@ -22,6 +23,7 @@ import { LogThrottle } from "../../infra/log_throttle.js";
 import { ScriptInvokeError, compile_script_module, execute_script, script_failure_fields } from "../../infra/script_sandbox.js";
 import { script_config_value } from "../../lib/script_config.js";
 import { fetch_install_script } from "../../infra/script_install.js";
+import { ScriptSourceStore } from "../../infra/script_source_store.js";
 import { rss_route_cache_key } from "../../infra/rss_cache.js";
 import {
   COALESCE_KEY_HEADER,
@@ -38,6 +40,23 @@ import { valid_identifier } from "../../lib/identifiers.js";
 import { redact_log_value } from "../../lib/log_redact.js";
 import { DurableObjectError, do_error, do_result } from "./error.js";
 import { record_script_log } from "./logs.js";
+
+/** 兼容旧授权，公开订阅源目录不再参与权限范围校验。 */
+function cookie_visibility_without_sources(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const { public_sources, ...visibility } = value;
+  return visibility;
+}
+
+function cookie_grant_permissions_json(value) {
+  try {
+    const payload = JSON.parse(value);
+    payload.visibility = cookie_visibility_without_sources(payload.visibility);
+    return JSON.stringify(payload);
+  } catch {
+    return "";
+  }
+}
 
 function normalize_rss_cookies(cookies) {
   if (cookies.length > 5000) throw do_error("cookies must contain at most 5000 items", 400);
@@ -74,6 +93,7 @@ export class ServiceScript {
     } catch { this.public_origin = ""; }
     this.repo = repo;
     this.ports = ports;
+    this.source_store = new ScriptSourceStore(ports.object_store);
     /** 兄弟服务注册表（serve_rss_route 经 tasks.invoke 下发设备调用）。 */
     this.app = app;
     /**
@@ -144,9 +164,9 @@ export class ServiceScript {
    * 更新路由索引和普通缓存，保留上次成功生成的 XML。
    * @returns {void}
    */
-  invalidate_routes() {
+  invalidate_routes(cancel_refreshes = false) {
     this.enabled_routes = null;
-    this.ports.route_cache.invalidate_all();
+    this.ports.route_cache.invalidate_all(cancel_refreshes);
     this.ports.schedule_alarm?.().catch(error => console.warn("RSS snapshot schedule failed", error));
   }
 
@@ -191,26 +211,24 @@ export class ServiceScript {
 
   cookie_visibility(metadata) {
     const routes = (metadata.routes || [metadata]).map(entry => ({ path: entry.path, public: entry.public === true })).sort((a, b) => a.path.localeCompare(b.path));
-    const public_sources = [...new Set((this.repo.discovery?.list_public_routes() || []).map(row => SourceAddressModel(row.feed_url).route_pathname)
-      .filter(path => path && routes.some(entry => RssRoutePatternModel.fromValue(entry.path)?.match(path))))].sort();
-    return { routes, public_sources, subscribers: "持有效访问 token 的订阅者" };
+    return { routes, subscribers: "持有效访问 token 的订阅者" };
   }
 
-  async cookie_access(script, metadata, script_id = "", grant_id = "", interactive = false) {
+  async cookie_access(script, metadata, script_id = "", grant_id = "", interactive = false, stored_hash = "") {
     const permissions = ScriptCookiePermissionsModel(metadata.permissions || {}).toValue();
     if (!permissions.cookies.length) return null;
-    const script_hash = await sha256_hex(script);
+    const script_hash = stored_hash || await sha256_hex(script);
     const visibility = this.cookie_visibility(metadata);
     const version = String(metadata.version || "");
     const permissions_json = JSON.stringify({ permissions, visibility, ...(version ? { version } : {}) });
     const assert_grant = () => {
       const grant = this.repo.rss_cookie_grants.find(grant_id);
-      if (!grant || grant.script_hash !== script_hash || grant.permissions_json !== permissions_json || JSON.stringify(this.cookie_visibility(metadata)) !== JSON.stringify(visibility)
+      if (!grant || grant.script_hash !== script_hash || cookie_grant_permissions_json(grant.permissions_json) !== permissions_json || JSON.stringify(this.cookie_visibility(metadata)) !== JSON.stringify(visibility)
           || grant.script_id !== script_id || (!script_id && grant.created_at < Date.now() - 900000)) {
         throw do_error("此脚本版本需要管理员确认 Cookie 权限", 409, interactive ? {
           code: "SCRIPT_COOKIE_PERMISSION_REQUIRED",
           cookie_permissions: { script_id, script_hash, version, permissions, visibility,
-            source: "管理员共享 Cookie 库", audience: "脚本输出可被订阅者读取；公开路由可被匿名访问。请仅输出允许分享的内容。" },
+            source: "管理员共享 Cookie 库", audience: "脚本输出可被订阅者读取；公开订阅源和公开路由可被匿名访问。新增公开订阅源不需要重新授权。请仅输出允许分享的内容。" },
         } : { code: "SCRIPT_COOKIE_PERMISSION_REQUIRED" });
       }
     };
@@ -220,7 +238,7 @@ export class ServiceScript {
 
   async approve_cookie_grant(request) {
     const text = await request.text();
-    if (new TextEncoder().encode(text).byteLength > ScriptModel.MAX_BYTES + 32768) throw do_error("request body is too large", 413);
+    if (new TextEncoder().encode(text).byteLength > ScriptModel.MAX_BYTES * 6 + 32768) throw do_error("request body is too large", 413);
     let body;
     try { body = JSON.parse(text); } catch { throw do_error("invalid JSON", 400); }
     if (!body || typeof body.script !== "string" || body.confirmed !== true) throw do_error("必须明确确认 Cookie 权限", 400);
@@ -234,11 +252,12 @@ export class ServiceScript {
     const version = parsed_version.model.version;
     const script_hash = await sha256_hex(body.script);
     const visibility = this.cookie_visibility(compiled.metadata);
-    if (!permissions.cookies.length || script_hash !== body.script_hash || JSON.stringify(permissions) !== JSON.stringify(body.permissions) || JSON.stringify(visibility) !== JSON.stringify(body.visibility)) throw do_error("脚本或权限已变化，请重新确认", 409);
+    if (!permissions.cookies.length || script_hash !== body.script_hash || JSON.stringify(permissions) !== JSON.stringify(body.permissions) || JSON.stringify(visibility) !== JSON.stringify(cookie_visibility_without_sources(body.visibility))) throw do_error("脚本或权限已变化，请重新确认", 409);
     const id = crypto.randomUUID();
     this.repo.rss_cookie_grants.insert({ id, script_id, script_hash, permissions_json: JSON.stringify({ permissions, visibility, ...(version ? { version } : {}) }), created_at: Date.now() });
     const current = script_id ? this.repo.scripts.find(script_id) : null;
-    if (current?.script === body.script && ScriptModel.fromRow(current).version === version) {
+    if (current && (current.script === body.script || JSON.parse(current.metadata_json).source_ref?.hash === script_hash)
+        && ScriptModel.fromRow(current).version === version) {
       const metadata = JSON.parse(current.metadata_json);
       metadata.permissions = permissions;
       metadata.cookie_grant_id = id;
@@ -263,12 +282,30 @@ export class ServiceScript {
   async list_scripts(url) {
     const kind = url?.searchParams.get("kind");
     if (kind !== undefined && kind !== null && !ScriptModel.TYPES.includes(kind)) throw do_error("kind must be hot or rss", 400);
-    const rows = this.repo.scripts.list().filter(row => !kind || ScriptModel.fromRow(row).kind === kind);
-    return { scripts: await Promise.all(rows.map(async row => {
-      const script = ScriptModel.fromRow(row).toValue();
+    const status = url?.searchParams.get("status") || "all";
+    if (!["all", "enabled", "disabled", "draft", "published"].includes(status)) throw do_error("invalid status", 400);
+    const query = (url?.searchParams.get("q") || "").trim().slice(0, 100).toLowerCase();
+    const script_id = url?.searchParams.get("id") || "";
+    // 按领域模型归一旧脚本类型和多路由，筛选后只校验并回传当前页的授权与源码。
+    let rows = this.repo.scripts.list().filter(row => {
+      const script = ScriptModel.fromRow(row);
+      if (script_id && script.id !== script_id) return false;
+      if (kind && script.kind !== kind) return false;
+      if (status === "enabled" && !script.enabled || status === "disabled" && script.enabled) return false;
+      if (["draft", "published"].includes(status) && script.status !== status) return false;
+      return !query || [script.id, ...script.routes.flatMap(entry => [entry.name || script.name, entry.path, entry.url, entry.description])]
+        .join("\n").toLowerCase().includes(query);
+    });
+    const page = list_pagination(url);
+    const pagination = page ? pagination_value(page, rows.length) : {};
+    if (page) rows = rows.slice(page.offset, page.offset + page.limit);
+    return { ...pagination, scripts: await Promise.all(rows.map(async row => {
+      const include_source = script_id || url?.searchParams.get("include_source") === "1";
+      const script = ScriptModel.fromRow(include_source ? await this.source_store.hydrate(row) : row).toValue();
+      if (!include_source && JSON.parse(row.metadata_json || "{}").source_ref) script.source_loaded = false;
       try {
         const metadata = JSON.parse(String(row.metadata_json || "{}"));
-        const access = await this.cookie_access(script.script, metadata, script.id, script.cookie_grant_id);
+        const access = await this.cookie_access(row.script, metadata, script.id, script.cookie_grant_id, false, metadata.source_ref?.hash);
         script.cookie_authorization = { status: access ? "active" : "none", message: "" };
       } catch (error) {
         script.cookie_authorization = { status: "required", message: error.error || "Cookie 授权信息无效，请重新确认" };
@@ -282,7 +319,7 @@ export class ServiceScript {
     if (!row) throw do_error("script not found", 404);
     let metadata;
     try { metadata = JSON.parse(row.metadata_json); } catch { throw do_error("脚本授权元数据无效，请编辑脚本后保存", 400); }
-    const access = await this.cookie_access(row.script, metadata, script_id, metadata.cookie_grant_id || "", true);
+    const access = await this.cookie_access(row.script, metadata, script_id, metadata.cookie_grant_id || "", true, metadata.source_ref?.hash);
     return { cookie_authorization: { status: access ? "active" : "none", message: "" } };
   }
 
@@ -293,10 +330,168 @@ export class ServiceScript {
     const parsed = ScriptVersionModel.parse(body.version === undefined ? publishing ? "" : previous.version : body.version, { required: publishing });
     if (!parsed.ok) throw do_error(parsed.error.message, parsed.error.status);
     const version = parsed.model.version;
-    const published_version = previous.published_version || "";
+    const published_version = JSON.parse(existing?.metadata_json || "{}").max_published_version || previous.published_version || "";
     if (publishing && !parsed.model.is_after(published_version)) throw do_error("版本号必须高于上次正式版本 " + published_version, 409);
-    return { version, script_hash: await sha256_hex(script), published_version: publishing ? version : published_version,
+    return { version, script_hash: await sha256_hex(script), published_version: publishing ? version : previous.published_version || "",
+      ...(existing ? { max_published_version: publishing ? version : published_version } : {}),
       published_script: publishing ? script : previous.published_script ?? null };
+  }
+
+  assert_unchanged(row) {
+    const current = this.repo.scripts.find_config(row.route);
+    if (!current || current.script !== row.script || current.metadata_json !== row.metadata_json || current.enabled !== row.enabled)
+      throw do_error("脚本已更新，请重新打开后发布或保存", 409);
+  }
+
+  async pack_script(row) {
+    try { return await this.source_store.pack(row); }
+    catch (error) { throw do_error(error.message, error.status || 503); }
+  }
+
+  record_release(row, action = "publish", from_id = "") {
+    if (!this.repo.script_releases) return row;
+    const metadata = JSON.parse(row.metadata_json);
+    const version = String(metadata.version || "");
+    const previous = this.repo.script_releases.find_version(row.route, version);
+    if (previous) {
+      if (previous.script_hash !== metadata.script_hash) throw do_error("此版本号已用于其他源码", 409);
+      metadata.current_release_id = previous.id;
+    } else {
+      const id = crypto.randomUUID();
+      const release_metadata = { ...metadata };
+      delete release_metadata.draft;
+      delete release_metadata.published_script;
+      delete release_metadata.published_source_ref;
+      this.repo.script_releases.insert({ id, script_id: row.route, version, script_hash: metadata.script_hash,
+        bytes: metadata.source_ref?.bytes ?? new TextEncoder().encode(row.script).byteLength,
+        script: row.script, metadata_json: JSON.stringify(release_metadata), created_at: row.updated_at });
+      metadata.current_release_id = id;
+    }
+    metadata.max_published_version = metadata.max_published_version || metadata.published_version || version;
+    metadata.activation_id = crypto.randomUUID();
+    this.repo.script_releases.event({ script_id: row.route, action, from_id, to_id: metadata.current_release_id, created_at: row.updated_at });
+    return { ...row, metadata_json: JSON.stringify(metadata) };
+  }
+
+  async migrate_script_storage(limit = 4) {
+    if (!this.source_store.available) return;
+    let count = 0;
+    this.migration_pending = false;
+    for (const original of this.repo.scripts.list()) {
+      const metadata = JSON.parse(original.metadata_json || "{}");
+      if (metadata.source_ref && (metadata.status === "draft" || metadata.current_release_id)) continue;
+      if (count++ >= limit) { this.migration_pending = true; break; }
+      const row = await this.pack_script(original);
+      this.save_script(() => {
+        this.assert_unchanged(original);
+        const migrated = metadata.status !== "draft" ? this.record_release(row, "migrate") : row;
+        this.repo.scripts.update(migrated);
+      }, metadata, original.updated_at, false);
+    }
+    this.invalidate_routes();
+  }
+
+  async prune_script_objects() {
+    if (!this.source_store.available || !this.repo.script_releases) return;
+    if ((this.next_source_prune_at || 0) > Date.now()) return;
+    this.next_source_prune_at = Date.now() + 60000;
+    const rows = this.repo.scripts.list();
+    if (!rows.length) return;
+    this.prune_index = (this.prune_index || 0) % rows.length;
+    const script_id = rows[this.prune_index++].route;
+    const referenced = () => {
+      const keys = new Set();
+      const add = metadata => {
+        for (const ref of [metadata.source_ref, metadata.published_source_ref, metadata.draft?.source_ref]) if (ref?.key) keys.add(ref.key);
+      };
+      const current = this.repo.scripts.find(script_id);
+      if (current) add(JSON.parse(current.metadata_json));
+      for (const release of this.repo.script_releases.list(script_id)) add(JSON.parse(this.repo.script_releases.find(script_id, release.id).metadata_json));
+      return keys;
+    };
+    await this.source_store.prune(script_id, referenced);
+  }
+
+  async get_script(script_id) {
+    const row = this.repo.scripts.find(script_id);
+    if (!row) throw do_error("script not found", 404);
+    return { script: ScriptModel.fromRow(await this.source_store.hydrate(row)).toValue() };
+  }
+
+  list_script_versions(script_id) {
+    const row = this.repo.scripts.find(script_id);
+    if (!row) throw do_error("script not found", 404);
+    const metadata = JSON.parse(row.metadata_json);
+    return { versions: (this.repo.script_releases?.list(script_id) || []).map(version => ({ ...version,
+      current: metadata.status !== "draft" && version.id === metadata.current_release_id })),
+      events: this.repo.script_releases?.events(script_id) || [] };
+  }
+
+  async get_script_version(script_id, release_id) {
+    const row = this.repo.script_releases?.find(script_id, release_id);
+    if (!row || !this.repo.scripts.exists(script_id)) throw do_error("script version not found", 404);
+    const hydrated = await this.source_store.hydrate({ ...row, route: script_id });
+    return { version: { ...row, metadata_json: undefined, script: hydrated.script } };
+  }
+
+  async rollback_script(request, script_id) {
+    let body;
+    try { body = await request.json(); } catch { throw do_error("invalid JSON", 400); }
+    if (!body || typeof body.release_id !== "string") throw do_error("请选择需要回退的版本", 400);
+    const original = this.repo.scripts.find_config(script_id);
+    const release = this.repo.script_releases?.find(script_id, body.release_id);
+    if (!original || !release) throw do_error("script version not found", 404);
+    const previous = JSON.parse(original.metadata_json);
+    if (body.expected_release_id !== undefined && body.expected_release_id !== previous.current_release_id)
+      throw do_error("当前版本已变化，请刷新版本历史", 409);
+    const hydrated = await this.source_store.hydrate({ ...release, route: script_id });
+    const compiled = await compile_script_module(hydrated.script);
+    if (compiled.error || !compiled.metadata) throw do_error("历史脚本校验失败：" + compiled.error, 400);
+    const historical = JSON.parse(release.metadata_json);
+    const metadata = { ...compiled.metadata, status: "published", version: release.version,
+      published_version: release.version, max_published_version: previous.max_published_version || previous.published_version,
+      script_hash: release.script_hash, source_ref: historical.source_ref, published_source_ref: historical.source_ref,
+      current_release_id: release.id, activation_id: crypto.randomUUID(), debug: previous.debug === true };
+    try { metadata.config = script_config_value(metadata.config_schema, previous.config || {}); }
+    catch (error) { throw do_error("旧版本配置不兼容：" + error.message, 400); }
+    if (previous.draft) metadata.draft = previous.draft;
+    const grant_id = body.cookie_grant_id || historical.cookie_grant_id || "";
+    const cookie_access = await this.cookie_access(hydrated.script, metadata, script_id, grant_id, true);
+    metadata.cookie_grant_id = grant_id;
+    const now = Date.now();
+    const row = await this.pack_script({ ...original, script: hydrated.script, path: metadata.path,
+      title: ScriptModel.truncate_name(metadata.name), metadata_json: JSON.stringify(metadata), updated_at: now });
+    this.save_script(() => {
+      this.assert_unchanged(original);
+      this.assert_route_paths(metadata, script_id);
+      cookie_access?.assert_grant();
+      this.repo.scripts.update(row);
+      this.repo.script_releases.event({ script_id, action: "rollback", from_id: previous.current_release_id,
+        to_id: release.id, created_at: now });
+    }, metadata, now, true);
+    this.invalidate_routes(true);
+    await this.app.discovery?.publish_catalog();
+    this.queue_snapshot_refresh(metadata);
+    return this.get_script(script_id);
+  }
+
+  queue_snapshot_refresh(metadata) {
+    if (metadata.status !== "published" || !this.source_store.available) return;
+    const sources = this.repo.discovery?.snapshot_schedule?.() || [
+      ...(this.repo.discovery?.list_public_routes?.() || []), ...(this.repo.discovery?.list_private_routes?.() || []),
+    ];
+    const pending = sources.filter(source =>
+      (metadata.routes || [metadata]).some(entry => RssRoutePatternModel.fromValue(entry.path)?.match(SourceAddressModel(source.feed_url).route_pathname)))
+      .map(source => {
+        if (source.id && this.app.discovery?.refresh_discovery_snapshot) return this.app.discovery.refresh_discovery_snapshot(source.id, "", { force: true })
+          .catch(error => console.warn("Script snapshot refresh failed", error.message));
+        const address = SourceAddressModel(source.feed_url);
+        const url = new URL(address.resolve(this.public_origin || "https://example.invalid"));
+        return this.serve_rss_route("rss", address.route_pathname,
+          new Request("https://internal/_admin/feed/rss" + address.route_pathname + url.search), { refresh: true })
+          .catch(error => console.warn("Script snapshot refresh failed", error.message));
+      });
+    if (pending.length) this.ports.wait_until?.(Promise.all(pending));
   }
 
   /**
@@ -305,7 +500,7 @@ export class ServiceScript {
    */
   async create_script(request) {
     const content_length = Number(request.headers.get("Content-Length") ?? "0");
-    if (content_length > ScriptModel.MAX_BYTES + 4096) {
+    if (content_length > ScriptModel.MAX_BYTES * 6 + 4096) {
       throw do_error("request body is too large", 413);
     }
     /** @type {{ script?: unknown, enabled?: unknown, debug?: unknown }} */
@@ -327,8 +522,8 @@ export class ServiceScript {
     if (script.length === 0 && status === "published") {
       throw do_error("脚本内容不能为空", 400);
     }
-    if (script.length > ScriptModel.MAX_BYTES) {
-      throw do_error("脚本超过 128KB 限制", 413);
+    if (new TextEncoder().encode(script).byteLength > ScriptModel.MAX_BYTES) {
+      throw do_error("脚本超过 10MB 限制", 413);
     }
     const compiled = await compile_script_module(script);
     if (status === "published" && (compiled.error !== "" || compiled.metadata === null)) {
@@ -363,12 +558,11 @@ export class ServiceScript {
     }
     if (status === "published") this.assert_route_paths(metadata);
     const grant_id = typeof body.cookie_grant_id === "string" ? body.cookie_grant_id : "";
-    if (status === "published" || grant_id) await this.cookie_access(script, metadata, "", grant_id, true);
+    const cookie_access = status === "published" || grant_id ? await this.cookie_access(script, metadata, "", grant_id, true) : null;
     metadata.cookie_grant_id = grant_id;
     const script_id = crypto.randomUUID();
-    if (grant_id) this.repo.rss_cookie_grants.bind(grant_id, script_id);
     const now = Date.now();
-    this.save_script(() => this.repo.scripts.insert({
+    const packed = await this.pack_script({
       route: script_id,
       title: ScriptModel.truncate_name(metadata.name),
       path,
@@ -377,11 +571,19 @@ export class ServiceScript {
       enabled: body.enabled === false ? 0 : 1,
       created_at: now,
       updated_at: now,
-    }), metadata, now, status === "published");
-    const row = this.repo.scripts.find(script_id);
-    this.invalidate_routes();
+    });
+    this.save_script(() => {
+      if (this.repo.scripts.count() >= ScriptModel.MAX_SCRIPTS) throw do_error("script limit reached", 409);
+      if (status === "published") this.assert_route_paths(metadata);
+      cookie_access?.assert_grant();
+      const row = status === "published" ? this.record_release(packed) : packed;
+      this.repo.scripts.insert(row);
+      if (grant_id) this.repo.rss_cookie_grants.bind(grant_id, script_id);
+    }, metadata, now, status === "published");
+    this.invalidate_routes(status === "published");
     await this.app.discovery?.publish_catalog();
-    return do_result({ script: ScriptModel.fromRow(row).toValue() }, 201);
+    this.queue_snapshot_refresh(metadata);
+    return do_result(await this.get_script(script_id), 201);
   }
 
   /**
@@ -391,7 +593,7 @@ export class ServiceScript {
    */
   async update_script(request, script_id) {
     const content_length = Number(request.headers.get("Content-Length") ?? "0");
-    if (content_length > ScriptModel.MAX_BYTES + 4096) {
+    if (content_length > ScriptModel.MAX_BYTES * 6 + 4096) {
       throw do_error("request body is too large", 413);
     }
     /** @type {{ script?: unknown, enabled?: unknown, debug?: unknown }} */
@@ -412,14 +614,26 @@ export class ServiceScript {
     if (stored === undefined) {
       throw do_error("script not found", 404);
     }
-    const existing = { ...stored };
-    const status = body.status ?? ScriptModel.fromRow(existing).status;
+    const stored_snapshot = { ...stored };
+    const existing = await this.source_store.hydrate(stored_snapshot);
+    const previous = ScriptModel.fromRow(existing).toValue();
+    // A source-bearing draft save edits a separate working copy. Status-only
+    // requests remain the explicit action that withdraws the published route.
+    const saving_published_draft = previous.status === "published" && body.status === "draft" && body.script !== undefined;
+    const withdrawing = previous.status === "published" && body.status === "draft" && body.script === undefined;
+    if (withdrawing && previous.draft && body.overwrite_draft !== true) {
+      throw do_error("存在草稿版本，退回草稿将用当前正式版本覆盖草稿，请确认后重试", 409);
+    }
+    if (previous.draft && (saving_published_draft || body.status === "published")) {
+      body = { ...previous.draft, ...body };
+    }
+    const status = body.status ?? previous.status;
     const script = body.script === undefined ? existing.script : String(body.script);
     if (script.length === 0 && status === "published") {
       throw do_error("脚本内容不能为空", 400);
     }
-    if (script.length > ScriptModel.MAX_BYTES) {
-      throw do_error("脚本超过 128KB 限制", 413);
+    if (new TextEncoder().encode(script).byteLength > ScriptModel.MAX_BYTES) {
+      throw do_error("脚本超过 10MB 限制", 413);
     }
     let metadata;
     if (body.script === undefined && body.status !== "published") {
@@ -465,14 +679,34 @@ export class ServiceScript {
     if (status === "published") this.assert_route_paths(metadata, script_id);
     const previous_metadata = ScriptModel.fromRow(existing).toValue();
     const grant_id = typeof body.cookie_grant_id === "string" ? body.cookie_grant_id : previous_metadata.cookie_grant_id || "";
-    if (status === "published") await this.cookie_access(script, metadata, script_id, grant_id, true);
+    const cookie_access = status === "published" ? await this.cookie_access(script, metadata, script_id, grant_id, true) : null;
     metadata.cookie_grant_id = grant_id;
-    const current = this.repo.scripts.find_config(script_id);
-    if (!current || current.script !== existing.script || current.metadata_json !== existing.metadata_json || current.enabled !== existing.enabled) {
-      throw do_error("脚本已更新，请重新打开后发布或保存", 409);
-    }
+    this.assert_unchanged(stored_snapshot);
     const now = Date.now();
-    this.save_script(() => this.repo.scripts.update({
+    if (saving_published_draft) {
+      const published_metadata = JSON.parse(existing.metadata_json);
+      published_metadata.published_script = previous.published_script;
+      published_metadata.published_version = previous.published_version;
+      published_metadata.draft = {
+        script, version: metadata.version, kind: metadata.kind,
+        enabled: body.enabled === undefined ? previous.enabled : body.enabled === true,
+        debug: metadata.debug, cookie_grant_id: grant_id, updated_at: now,
+      };
+      const packed = await this.pack_script({
+        route: script_id, title: ScriptModel.truncate_name(previous.name), path: existing.path,
+        metadata_json: JSON.stringify(published_metadata), script: existing.script,
+        enabled: Number(existing.enabled), updated_at: now,
+      });
+      this.save_script(() => { this.assert_unchanged(stored_snapshot); this.repo.scripts.update(packed); }, published_metadata, now, false);
+      return this.get_script(script_id);
+    }
+    const publishing = status === "published" && (body.status === "published" || script !== existing.script
+      || metadata.published_version !== previous_metadata.published_version);
+    if (publishing || status === "draft") delete metadata.draft;
+    metadata.max_published_version = metadata.max_published_version || JSON.parse(existing.metadata_json).max_published_version;
+    metadata.current_release_id = JSON.parse(existing.metadata_json).current_release_id;
+    metadata.activation_id = JSON.parse(existing.metadata_json).activation_id;
+    const packed = await this.pack_script({
       route: script_id,
       title: ScriptModel.truncate_name(metadata.name),
       path,
@@ -480,12 +714,18 @@ export class ServiceScript {
       script,
       enabled: body.enabled === undefined ? Number(existing.enabled) : body.enabled === true ? 1 : 0,
       updated_at: now,
-    }), metadata, now, status === "published" && (body.status === "published" || script !== existing.script
-      || metadata.published_version !== previous_metadata.published_version));
-    const row = this.repo.scripts.find(script_id);
-    this.invalidate_routes();
+    });
+    this.save_script(() => {
+      this.assert_unchanged(stored_snapshot);
+      if (status === "published") this.assert_route_paths(metadata, script_id);
+      cookie_access?.assert_grant();
+      const row = publishing ? this.record_release(packed, "publish", metadata.current_release_id) : packed;
+      this.repo.scripts.update(row);
+    }, metadata, now, publishing);
+    this.invalidate_routes(publishing || withdrawing);
     await this.app.discovery?.publish_catalog();
-    return { script: ScriptModel.fromRow(row).toValue() }
+    if (publishing) this.queue_snapshot_refresh(metadata);
+    return this.get_script(script_id);
   }
 
   save_script(write, metadata, now, collect) {
@@ -523,6 +763,17 @@ export class ServiceScript {
     }
     this.repo.rss_cookie_grants?.revoke(script_id);
     this.repo.scripts.delete(script_id);
+    this.repo.script_releases?.delete_for_script(script_id);
+    if (this.source_store.available) {
+      const cleanup = async () => {
+        const prefix = `scripts/${script_id}/`;
+        await Promise.allSettled([...this.source_store.writing].filter(([key]) => key.startsWith(prefix)).map(([, task]) => task));
+        if (!this.repo.scripts.exists(script_id)) await this.source_store.prune(script_id, () => new Set(), Date.now() + 1000);
+      };
+      const pending = cleanup().catch(error => console.warn("Deleted script object cleanup failed", error.message));
+      if (this.ports.wait_until) this.ports.wait_until(pending);
+      else await pending;
+    }
     this.repo.script_logs.delete_for_route(script_id);
     this.invalidate_routes();
     await this.app.discovery?.publish_catalog();
@@ -612,7 +863,7 @@ export class ServiceScript {
     try { body = JSON.parse(text); } catch { throw do_error("invalid JSON", 400); }
     if (!body || typeof body.input !== "string" || !body.input.trim()) throw do_error("请输入脚本 URL 或脚本内容", 400);
     let script = body.input, source_url = "";
-    if (new TextEncoder().encode(script).byteLength > ScriptModel.MAX_BYTES) throw do_error("脚本超过 128KB 限制", 413);
+    if (new TextEncoder().encode(script).byteLength > ScriptModel.MAX_BYTES) throw do_error("脚本超过 10MB 限制", 413);
     if (/^[a-z][a-z\d+.-]*:\/\/\S+$/i.test(script.trim())) {
       try { ({ script, source_url } = await fetch_install_script(script.trim())); }
       catch (error) { throw do_error(error.name === "TimeoutError" ? "脚本下载超时，请重试" : error.message, 400); }
@@ -638,7 +889,7 @@ export class ServiceScript {
   }
 
   async debug_script(request) {
-    const max_bytes = ScriptModel.MAX_BYTES + ScriptDebugRequestModel.MAX_URL_CHARS + 4096;
+    const max_bytes = (ScriptModel.MAX_BYTES + ScriptDebugRequestModel.MAX_URL_CHARS) * 6 + 4096;
     if (Number(request.headers.get("Content-Length") || 0) > max_bytes) throw do_error("request body is too large", 413);
     const text = await request.text();
     if (new TextEncoder().encode(text).byteLength > max_bytes) throw do_error("request body is too large", 413);
@@ -764,7 +1015,7 @@ export class ServiceScript {
   /** mock 测试保持独立：不连真实设备，未声明的 invoke 直接抛错。 */
   async test_script(request) {
     const content_length = Number(request.headers.get("Content-Length") ?? "0");
-    if (content_length > ScriptModel.MAX_BYTES + ScriptTestRequestModel.MOCK_MAX_BYTES + 4096) {
+    if (content_length > (ScriptModel.MAX_BYTES + ScriptTestRequestModel.MOCK_MAX_BYTES) * 6 + 4096) {
       throw do_error("request body is too large", 413);
     }
     /** @type {unknown} */
@@ -1045,7 +1296,8 @@ export class ServiceScript {
     let metadata;
     try {
       const root_metadata = JSON.parse(String(selected.row.metadata_json));
-      metadata = { ...selected.metadata, config_schema: root_metadata.config_schema, config: root_metadata.config, routes: root_metadata.routes, permissions: root_metadata.permissions, version: root_metadata.version || "", cookie_grant_id: root_metadata.cookie_grant_id, debug: root_metadata.debug === true };
+      metadata = { ...selected.metadata, config_schema: root_metadata.config_schema, config: root_metadata.config, routes: root_metadata.routes, permissions: root_metadata.permissions, version: root_metadata.version || "", cookie_grant_id: root_metadata.cookie_grant_id, debug: root_metadata.debug === true,
+        source_ref: root_metadata.source_ref, activation_id: root_metadata.activation_id };
       metadata.debug_request = debug_request;
     } catch {
       throw do_error("script metadata is invalid", 500);
@@ -1053,7 +1305,7 @@ export class ServiceScript {
     if (metadata === null || typeof metadata !== "object" || Array.isArray(metadata)) {
       throw do_error("script metadata is invalid", 500);
     }
-    const cookie_access = await this.cookie_access(String(selected.row.script), metadata, String(selected.row.route), metadata.cookie_grant_id || "");
+    const cookie_access = await this.cookie_access(String(selected.row.script), metadata, String(selected.row.route), metadata.cookie_grant_id || "", false, metadata.source_ref?.hash);
     const request_context = {
       public_origin: this.resolve_public_origin(request),
       method: "GET",
@@ -1140,13 +1392,24 @@ export class ServiceScript {
     try {
       const produce = async () => {
         signal?.throwIfAborted();
+        const source = metadata.source_ref ? await this.source_store.read(selected.row.route, metadata.source_ref) : String(selected.row.script);
+        const assert_current = () => {
+          if (metadata.activation_id) {
+            const current = JSON.parse(this.repo.scripts.find_config(selected.row.route)?.metadata_json || "{}");
+            if (current.activation_id !== metadata.activation_id || current.status === "draft")
+              throw do_error("脚本运行版本已切换，请重新刷新", 409);
+          }
+        };
+        assert_current();
         const result = await execute_script(
-          String(selected.row.script),
+          source,
           metadata,
           invoke_impl,
           request_context,
           [], "", cookie_access, signal);
         signal?.throwIfAborted();
+        assert_current();
+        result.assert_current = assert_current;
         cookie_access?.assert_grant();
         if (snapshot) {
           const feed = FeedModel.fromValue(JSON.parse(result.output));

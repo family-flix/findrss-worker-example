@@ -85,7 +85,7 @@ test("正式发布必填三段递增版本，绑定源码哈希，草稿保留�
   await service.update_script(edit({ status: "draft", script: source, version: "" }), id);
   assert.equal((await service.list_scripts()).scripts[0].published_version, "1.10.0");
   await assert.rejects(service.update_script(edit({ status: "published", version: "1.9.9" }), id), error => error.status === 409);
-  assert.equal(rows[0].path, "");
+  assert.equal(rows[0].path, "/publication-test");
   const restored = (await service.update_script(edit({ status: "published", version: "2.0.0" }), id)).script;
   assert.equal(restored.published_version, "2.0.0");
 });
@@ -101,7 +101,9 @@ test("草稿反复保存保留正式源码，重新发布才更新对比基准�
   rows[0].metadata_json = JSON.stringify(metadata);
   for (const script of [source + "\n// 草稿一", "未完成的草稿二"]) {
     const draft = (await service.update_script(edit({ status: "draft", script }), id)).script;
-    assert.equal(draft.script, script);
+    assert.equal(draft.status, "published");
+    assert.equal(draft.script, source);
+    assert.equal(draft.draft.script, script);
     assert.equal(draft.published_script, source);
     assert.equal(JSON.parse(rows[0].metadata_json).published_script, source);
     assert.equal((await service.list_scripts()).scripts[0].published_script, source);
@@ -126,6 +128,89 @@ test("旧脚本无编号时仍可启停，下一次正式发布需指定版本�
   assert.equal((await service.update_script(edit({ enabled: false }), id)).script.version, "");
   await assert.rejects(service.update_script(edit({ status: "published" }), id), error => error.status === 400);
   assert.equal((await service.update_script(edit({ status: "published", version: "1.0.0" }), id)).script.version, "1.0.0");
+});
+
+test("正式脚本的草稿单独持久化，改路由、未完成代码与反复保存均不影响正式执行", async () => {
+  const { service, rows, cache, generate, serve } = setup();
+  let catalog_publishes = 0;
+  service.app.discovery = { publish_catalog: async () => { catalog_publishes++; } };
+  const published = (await service.create_script(edit({ script: source, version: "1.0.0" }))).data.script;
+  const id = published.id;
+  const raw = path => service.serve_rss_route("raw", path, new Request("https://internal/_public/script" + path, {
+    headers: { "X-Api-Access-Token-ID": "test-user" },
+  }));
+  for (const path of ["/publication-test", "/publication-test/extra"]) await generate(path);
+  const generation = cache.generation;
+  const next_source = source.replaceAll("/publication-test", "/next-publication").replaceAll("发布测试", "下一版");
+  for (const script of [next_source, "export const route = {", "", next_source + "\n// 最新草稿"]) {
+    const saved = (await service.update_script(edit({ script, status: "draft", version: "1.0.1", enabled: false, debug: true }), id)).script;
+    assert.equal(saved.status, "published");
+    assert.equal(saved.version, "1.0.0");
+    assert.equal(saved.script_hash, published.script_hash);
+    assert.equal(saved.script, source);
+    assert.equal(saved.enabled, true);
+    assert.equal(saved.debug, false);
+    assert.equal(saved.draft.script, script);
+    assert.equal(saved.draft.version, "1.0.1");
+    assert.equal(saved.draft.enabled, false);
+    assert.equal(saved.draft.debug, true);
+    assert.equal(rows[0].path, "/publication-test");
+    assert.equal(cache.generation, generation);
+    assert.equal(catalog_publishes, 1);
+    assert.equal(rows.length, 1);
+    // Force execution and reload the route index so neither XML nor memory
+    // caches can hide an accidentally overwritten published script.
+    service.enabled_routes = null;
+    for (const path of ["/publication-test", "/publication-test/extra"]) {
+      assert.equal((await raw(path)).raw.title, "发布测试");
+      assert.equal((await serve(path)).status, 200);
+    }
+    await assert.rejects(raw("/next-publication"), { status: 404 });
+    const listed = await service.list_scripts(new URL("https://internal/_admin/scripts?status=published"));
+    assert.equal(listed.scripts[0].draft.script, script);
+    assert.equal((await service.list_scripts(new URL("https://internal/_admin/scripts?status=draft"))).scripts.length, 0);
+  }
+  await assert.rejects(service.create_script(edit({ script: source, version: "1.0.0" })), { status: 409 });
+  // Publishing without resending source uses the persisted working copy.
+  const promoted = (await service.update_script(edit({ status: "published", enabled: true }), id)).script;
+  assert.equal(promoted.script, next_source + "\n// 最新草稿");
+  assert.equal(promoted.version, "1.0.1");
+  assert.equal(promoted.draft, undefined);
+  assert.equal(promoted.published_script, promoted.script);
+  assert.equal((await raw("/next-publication")).raw.title, "下一版");
+  await assert.rejects(raw("/publication-test"), { status: 404 });
+});
+
+test("草稿发布失败保留正式版本与草稿，退回草稿需确认覆盖，确认后以正式版本替换草稿并下线路由", async () => {
+  const { service, rows, generate, serve } = setup();
+  const id = (await service.create_script(edit({ script: source, version: "1.0.0" }))).data.script.id;
+  await generate("/publication-test");
+  const invalid = "export const route = {";
+  await service.update_script(edit({ script: invalid, status: "draft", version: "1.0.1" }), id);
+  const before = { ...rows[0] };
+  await assert.rejects(service.update_script(edit({ status: "published" }), id), { status: 400 });
+  assert.deepEqual(rows[0], before);
+  assert.equal((await serve("/publication-test")).status, 200);
+  await service.update_script(edit({ enabled: false }), id);
+  assert.equal((await serve("/publication-test")).status, 404);
+  await service.update_script(edit({ enabled: true }), id);
+  assert.equal((await service.list_scripts()).scripts[0].draft.script, invalid);
+  const before_withdrawal = { ...rows[0] };
+  for (const overwrite_draft of [undefined, false, "true"]) {
+    await assert.rejects(service.update_script(edit({ status: "draft", overwrite_draft }), id), error =>
+      error.status === 409 && /覆盖草稿/.test(error.error));
+    assert.deepEqual(rows[0], before_withdrawal);
+    assert.equal((await serve("/publication-test")).status, 200);
+  }
+  const withdrawn = (await service.update_script(edit({ status: "draft", overwrite_draft: true }), id)).script;
+  assert.equal(withdrawn.status, "draft");
+  assert.equal(withdrawn.script, source);
+  assert.equal(withdrawn.version, "1.0.0");
+  assert.equal(withdrawn.published_script, source);
+  assert.equal(withdrawn.published_version, "1.0.0");
+  assert.equal(withdrawn.draft, undefined);
+  assert.equal(rows[0].path, "");
+  assert.equal((await serve("/publication-test")).status, 404);
 });
 
 test("并发发布同一版本只有一次成功，不覆盖已经提交的版本", async () => {
@@ -210,7 +295,8 @@ test("脚本类型写入元数据，草稿、发布和状态更新保留类型�
   await service.update_script(edit({ enabled: false }), id);
   assert.equal(JSON.parse(rows[0].metadata_json).script_type, "hot");
   await service.update_script(edit({ script: source, status: "draft" }), id);
-  assert.equal((await service.list_scripts()).scripts[0].script_type, "rss");
+  assert.equal((await service.list_scripts()).scripts[0].script_type, "hot");
+  assert.equal((await service.list_scripts()).scripts[0].draft.kind, "rss");
   const broken = await service.create_script(edit({ script: "export const route = {", status: "draft", script_type: "hot" }));
   assert.equal(broken.data.script.script_type, "hot");
   for (const script_type of [null, "other", true]) {

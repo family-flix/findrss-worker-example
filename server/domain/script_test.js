@@ -5,10 +5,10 @@
 // 纯模块，不依赖 lib/http（校验失败只回数据，不回 Response）。
 // 纯模块，可在 node --test 下直接覆盖。
 
+import { MAX_SCRIPT_BYTES } from "../lib/constants.js";
+
 /** mock ctx 片段上限。 */
 const SCRIPT_MOCK_MAX_BYTES = 64 * 1024;
-/** 与 lib/constants.js 的 MAX_SCRIPT_BYTES 保持一致（保存与测试共用同一上限）。 */
-const MAX_SCRIPT_BYTES = 128 * 1024;
 /** 测试请求里附带 route 的长度上限（scripts.route 是 UUID）。 */
 const MAX_ROUTE_CHARS = 128;
 
@@ -55,8 +55,8 @@ ScriptTestRequestModel.fromBody = (body) => {
   if (source.script.trim() === "") {
     return { ok: false, error: { status: 400, message: "script 不能为空" } };
   }
-  if (source.script.length > MAX_SCRIPT_BYTES) {
-    return { ok: false, error: { status: 400, message: "script 超过 128KB 限制" } };
+  if (new TextEncoder().encode(source.script).byteLength > MAX_SCRIPT_BYTES) {
+    return { ok: false, error: { status: 400, message: "script 超过 10MB 限制" } };
   }
   const raw_mock = source.mock_ctx === undefined ? "" : source.mock_ctx;
   if (typeof raw_mock !== "string") {

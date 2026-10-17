@@ -43,6 +43,7 @@ import { script_classes_source } from "./script_classes.js";
 import { script_util_source } from "./script_util.js";
 import { script_type } from "../lib/script_type.js";
 import { ScriptCookiePermissionsModel } from "../domain/script_cookie_permissions.js";
+import { ScriptVersionModel } from "../domain/script_version.js";
 import { SandboxLanePool } from "./sandbox_lanes.js";
 import { validate_config_schema, script_config_value } from "../lib/script_config.js";
 // Workers 禁止运行时 fetch wasm，必须在构建期以模块形式导入（见仓库 README 的
@@ -102,6 +103,11 @@ ${script_metadata_source(script_type(script))}`,
       const metadata_json = vm.getString(metadata_handle);
       metadata_handle.dispose();
       const metadata = JSON.parse(metadata_json);
+      if (metadata.version !== undefined) {
+        const parsed_version = ScriptVersionModel.parse(metadata.version);
+        if (!parsed_version.ok) throw new Error(parsed_version.error.message);
+        metadata.version = parsed_version.model.version;
+      }
       validate_config_schema(metadata.config_schema);
       metadata.permissions = ScriptCookiePermissionsModel(metadata.permissions).toValue();
       const paths = new Set();

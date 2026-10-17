@@ -150,22 +150,44 @@ test("外部源读取一次即可保存广场快照，地址改变或临时缓�
   assert.equal(fetches, 5);
 });
 
-test("新增公开源改变 Cookie 授权范围时，不发布旧授权下的广场文章或 XML", async t => {
+test("已有 Cookie 授权在新增公开源后继续有效，保存即发布文章和 XML", async t => {
   const f = fixture(t);
   const permissions = { cookies: [{ id: "session", origin: "https://example.com", path_prefix: "/", names: ["SUB"], purpose: "读取登录内容" }] };
   const metadata = { ...JSON.parse(f.row.metadata_json), permissions, cookie_grant_id: "grant" };
   f.row.metadata_json = JSON.stringify(metadata);
   const grant = { script_id: f.row.route, script_hash: await sha256_hex(f.row.script),
-    permissions_json: JSON.stringify({ permissions, visibility: f.app.scripts.cookie_visibility(metadata) }) };
+    permissions_json: JSON.stringify({ permissions, visibility: { ...f.app.scripts.cookie_visibility(metadata), public_sources: [] } }) };
   f.repo.rss_cookie_grants = { find: () => grant };
   const feed_url = "{{hostname}}/rss/preview/1?a=1&b=2";
   const response = await f.preview(feed_url);
   assert.equal(response.status, 200);
   const source = await f.save(feed_url, (await response.json()).preview_id);
+  assert.ok(source.snapshot.saved_at > 0);
+  assert.equal(source.snapshot.error, "");
+  assert.equal(source.snapshot.articles[0].title, "预览文章");
+  assert.equal(source.cache.status, "fresh");
+  assert.equal(f.published.sources[0].snapshot.articles[0].title, "预览文章");
+  assert.equal((await f.app.scripts.check_cookie_permissions(f.row.route)).cookie_authorization.status, "active");
+  assert.match((await f.serve()).body, /预览文章/);
+  assert.equal(f.executions, 1);
+});
+
+test("读取信息后撤销 Cookie 授权，保存仍阻止发布预览文章和 XML", async t => {
+  const f = fixture(t);
+  const permissions = { cookies: [{ id: "session", origin: "https://example.com", path_prefix: "/", names: ["SUB"], purpose: "读取登录内容" }] };
+  const metadata = { ...JSON.parse(f.row.metadata_json), permissions, cookie_grant_id: "grant" };
+  f.row.metadata_json = JSON.stringify(metadata);
+  let grant = { script_id: f.row.route, script_hash: await sha256_hex(f.row.script),
+    permissions_json: JSON.stringify({ permissions, visibility: f.app.scripts.cookie_visibility(metadata) }) };
+  f.repo.rss_cookie_grants = { find: () => grant };
+  const feed_url = "{{hostname}}/rss/preview/1?a=1&b=2";
+  const response = await f.preview(feed_url);
+  assert.equal(response.status, 200);
+  grant = null;
+  const source = await f.save(feed_url, (await response.json()).preview_id);
   assert.equal(source.snapshot.saved_at, 0);
   assert.match(source.snapshot.error, /Cookie 权限/);
   assert.equal(source.cache.status, "empty");
   assert.doesNotMatch(JSON.stringify(f.published), /预览文章|example.com\/article/);
-  assert.equal(f.executions, 1);
   await assert.rejects(f.serve(), { status: 409 });
 });

@@ -41,6 +41,7 @@ import { RepositoryRedemption } from "./repository/redemption.js";
 import { RepositoryRssCookieGrant } from "./repository/rss_cookie_grant.js";
 import { RepositoryRssCookie } from "./repository/rss_cookie.js";
 import { RepositoryScript } from "./repository/script.js";
+import { RepositoryScriptRelease } from "./repository/script_release.js";
 import { RepositoryPlatform } from "./repository/platform.js";
 import { RepositoryTag } from "./repository/tag.js";
 import { RepositoryScriptLog } from "./repository/script_log.js";
@@ -365,6 +366,7 @@ export const route = {
       rss_cookie_grants: new RepositoryRssCookieGrant({ sql: this.ctx.storage.sql }),
       rss_cookies: new RepositoryRssCookie({ sql: this.ctx.storage.sql }),
       scripts: new RepositoryScript({ sql: this.ctx.storage.sql }),
+      script_releases: new RepositoryScriptRelease({ sql: this.ctx.storage.sql }),
       platforms: new RepositoryPlatform({ sql: this.ctx.storage.sql }),
       tags: new RepositoryTag({ sql: this.ctx.storage.sql }),
       script_logs: new RepositoryScriptLog({ sql: this.ctx.storage.sql }),
@@ -384,6 +386,7 @@ export const route = {
       this.repo.tags.import_published(scripts);
     });
     const ports = {
+      object_store: create_api_object_store(env),
       transaction: callback => this.ctx.storage.transactionSync(callback),
       sockets: new DeviceSocketHub(ctx),
       schedule_alarm: () => this.schedule_alarm(),
@@ -426,6 +429,8 @@ export const route = {
       await this.app.device_tokens.import_legacy(env.DEVICE_TOKEN);
       await this.app.cookie_push_settings.import_legacy(cookie_push_uuid, cookie_push_key);
       await seed_default_data({ repo: this.repo, storage: this.ctx.storage, script: apple_script });
+      try { await this.app.scripts.migrate_script_storage(); }
+      catch (error) { this.app.scripts.migration_pending = true; console.warn("Script storage migration failed", error.message); }
     });
     this.app.auth = new ServiceAuth({
       repo: this.repo,
@@ -541,6 +546,11 @@ export const route = {
   /** @returns {Promise<void>} */
   async alarm() {
     const now = Date.now();
+    if (this.app.scripts.migration_pending) {
+      try { await this.app.scripts.migrate_script_storage(); }
+      catch (error) { this.app.scripts.migration_pending = true; console.warn("Script storage migration retry failed", error.message); }
+    }
+    this.ctx.waitUntil(this.app.scripts.prune_script_objects().catch(error => console.warn("Script object cleanup failed", error.message)));
     this.app.devices.close_unauthorized_connections();
     /** @type {CallRow[]} */
     const expired = this.repo.calls.list_expired_leases(now);
@@ -601,7 +611,8 @@ export const route = {
     const now = Date.now();
     const next_statistics = Math.max(now, this.app.statistics.next_snapshot_at());
     const next_token_expiry = this.repo.device_tokens.min_expires_at(now);
-    const desired = Math.min(next_lease ?? Infinity, next_snapshot ?? Infinity, next_feed ?? Infinity, next_statistics, next_token_expiry ?? Infinity, now + MAINTENANCE_MILLISECONDS);
+    const desired = Math.min(next_lease ?? Infinity, next_snapshot ?? Infinity, next_feed ?? Infinity, next_statistics, next_token_expiry ?? Infinity,
+      this.app.scripts?.migration_pending ? now + 10000 : Infinity, now + MAINTENANCE_MILLISECONDS);
     const current = await this.ctx.storage.getAlarm();
     // 新任务只能提前唤醒，不能把已经安排的快照或租约检查不断推迟。
     if (current === null || desired < current - 1000) {

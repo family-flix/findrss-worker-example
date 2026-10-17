@@ -25,8 +25,8 @@ test("ScriptTestRequestModel.fromBody 拒绝非法请求体", () => {
   assert.deepEqual(error_of({ script: 42 }), { status: 400, message: "script 必须是字符串" });
   assert.deepEqual(error_of({ script: "   " }), { status: 400, message: "script 不能为空" });
   assert.deepEqual(
-    error_of({ script: "a".repeat(128 * 1024 + 1) }),
-    { status: 400, message: "script 超过 128KB 限制" },
+    error_of({ script: "a".repeat(10 * 1024 * 1024 + 1) }),
+    { status: 400, message: "script 超过 10MB 限制" },
   );
   assert.deepEqual(
     error_of({ script: "x", mock_ctx: 1 }),
@@ -51,6 +51,13 @@ test("ScriptTestRequestModel.fromBody 接受合法请求体", () => {
   });
 });
 
+test("调试接受 10MB 边界源码，按 UTF-8 字节拒绝超限内容", () => {
+  const script = "x".repeat(10 * 1024 * 1024);
+  assert.equal(value_of({ script }).script, script);
+  assert.deepEqual(error_of({ script: "中".repeat(Math.ceil(script.length / 3)) }),
+    { status: 400, message: "script 超过 10MB 限制" });
+});
+
 test("ScriptTestRequestModel.fromBody 的 route 可选但必须是短字符串", () => {
   assert.equal(value_of({ script: "x", route: " 3f0c-1 " }).route, "3f0c-1");
   assert.deepEqual(
@@ -64,6 +71,7 @@ test("ScriptTestRequestModel.fromBody 的 route 可选但必须是短字符串",
 });
 
 test("ScriptTestRequestModel 的常量与冻结形状", () => {
+  assert.equal(ScriptTestRequestModel.MAX_SCRIPT_BYTES, 10 * 1024 * 1024);
   assert.equal(ScriptTestRequestModel.MOCK_MAX_BYTES, 64 * 1024);
   const model = ScriptTestRequestModel({ script: "x" });
   assert.ok(Object.isFrozen(model));

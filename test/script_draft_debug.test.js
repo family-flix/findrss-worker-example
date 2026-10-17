@@ -23,7 +23,7 @@ test("草稿路由预览编译起点类式多路由，只返回元数据，不�
   ]);
   assert.deepEqual(records, []);
   assert.deepEqual(calls, []);
-  for (const body of [{ script: "" }, { script: "invalid javascript" }, { script: "x".repeat(128 * 1024 + 1) }, []]) {
+  for (const body of [{ script: "" }, { script: "invalid javascript" }, { script: "x".repeat(10 * 1024 * 1024 + 1) }, []]) {
     assert.equal((await preview(body)).status, 400);
   }
   const invalid_json = await route(new Request("https://internal/_admin/scripts/routes", {
