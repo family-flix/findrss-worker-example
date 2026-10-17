@@ -25,7 +25,7 @@ test("store 中的认证初始化仅允许匿名访问登录页，私有页面�
     assert.equal(f.requests[0].init.credentials, "same-origin");
     assert.equal(f.requests[0].init.cache, "no-store");
   }
-  for (const path of ["/admin/", "/admin/users?q=readers#list", "/admin/unknown"]) {
+  for (const path of ["/admin/", "/admin/users?q=readers#list", "/admin/unknown", "/admin/oauth?request=one"]) {
     const f = fixture(path);
     assert.equal(await f.auth.beforeReady(), false);
     assert.deepEqual(f.redirects, ["/admin/login.html?redirect=" + encodeURIComponent(path)]);
@@ -36,6 +36,7 @@ test("store 中的认证初始化仅允许匿名访问登录页，私有页面�
 test("登录仅提交密码，回跳地址拒绝外站和登录页循环，已登录用户直接回跳", async () => {
   for (const [target, expected] of [
     ["/admin/scripts?kind=hot#editor", "/admin/scripts?kind=hot#editor"],
+    ["/admin/oauth?request=one", "/admin/oauth?request=one"],
     ["https://evil.example/", "/admin/"], ["//evil.example/", "/admin/"],
     ["/admin/login.html", "/admin/"], ["http://[", "/admin/"],
   ]) {

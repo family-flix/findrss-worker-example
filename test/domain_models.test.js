@@ -56,6 +56,7 @@ const SAMPLES = Object.freeze({
     DeviceLogModel: [{}],
   },
   "device_token.js": { DeviceTokenModel: [{}] },
+  "mcp_token.js": { McpTokenModel: [{}] },
   "discovery_source.js": {
     SourceAvatarModel: [{}],
     DiscoverySourceModel: [{ id: "1", title: "T", tags_json: "[]", category: "technology" }],

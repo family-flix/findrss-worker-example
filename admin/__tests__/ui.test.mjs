@@ -601,13 +601,13 @@ test("SVG 状态图标随 Model 更新", () => {
 });
 
 test("所有 HTML 入口先加载共享 UI 与 CSS，再加载页面；旧 Timeless 版本不残留", () => {
-  for (const name of ["index", "login"]) {
+  for (const name of ["index", "login", "oauth"]) {
     const html = readFileSync(new URL("../" + name + ".html", import.meta.url), "utf8");
     const prefix = name === "login" ? "./" : "/admin/";
     assert.ok(html.includes(`href="${prefix}frui.css"`));
     assert.match(html, /assets\/timeless\/0\.34\.2\//);
     assert.ok(html.indexOf(`src="${prefix}ui.js"`) > html.indexOf("timeless.dom.umd.min.js"));
-    assert.ok(html.indexOf(`src="${prefix}ui.js"`) < html.indexOf(`src="${prefix}${name === "login" ? "login" : "app"}.js"`));
+    assert.ok(html.indexOf(`src="${prefix}ui.js"`) < html.indexOf(`src="${prefix}${name === "index" ? "app" : name}.js"`));
   }
 });
 
@@ -1362,7 +1362,7 @@ async function load_settings_pages() {
   context.document = { querySelector: () => null, addEventListener() {}, removeEventListener() {} };
   const settings_bundle = await build({
     stdin: {
-      contents: ["settings.js", ...["device-tokens", "cookies", "webhook", "snapshots", "models", "about"].map(name => "settings/" + name + ".js")]
+      contents: ["settings.js", "oauth.view.js", ...["device-tokens", "mcp-tokens", "cookies", "webhook", "snapshots", "models", "about"].map(name => "settings/" + name + ".js")]
         .map(name => 'export * from "./' + name + '";').join("\n"),
       resolveDir: fileURLToPath(new URL("../pages/", import.meta.url)),
     },
@@ -1522,7 +1522,79 @@ test("设置子页面各自加载配置，保留编辑和重试功能，切换�
 });
 
 
-test("设置 layout 提供六个真实路由链接，共用 KeepAlive 内容区域且高亮随路由更新", async () => {
+test("独立 OAuth 页面只加载授权申请，顶部展示 Logo 和当前版本，确认后回调", async () => {
+  const requests = [], redirects = [];
+  const old_location = context.location;
+  context.location = { search: "?request=pending-one", assign: url => redirects.push(url) };
+  const consent = { id: "pending-one", client_name: "代码助手", client_id: "registered-client", redirect_uri: "http://127.0.0.1:45678/callback",
+    scopes: ["discovery:create", "scripts:create"] };
+  context.FindRSSAdminAuth = { fetch: async (url, options = {}) => {
+    requests.push({ url, options });
+    if (url.endsWith("/decision")) return Response.json({ redirect_uri: consent.redirect_uri + "?code=one-use&state=client-state" });
+    return Response.json({ authorization: consent });
+  } };
+  const pages = await load_settings_pages(), root = pages.OauthView();
+  try {
+    root.onMounted(); await new Promise(setImmediate);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, "/admin/api/mcp-oauth/requests/pending-one");
+    assert.equal(find(root, "oauth-logo").state.src, "/brand/logo.svg");
+    const version = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
+    assert.equal(find(root, "oauth-version").children[0].state.value, "v" + version);
+    for (const name of ["mcp-token-row", "mcp-token-refresh", "settings-navigation", "admin-shell-sidebar", "admin-agent-launcher"]) assert.equal(find(root, name), null);
+    assert.ok(find(root, "mcp-consent"));
+    assert.match(find(root, "mcp-consent-callback").children[0].state.value, /127.0.0.1:45678/);
+    assert.equal(find(root, "mcp-token-subscriptions").state.attributes["aria-checked"], "true");
+    assert.equal(find(root, "mcp-token-scripts").state.attributes["aria-checked"], "true");
+    find(root, "mcp-token-scripts").events.onClick();
+    find(root, "mcp-consent-approve").events.onClick(); await new Promise(setImmediate);
+    assert.deepEqual(JSON.parse(requests.at(-1).options.body), { approved: true, scopes: ["discovery:create"] });
+    assert.equal(redirects[0], consent.redirect_uri + "?code=one-use&state=client-state");
+    assert.equal(find(root, "mcp-consent"), null);
+    assert.equal(requests.length, 2);
+  } finally { root.onUnmounted(); context.location = old_location; }
+});
+
+test("MCP 设置只展示授权列表和撤销操作，不加载授权申请", async () => {
+  const old_location = context.location, requests = [];
+  context.location = { search: "?request=pending-one" };
+  context.FindRSSAdminAuth = { fetch: async url => { requests.push(url); return Response.json({ resource: "https://example.com/mcp", mcp_tokens: [] }); } };
+  const pages = await load_settings_pages(), root = pages.SettingsMcpTokensPage();
+  try {
+    root.onMounted(); await new Promise(setImmediate);
+    assert.deepEqual(requests, ["/admin/api/mcp-tokens"]);
+    assert.equal(find(root, "mcp-consent"), null);
+  } finally { root.onUnmounted(); context.location = old_location; }
+});
+
+test("MCP 授权分页限制每页 20 条，后续页面仍可撤销已有授权", async () => {
+  context.FindRSSAdminShell = {};
+  const tokens = Array.from({ length: 21 }, (_, id) => ({ id: "mcp-" + id, name: "agent " + id,
+    scopes: ["discovery:create"], resource: "https://example.com/mcp", status: "active", token_hint: "masked", expires_at: Date.now() + 86400000 }));
+  const requests = [];
+  context.FindRSSAdminAuth = { fetch: async url => {
+    requests.push(url);
+    return Response.json(url.endsWith("/revoke") ? { mcp_token: { ...tokens[20], status: "revoked" } }
+      : { resource: "https://example.com/mcp", mcp_tokens: tokens });
+  } };
+  const pages = await load_settings_pages(), section = pages.SettingsMcpTokensPage();
+  const root = ui.View({}, [section]);
+  const rows = node => (node?.state?.attributes?.n === "mcp-token-row" ? 1 : 0) + (node?.children || []).reduce((count, child) => count + rows(child), 0);
+  try {
+    section.onMounted(); await new Promise(setImmediate);
+    assert.equal(rows(root), 20);
+    find(root, "mcp-tokens-next").events.onClick();
+    assert.equal(rows(root), 1);
+    assert.equal(find(root, "mcp-token-row").state.attributes["data-token-id"], "mcp-20");
+    find(root, "mcp-token-revoke").events.onClick();
+    find(root, "mcp-token-confirm-revoke").events.onClick(); await new Promise(setImmediate);
+    assert.equal(requests.at(-1), "/admin/api/mcp-tokens/mcp-20/revoke");
+    assert.equal(find(root, "mcp-token-revoke"), null);
+    find(root, "mcp-tokens-previous").events.onClick(); assert.equal(rows(root), 20);
+  } finally { section.onUnmounted(); root.onUnmounted(); }
+});
+
+test("设置 layout 提供七个真实路由链接，共用 KeepAlive 内容区域且高亮随路由更新", async () => {
   context.FindRSSAdminAuth = { fetch: async () => { throw new Error("layout 不应请求配置"); } };
   context.FindRSSAdminShell = {};
   const pages = await load_settings_pages();
@@ -1541,7 +1613,7 @@ test("设置 layout 提供六个真实路由链接，共用 KeepAlive 内容区�
     assert.ok(find(root, "settings-subviews").state.styleSet.includes("relative"));
     assert.equal(find(root, "settings-subviews").children.length, 1);
     const navigation = find(root, "settings-navigation");
-    assert.equal(navigation.children.length, 6);
+    assert.equal(navigation.children.length, 7);
     assert.ok(navigation.state.styleSet.includes("flex-direction-column"));
     assert.ok(navigation.state.styleSet.includes("border-inline-end-1-pixels-solid-color-border"));
     const content = find(root, "page-content");

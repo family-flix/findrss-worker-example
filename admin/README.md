@@ -85,6 +85,24 @@ Cookie 全量推送请求统一使用 `data` 字符串，替代请求顶层的 `
 
 其他加密方式、无效密文、无效 JSON 或无效 Cookie 数据返回 400，保留已有存储。合法推送会全量替换 Cookie；`data` 为 `"[]"` 时清空存储。
 
+## MCP 授权
+
+客户端连接同域名 `/mcp`，由 `401 WWW-Authenticate` 中的 `resource_metadata` 发现授权服务器。提供 `GET /.well-known/oauth-protected-resource`（同时支持 `/mcp` 后缀）及 `GET /.well-known/oauth-authorization-server`，按 [MCP 授权规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) 使用 OAuth Authorization Code + PKCE S256。
+
+1. `POST /oauth/register` 注册公开客户端，提交 JSON `client_name`、`redirect_uris` 和 `token_endpoint_auth_method: "none"`，返回 `client_id`。回调必须是 HTTPS 或本地 HTTP 回环地址，不支持通配符、URL 凭据或 fragment。
+2. 客户端生成 `state`、PKCE verifier 与 S256 challenge，打开 `GET /oauth/authorize`，携带 `client_id`、`redirect_uri`、`response_type=code`、`code_challenge`、`code_challenge_method=S256`、`resource=<同域名 /mcp 完整地址>` 和可选的 `scope`、`state`。
+3. 服务校验注册信息后转到 独立授权页 `/admin/oauth?request=...`（顶部展示 FindRSS Logo 与当前版本，不加载后台导航或授权列表），使用现有后台登录。确认页展示申请方、客户端 ID、回调地址及申请的权限，允许缩减权限。默认 `discovery:create` 对应 `add_subscription`；`scripts:create` 对应 `add_script`，允许编译并发布脚本。只有明确点击同意后才产生授权码；拒绝返回 `access_denied`。
+4. 网页导航到已注册回调，携带一次性 `code`（有效期 60 秒）、原始 `state` 和 `iss`，不携带 Token 或管理员密码。客户端向 `POST /oauth/token` 提交表单 `grant_type=authorization_code`、`client_id`、`redirect_uri`、`code`、`code_verifier`、`resource`，得到 `access_token`、`refresh_token`、`expires_in`、`token_type`、`scope`，由客户端保存到自己的凭据存储中。FindRSS 不负责写入客户端配置。
+5. 访问凭据有效期 1 小时；使用 `grant_type=refresh_token`、`client_id`、`refresh_token`、`resource` 换取新凭据。刷新时轮换访问与刷新凭据，重放旧刷新凭据会撤销整个授权。授权总有效期 90 天；到期或撤销后必须重新授权。`POST /oauth/revoke` 接受表单 `client_id`、`token`，可撤销所属授权。
+
+授权请求 10 分钟内有效。客户端名为申请方自报信息，确认时应同时核对回调地址。授权码绑定客户端、精确回调地址、资源与 PKCE；并发换证只能成功一次。服务器仅保存授权码与凭据摘要，OAuth 凭据、注册信息、权限和撤销状态存储于 Durable Object SQLite 中，Worker 重启后仍生效。公开注册支持最多 2000 个客户端，待完成的授权请求最多 1000 个（新请求时清理过期记录），有效授权最多 100 个。
+
+「设置 → MCP 授权」展示已有授权（优先有效记录，最多 200 条，每页 20 条）、权限、到期和最近使用时间。撤销需确认，立即阻止后续访问和刷新。管理接口均需现有管理员认证：`GET /admin/api/mcp-tokens` 读取列表；`POST /admin/api/mcp-tokens/:id/revoke` 撤销；`GET /admin/api/mcp-tokens/:id/calls` 返回最近 50 条调用结果；`GET /admin/api/mcp-oauth/requests/:id` 读取待确认申请；`POST /admin/api/mcp-oauth/requests/:id/decision` 提交 JSON `approved` 与用户选择的 `scopes`。不再支持 `POST /admin/api/mcp-tokens` 手动签发。
+
+`add_subscription` 添加前会读取目标 RSS/Atom 的真实名称、简介、站点及头像，头像下载后保存至订阅源头像存储；不需要用账号 ID 拼接占位名称。`title` 和 `description` 参数仅为可选提示，保存时以源返回的信息为准。读取失败、头像下载失败或名称为空时不会创建订阅；头像存储阶段失败会明确返回已创建的源及错误。来源地址仍按 `{{hostname}}/rss/...` 模板保存。源读取完成后再次验证授权，读取期间被撤销的授权不能创建订阅。
+
+每次 MCP 请求及工具派发前重新检查授权状态和权限，`tools/list` 仅返回获准工具；越权返回 HTTP 403，无效、到期或撤销返回 HTTP 401。授权绑定当前请求域名，Worker 覆盖外部传入的资源头。审计全局保留最近 1000 条工具名、结果与时间，不保存凭据或工具参数。撤销不会回滚已经执行的调用。旧独立 MCP Token 可继续使用至到期或撤销；`ADMIN_PASSWORD`、Basic、读者和设备凭证均不能调用 `/mcp`，更改管理密码不影响已签发的 MCP 授权。
+
 ## 构建与检查
 
 “存储”页面位于 `/admin/storage`，以文件树浏览 `API_STORAGE` 桶。进入页面或刷新时默认展开所有目录，自动读取各目录及后续分页，每次最多 100 项、最多并发读取 4 个目录；读取失败的目录可点击重试。使用 Timeless `ListViewV2` 只渲染视口及缓冲行，支持方向键与 Enter，也可手动折叠目录。选择文件后在右侧预览图片或文本；`.json`、`.xml`、`.js` 后缀（不区分大小写）优先按文件名识别，在只读 CodeMirror 中格式化、高亮，允许选择复制，JSON 大整数保留原值，无效 JSON 保留原文。其他文本沿用纯文本展示；文本预览限制为解压后前 1 MiB，截断内容保留原文，其余二进制类型显示不支持预览。仅提供预览和刷新，不提供下载、上传、删除、重命名或拖拽移动。所有入口均需管理员登录。
@@ -115,7 +133,7 @@ Debug 的卡片预览支持同一草稿内尚未发布的图片代理路由（�
 
 媒体 handler 返回 `{ kind: "img" | "video" | "audio", url: "https://…", headers?: { Referer: "https://…" } }`，也可用 `Result.Ok(...)` 包装。公开直链可省略 `allowed_hosts`，浏览器直接读取；需要代理或自定义请求头时，在路由声明 `allowed_hosts`，Debug 使用受管理员会话保护的本次返回值快照，视频和音频支持 Range、HEAD 和流式读取。媒体返回值的 `kind` 与模块级 `export const kind = "rss" | "hot"` 的脚本分类不同。
 
-“设置”使用 `pages/settings.js` 作为 layout，通过 `KeepAliveSubViews` 承载六个子路由：设备 Token（`/admin/settings/device-tokens`）、Cookie 解密（`/admin/settings/cookies`）、Webhook 消息推送（`/admin/settings/webhook`）、订阅源抓取（`/admin/settings/snapshots`）、大模型（`/admin/settings/models`）和关于（`/admin/settings/about`）。关于页展示项目 Logo、描述、GitHub 仓库链接和当前版本号 `v1.2.0`。`/admin/settings` 与 `/admin/settings/` 默认进入设备 Token；各子页面位于 `pages/settings/`，只在激活时加载对应配置，支持直接访问和前进后退。大模型页可配置厂商、API Key、模型与参数，并测试连接、保存或恢复默认。设置页和 XiaoxunAgent 的“大模型设置”共用 `pages/settings.ai.component.js` 编辑器与 `components/ai_settings.js` 状态逻辑，读写同一个 `/admin/api/scripts/agent/settings` 接口，连接测试使用 `/admin/api/scripts/agent/test`。读取失败时提供重试，加载完成前不显示编辑表单；离开对应子页面时丢弃未保存草稿和临时密钥，返回时重新读取最新配置。
+“设置”使用 `pages/settings.js` 作为 layout，通过 `KeepAliveSubViews` 承载七个子路由：设备 Token（`/admin/settings/device-tokens`）、MCP 授权（`/admin/settings/mcp-tokens`）、Cookie 解密（`/admin/settings/cookies`）、Webhook 消息推送（`/admin/settings/webhook`）、订阅源抓取（`/admin/settings/snapshots`）、大模型（`/admin/settings/models`）和关于（`/admin/settings/about`）。关于页展示项目 Logo、描述、GitHub 仓库链接和当前版本号 `v1.2.0`。`/admin/settings` 与 `/admin/settings/` 默认进入设备 Token；各子页面位于 `pages/settings/`，只在激活时加载对应配置，支持直接访问和前进后退。大模型页可配置厂商、API Key、模型与参数，并测试连接、保存或恢复默认。设置页和 XiaoxunAgent 的“大模型设置”共用 `pages/settings.ai.component.js` 编辑器与 `components/ai_settings.js` 状态逻辑，读写同一个 `/admin/api/scripts/agent/settings` 接口，连接测试使用 `/admin/api/scripts/agent/test`。读取失败时提供重试，加载完成前不显示编辑表单；离开对应子页面时丢弃未保存草稿和临时密钥，返回时重新读取最新配置。
 
 `/admin/*` 先交给 Worker 处理；GET / HEAD 页面路径在静态资源不存在时回退 `/admin/index.html`，由前端路由决定页面。API、认证路径、静态文件与写请求不走页面回退。SPA 入口使用 `/admin/` 下的绝对资源地址，直接访问嵌套路由或带尾斜杠的路径也能正确加载脚本和样式。
 

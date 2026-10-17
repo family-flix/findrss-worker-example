@@ -1,6 +1,7 @@
 import { FINDRSS_LOGO_PNG } from "./server/lib/brand.js";
 import { public_script_route } from "./server/service/worker/script_route.js";
 import { api_mcp } from "./server/service/worker/mcp.js";
+import { api_mcp_oauth, MCP_OAUTH_PATHS } from "./server/service/worker/mcp_oauth.js";
 // 该文件与 APIDurableObject 是同级的 composition root——允许 import 任意层。
 import { API_OBJECT_NAME } from "./server/lib/constants.js";
 import { bearer_token, error_response, json_response } from "./server/lib/http.js";
@@ -64,6 +65,7 @@ export default {
       return admin_cookie_request(env, request);
     }
     if (url.pathname === "/mcp") return api_mcp(request, env);
+    if (MCP_OAUTH_PATHS.includes(url.pathname)) return api_mcp_oauth(request, env);
     if (url.pathname === "/health" && request.method === "GET") {
       return json_response({ ok: true });
     }
@@ -149,6 +151,16 @@ export default {
       }
       if (["/admin/api/settings/snapshots", "/admin/api/settings/cookies", "/admin/api/settings/webhook"].includes(url.pathname) && ["GET", "PUT"].includes(request.method)) {
         return env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal" + url.pathname.replace("/admin/api/", "/_admin/"), request));
+      }
+      if (
+        /^\/admin\/api\/mcp-tokens(?:\/[A-Za-z0-9-]+\/(?:revoke|calls))?$/.test(url.pathname)
+        || /^\/admin\/api\/mcp-oauth\/requests\/[A-Za-z0-9_-]+(?:\/decision)?$/.test(url.pathname)
+      ) {
+        if (request.method !== "GET" && request.headers.has("Origin") && request.headers.get("Origin") !== url.origin) return error_response("origin rejected", 403);
+        const forwarded = new Request("https://internal" + url.pathname.replace("/admin/api/", "/_admin/"), request);
+        // Derived from the authenticated admin URL; never accept a resource supplied by the client.
+        forwarded.headers.set("X-MCP-Resource", new URL("/mcp", request.url).href);
+        return env.API.getByName(API_OBJECT_NAME).fetch(forwarded);
       }
       if (
         /^\/admin\/api\/device-tokens(?:\/[A-Za-z0-9-]+(?:\/(?:reveal|revoke))?)?$/.test(

@@ -8,7 +8,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const source_dir = resolve(root, "admin");
 const out_dir = resolve(build_stage, "admin");
 mkdirSync(out_dir, { recursive: true });
-for (const name of ["index.html", "login.html", "style.css"]) {
+for (const name of ["index.html", "login.html", "oauth.html", "style.css"]) {
   cpSync(resolve(source_dir, name), resolve(out_dir, name));
 }
 // Preserve existing bookmarked HTML URLs with the same SPA shell.
@@ -16,7 +16,7 @@ for (const name of ["devices.html", "discovery-admin.html", "rss-scripts.html"])
   cpSync(resolve(source_dir, "index.html"), resolve(out_dir, name));
 }
 await build({
-  entryPoints: { app: resolve(source_dir, "app.js"), login: resolve(source_dir, "pages/login.js"), ui: resolve(source_dir, "components/ui.js") },
+  entryPoints: { app: resolve(source_dir, "app.js"), login: resolve(source_dir, "pages/login.js"), oauth: resolve(source_dir, "pages/oauth.js"), ui: resolve(source_dir, "components/ui.js") },
   outdir: out_dir, bundle: true, format: "iife", charset: "utf8", target: "es2022",
   nodePaths: [resolve(root, "node_modules")],
   alias: { "@": source_dir },

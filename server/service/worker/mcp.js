@@ -1,17 +1,22 @@
-import { handle_mcp } from "../../lib/mcp.js";
-import { admin_authorized, admin_auth_required } from "./auth.js";
-import { admin_discovery_source_request, admin_script_request } from "./do_proxy.js";
+import { API_OBJECT_NAME } from "../../lib/constants.js";
+import { error_response } from "../../lib/http.js";
+import { feed_hostname_origin } from "./discovery.js";
+import { mcp_challenge } from "./mcp_oauth.js";
 
-const tools = [
-  { name: "add_subscription", description: "Add a feed to the Discovery directory (administrator only).", inputSchema: { type: "object", properties: {
-    title: { type: "string" }, feed_url: { type: "string" }, description: { type: "string" }, category: { type: "string", enum: ["recommended", "technology", "development", "business", "science", "design", "life"] }, website: { type: "string" }, tags: { type: "string", description: "Comma-separated tags" }, source_type: { type: "string", enum: ["website", "wxmp", "wxchannels"] }, enabled: { type: "boolean" }, require_token: { type: "boolean" }
-  }, required: ["title", "feed_url", "category"], additionalProperties: false } },
-  { name: "add_script", description: "Compile and add an script exporting route.path and route.handler(ctx).", inputSchema: { type: "object", properties: { script: { type: "string" }, enabled: { type: "boolean" } }, required: ["script"], additionalProperties: false } },
-];
 export async function api_mcp(request, env) {
-  if (!admin_authorized(request, env)) return admin_auth_required();
-  return handle_mcp(request, { name: "findrss-api", tools, call: (name, args) => {
-    const forwarded = new Request(request.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(args) });
-    return name === "add_script" ? admin_script_request(env, forwarded) : admin_discovery_source_request(env, forwarded);
-  } });
+  const authorization = request.headers.get("Authorization") || "";
+  if (!/^Bearer fr_mcp_[0-9a-f]{64}$/i.test(authorization)) return error_response("MCP token required", 401, {
+    "WWW-Authenticate": mcp_challenge(new URL("/mcp", request.url).href),
+  });
+  const forwarded = new Request("https://internal/_mcp", request);
+  forwarded.headers.set("X-MCP-Resource", new URL("/mcp", request.url).href);
+  forwarded.headers.set("X-Feed-Public-URL", feed_hostname_origin(env) || new URL(request.url).origin);
+  try {
+    const response = await env.API.getByName(API_OBJECT_NAME).fetch(forwarded);
+    if (response.status !== 401) return response;
+    const headers = new Headers(response.headers);
+    headers.set("WWW-Authenticate", mcp_challenge(new URL("/mcp", request.url).href) + ', error="invalid_token"');
+    return new Response(response.body, { status: response.status, headers });
+  }
+  catch { return error_response("MCP service unavailable", 503); }
 }

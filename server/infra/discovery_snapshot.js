@@ -1,6 +1,6 @@
 import { proxy_target_url } from "@findrss/feed-fetch";
 import { public_http_url } from "../lib/proxy_url.js";
-import { discovery_feed_preview, fetch_discovery_document, fetch_discovery_avatar } from "./feed_fetch.js";
+import { discovery_feed_defaults, discovery_feed_preview, fetch_discovery_document, fetch_discovery_avatar } from "./feed_fetch.js";
 import { fetch_script_image } from "./image_proxy.js";
 import { script_output } from "../lib/script_output.js";
 import { FINDRSS_LOGO_PNG } from "../lib/brand.js";
@@ -8,7 +8,11 @@ import { encode_cover_blurhash } from "./cover_blurhash.js";
 import { SourceAddressModel } from "../domain/source_address.js";
 import { sha256_hex } from "../lib/crypto.js";
 
-export async function load_discovery_snapshot(source, origin, serve_route, signal) {
+export function load_discovery_profile(source, origin, serve_route, signal) {
+  return load_discovery_snapshot(source, origin, serve_route, signal, true);
+}
+
+export async function load_discovery_snapshot(source, origin, serve_route, signal, metadata_only = false) {
   signal?.throwIfAborted();
   const address = SourceAddressModel(source.feed_url);
   if (address.is_template && !origin) throw new Error("尚未获取访问域名，请访问站点后重试或配置 FINDRSS_HOSTNAME");
@@ -27,7 +31,7 @@ export async function load_discovery_snapshot(source, origin, serve_route, signa
     xml = result.xml;
   }
   signal?.throwIfAborted();
-  const result = source.require_token
+  const result = metadata_only ? { defaults: discovery_feed_defaults(xml, feed_url) } : source.require_token
     ? { articles: [], fingerprint: await discovery_snapshot_fingerprint(xml, feed_url) }
     : { articles: await discovery_snapshot_articles(xml, feed_url, url => fetch_cover_metadata(url, decode_cover, signal)) };
   const avatar_url = discovery_feed_preview(xml, feed_url).icon;
@@ -51,6 +55,7 @@ export async function load_discovery_snapshot(source, origin, serve_route, signa
       });
     } catch (error) {
       signal?.throwIfAborted();
+      if (metadata_only) throw new Error("订阅源头像读取失败：" + error.message);
       console.warn("discovery snapshot avatar fetch failed", error.message);
     }
   }

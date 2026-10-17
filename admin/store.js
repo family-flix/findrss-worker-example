@@ -139,6 +139,7 @@ export const routes_configure = {
         title: "设置", pathname: "/admin/settings", page: "Settings", options: { short_title: "设置", icon: "settings" },
         children: {
           device_tokens: { title: "设备 Token", pathname: "/admin/settings/device-tokens", page: "SettingsDeviceTokens", is_default: true },
+          mcp_tokens: { title: "MCP 授权", pathname: "/admin/settings/mcp-tokens", page: "SettingsMcpTokens" },
           cookies: { title: "Cookie 解密", pathname: "/admin/settings/cookies", page: "SettingsCookies" },
           webhook: { title: "Webhook 消息推送", pathname: "/admin/settings/webhook", page: "SettingsWebhook" },
           snapshots: { title: "订阅源抓取", pathname: "/admin/settings/snapshots", page: "SettingsSnapshots" },
@@ -198,6 +199,7 @@ export async function create_admin_store() {
     Tasks: (await import("./pages/tasks.js")).TasksPage,
     Settings: (await import("./pages/settings.js")).SettingsPage,
     SettingsDeviceTokens: (await import("./pages/settings/device-tokens.js")).SettingsDeviceTokensPage,
+    SettingsMcpTokens: (await import("./pages/settings/mcp-tokens.js")).SettingsMcpTokensPage,
     SettingsCookies: (await import("./pages/settings/cookies.js")).SettingsCookiesPage,
     SettingsWebhook: (await import("./pages/settings/webhook.js")).SettingsWebhookPage,
     SettingsSnapshots: (await import("./pages/settings/snapshots.js")).SettingsSnapshotsPage,

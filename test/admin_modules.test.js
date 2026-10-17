@@ -21,15 +21,15 @@ test("开发后台保留源码，import map 完整解析模块图，共享依赖
     "server/lib/datetime.js", "server/lib/poll_schedule.js", "server/lib/discovery_platform.js", "server/lib/constants.js", "server/lib/script_config.js", "packages/feed-fetch/src/feed_parser.js"]) {
     assert.equal(readFileSync(join(assets, path), "utf8"), readFileSync(join(root, path), "utf8"));
   }
-  for (const name of ["index", "login", "devices", "discovery-admin", "rss-scripts"]) {
+  for (const name of ["index", "login", "oauth", "devices", "discovery-admin", "rss-scripts"]) {
     const html = readFileSync(join(assets, `admin/${name}.html`), "utf8");
     assert.ok(html.includes(`<script type="importmap">${admin_dev_import_map}</script>`));
-    assert.match(html, /<script type="module" src="\/admin\/(app|login)\.dev\.js"><\/script>/);
+    assert.match(html, /<script type="module" src="\/admin\/(app|login|oauth)\.dev\.js"><\/script>/);
     assert.doesNotMatch(html, /<script src="\.\/(ui|app|login)\.js"/);
   }
   const imports = JSON.parse(admin_dev_import_map).imports;
   const result = await build({
-    absWorkingDir: assets, entryPoints: ["admin/app.dev.js", "admin/login.dev.js"],
+    absWorkingDir: assets, entryPoints: ["admin/app.dev.js", "admin/login.dev.js", "admin/oauth.dev.js"],
     bundle: true, write: false, outdir: join(assets, "check"), format: "esm", metafile: true,
     plugins: [{ name: "browser-import-map", setup(builder) {
       builder.onResolve({ filter: /^[^./]/ }, args => {

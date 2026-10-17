@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { create_memory_bucket } from "@findrss/object-store";
 import { create_api_object_store } from "../server/infra/object_store.js";
-import { load_discovery_snapshot } from "../server/infra/discovery_snapshot.js";
+import { load_discovery_profile, load_discovery_snapshot } from "../server/infra/discovery_snapshot.js";
 import { ServiceDiscovery } from "../server/service/durable_object/discovery.js";
 import { FINDRSS_LOGO_PNG } from "../server/lib/brand.js";
 
@@ -10,6 +10,26 @@ const png = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC
 const original_fetch = globalThis.fetch;
 const feed_xml = icon => `<rss><channel><title>视频号</title>${icon ? `<image><url>${icon}</url></image>` : ""}
   <item><title>视频</title><link>https://example.com/video</link></item></channel></rss>`;
+
+test("添加预读返回真实作者资料和头像，不获取文章封面，头像失败不返回不完整资料", async t => {
+  t.after(() => { globalThis.fetch = original_fetch; });
+  const reads = [];
+  const source = { feed_url: "{{hostname}}/rss/wxchannels/finder", require_token: true };
+  const serve = async (format, path, request) => {
+    assert.equal(format, "rss"); assert.equal(path, "/wxchannels/finder");
+    assert.equal(new URL(request.url).pathname, "/_admin/feed/rss/wxchannels/finder");
+    return { body: '<rss><channel><title>真实作者</title><description>作者简介</description><link>https://example.com/author</link>' +
+      '<image><url>https://example.com/avatar.png</url></image><item><title>文章</title><enclosure url="https://example.com/cover.png" type="image/png"/></item></channel></rss>' };
+  };
+  globalThis.fetch = async url => { reads.push(String(url)); return new Response(png); };
+  const profile = await load_discovery_profile(source, "https://feeds.example", serve);
+  assert.equal(profile.defaults.title, "真实作者"); assert.equal(profile.defaults.description, "作者简介");
+  assert.equal(profile.avatar.content_type, "image/png");
+  assert.deepEqual(reads, ["https://example.com/avatar.png"]);
+  assert.equal(profile.articles, undefined);
+  globalThis.fetch = async () => { throw new Error("offline"); };
+  await assert.rejects(load_discovery_profile(source, "https://feeds.example", serve), /头像读取失败/);
+});
 
 function fixture(t, { xml = feed_xml("https://example.com/avatar.png"), require_token = false, serve_image } = {}) {
   t.after(() => { globalThis.fetch = original_fetch; });

@@ -31,6 +31,10 @@ import { RepositoryCall } from "./repository/call.js";
 import { RepositoryCredit } from "./repository/credit.js";
 import { RepositoryDevice } from "./repository/device.js";
 import { RepositoryDeviceToken } from "./repository/device_token.js";
+import { RepositoryMcpToken } from "./repository/mcp_token.js";
+import { RepositoryMcpOauth } from "./repository/mcp_oauth.js";
+import { ServiceMcpOauth } from "./service/durable_object/mcp_oauth.js";
+import { ServiceMcpToken } from "./service/durable_object/mcp_tokens.js";
 import { ServiceDeviceToken } from "./service/durable_object/device_tokens.js";
 import { create_device_token_credentials } from "./infra/device_token_credentials.js";
 import { reader_session_secret } from "./infra/reader_session_secret.js";
@@ -366,6 +370,8 @@ export const route = {
       credit: new RepositoryCredit({ sql: this.ctx.storage.sql }),
       devices: new RepositoryDevice({ sql: this.ctx.storage.sql }),
       device_tokens: new RepositoryDeviceToken({ sql: this.ctx.storage.sql }),
+      mcp_tokens: new RepositoryMcpToken({ sql: this.ctx.storage.sql }),
+      mcp_oauth: new RepositoryMcpOauth({ sql: this.ctx.storage.sql, transaction: action => this.ctx.storage.transactionSync(action) }),
       discovery: new RepositoryDiscoverySource({ sql: this.ctx.storage.sql }),
       statistics: new RepositoryStatistics({ sql: this.ctx.storage.sql }),
       redemption: new RepositoryRedemption({ sql: this.ctx.storage.sql }),
@@ -406,6 +412,8 @@ export const route = {
     };
     /** 应用服务注册表：兄弟服务经 `this.app.<svc>.<method>` 互相调用。 */
     this.app = {};
+    this.app.mcp_tokens = new ServiceMcpToken({ repo: this.repo.mcp_tokens, app: this.app });
+    this.app.mcp_oauth = new ServiceMcpOauth({ repo: this.repo.mcp_oauth, tokens: this.repo.mcp_tokens });
     this.app.background_tasks = new ServiceBackgroundTasks({ repo: this.repo.background_tasks, wait_until: ports.wait_until });
     this.app.webhook_settings = new ServiceWebhookSettings({ repo: this.repo.webhook_settings,
       credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || "") });

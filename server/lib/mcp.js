@@ -2,7 +2,7 @@
 const versions = ["2025-11-25", "2025-06-18", "2025-03-26"];
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 
-export async function handle_mcp(request, { name, tools, call }) {
+export async function handle_mcp(request, { name, tools, call, authorize }) {
   const origin = request.headers.get("Origin");
   if (origin && origin !== new URL(request.url).origin) return json({ error: "origin rejected" }, 403);
   if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
@@ -20,13 +20,14 @@ export async function handle_mcp(request, { name, tools, call }) {
   if (!message || Array.isArray(message) || message.jsonrpc !== "2.0" || typeof message.method !== "string" ||
       (Object.hasOwn(message, "id") && typeof message.id !== "string" && typeof message.id !== "number") ||
       (message.params !== undefined && (!message.params || typeof message.params !== "object" || Array.isArray(message.params)))) return error(-32600, "Invalid Request", 400);
+  const visible_tools = authorize ? authorize(message) : tools;
   if (!Object.hasOwn(message, "id")) return new Response(null, { status: 202 });
   let result;
   if (message.method === "initialize") {
     if (typeof message.params?.protocolVersion !== "string") return error(-32602, "protocolVersion is required");
     result = { protocolVersion: versions.includes(message.params.protocolVersion) ? message.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name, version: "1.2.0" } };
   } else if (message.method === "ping") result = {};
-  else if (message.method === "tools/list") result = { tools };
+  else if (message.method === "tools/list") result = { tools: visible_tools };
   else if (message.method === "tools/call") {
     const tool = tools.find((entry) => entry.name === message.params?.name);
     if (!tool) return error(-32602, "Unknown tool");

@@ -229,6 +229,7 @@ export async function handle_admin_request(request, env, api_fetch) {
   } else {
     const url = new URL(request.url);
     if (pathname === "/admin/login") url.pathname = "/admin/login.html";
+    if (pathname === "/admin/oauth" || pathname === "/admin/oauth/") url.pathname = "/admin/oauth.html";
     response = await env.ASSETS.fetch(new Request(url, request));
     if (
       response.status === 404 &&
@@ -236,6 +237,7 @@ export async function handle_admin_request(request, env, api_fetch) {
       pathname.startsWith("/admin/") &&
       pathname !== "/admin/auth" && !pathname.startsWith("/admin/auth/") &&
       pathname !== "/admin/login" &&
+      pathname !== "/admin/oauth" && pathname !== "/admin/oauth/" &&
       !pathname.split("/").some(segment => segment.includes("."))
     ) {
       url.pathname = "/admin/index.html";

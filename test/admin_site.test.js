@@ -90,6 +90,24 @@ test("后台前端路由在资源不存在时回退 SPA，保留查询参数并�
   }
 });
 
+test("OAuth 独立页面 GET/HEAD 映射专用入口并保留申请参数，不回退后台 SPA", async () => {
+  const { env } = create_env();
+  const paths = [];
+  env.ASSETS.fetch = async request => {
+    paths.push(new URL(request.url));
+    return new Response(request.method === "HEAD" ? null : "oauth page");
+  };
+  for (const method of ["GET", "HEAD"]) {
+    for (const path of ["/admin/oauth", "/admin/oauth/"]) {
+      const response = await admin_worker.fetch(new Request("http://127.0.0.1" + path + "?request=one", { method }), env);
+      assert.equal(response.status, 200);
+      assert.equal(paths.at(-1).pathname, "/admin/oauth.html");
+      assert.equal(paths.at(-1).search, "?request=one");
+      assert.match(response.headers.get("Content-Security-Policy"), /frame-ancestors 'none'/);
+    }
+  }
+});
+
 test("已有静态资源、缺失静态资源、认证路径和写请求不回退 SPA", async () => {
   const { env } = create_env();
   for (const [path, method, status] of [

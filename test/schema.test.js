@@ -47,9 +47,9 @@ function declared_indexes() {
   return indexes;
 }
 
-test("表集合与本模块声明一致，且恰好 36 张", () => {
+test("表集合与本模块声明一致，且恰好 42 张", () => {
   assert.deepEqual(declared_tables(), [...API_TABLE_NAMES]);
-  assert.equal(API_TABLE_NAMES.length, 36);
+  assert.equal(API_TABLE_NAMES.length, 42);
   assert.ok(Object.isFrozen(API_TABLE_NAMES));
 });
 

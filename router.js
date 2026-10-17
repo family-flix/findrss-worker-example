@@ -1,4 +1,6 @@
 // Route both websites and API without exposing internal DO routes.
+import { MCP_OAUTH_PATHS } from "./server/service/worker/mcp_oauth.js";
+
 export function create_worker({ api, admin, discovery }) {
   return {
     async fetch(request, env, ctx) {
@@ -25,6 +27,7 @@ export function create_worker({ api, admin, discovery }) {
       if (
         path === "/health" ||
         path === "/mcp" ||
+        MCP_OAUTH_PATHS.includes(path) ||
         path === "/v1" ||
         path.startsWith("/v1/") ||
         path.startsWith("/reader/") ||

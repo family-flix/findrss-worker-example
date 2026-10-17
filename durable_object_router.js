@@ -11,12 +11,15 @@ import { AdminAgentRunRequestModel } from "./server/domain/admin_agent.js";
 import { DEFAULT_REDEMPTION_PAGE_SIZE } from "./server/lib/constants.js";
 import { error_response, json_response } from "./server/lib/http.js";
 import { decode_identifier } from "./server/lib/identifiers.js";
-import { DurableObjectError, DurableObjectResult } from "./server/service/durable_object/error.js";
+import { DurableObjectError, DurableObjectResult, do_error } from "./server/service/durable_object/error.js";
 import { script_debug_html } from "./server/infra/script_debug.js";
 import { feed_problem } from "./server/lib/feed_error.js";
 import { redact_log_value } from "./server/lib/log_redact.js";
 import { messages_socket } from "./messages_socket.js";
 import { script_agent_socket } from "./script_agent_socket.js";
+import { handle_mcp } from "./server/lib/mcp.js";
+import { MCP_TOOLS } from "./server/lib/mcp_tools.js";
+import { resolve_discovery_source_feed_urls } from "./server/service/worker/discovery.js";
 
 /**
  * @param {Request} request
@@ -73,6 +76,24 @@ function translate(result) {
   return json_response(result);
 }
 
+async function mcp_oauth_body(request, json) {
+  if (Number(request.headers.get("Content-Length")) > 16384) throw do_error("invalid_request", 413);
+  const content_type = request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase();
+  if (content_type !== (json ? "application/json" : "application/x-www-form-urlencoded")) throw do_error("invalid_request", 415);
+  const text = await request.text();
+  if (new TextEncoder().encode(text).length > 16384) throw do_error("invalid_request", 413);
+  let body;
+  if (json) {
+    try { body = JSON.parse(text); } catch { throw do_error("invalid_request", 400); }
+  } else {
+    const params = new URLSearchParams(text);
+    if ([...params.keys()].some(key => params.getAll(key).length !== 1)) throw do_error("invalid_request", 400);
+    body = Object.fromEntries(params);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw do_error("invalid_request", 400);
+  return body;
+}
+
 /**
  * @param {Request} request
  * @param {Record<string, any>} app
@@ -80,6 +101,54 @@ function translate(result) {
  */
 async function dispatch(request, app) {
   const url = new URL(request.url);
+  if (url.pathname.startsWith("/_mcp-oauth/")) {
+    const action = url.pathname.slice("/_mcp-oauth/".length), resource = request.headers.get("X-MCP-Resource");
+    const method = action === "authorize" ? "GET" : "POST";
+    if (!["authorize", "register", "token", "revoke"].includes(action)) throw do_error("not found", 404);
+    if (request.method !== method) throw do_error("invalid_request", 405, {}, { Allow: method });
+    if (action === "authorize") {
+      if (url.search.length > 8192 || [...url.searchParams.keys()].some(key => url.searchParams.getAll(key).length !== 1)) throw do_error("invalid_request", 400);
+      return app.mcp_oauth.begin(Object.fromEntries(url.searchParams), resource);
+    }
+    const body = await mcp_oauth_body(request, action === "register");
+    if (action === "register") return app.mcp_oauth.register(body, resource);
+    if (action === "token") return app.mcp_oauth.exchange(body, resource);
+    return app.mcp_oauth.revoke(body, resource);
+  }
+  const oauth_request_match = url.pathname.match(/^\/_admin\/mcp-oauth\/requests\/([A-Za-z0-9_-]+)(\/decision)?$/);
+  if (oauth_request_match) {
+    const [, id, decision] = oauth_request_match, resource = request.headers.get("X-MCP-Resource");
+    if (!decision && request.method === "GET") return app.mcp_oauth.inspect(id, resource);
+    if (decision && request.method === "POST") return app.mcp_oauth.decide(id, await mcp_oauth_body(request, true), resource);
+    throw do_error("method not allowed", 405);
+  }
+  if (url.pathname === "/_mcp") {
+    const resource = request.headers.get("X-MCP-Resource");
+    const identity = await app.mcp_tokens.verify(request.headers.get("Authorization"), resource);
+    const public_origin = request.headers.get("X-Feed-Public-URL") || new URL(resource).origin;
+    return handle_mcp(new Request(resource, request), {
+      name: "findrss-api", tools: MCP_TOOLS,
+      authorize: message => app.mcp_tokens.authorize(identity.id, resource, message),
+      call: async (name, args) => {
+        try {
+          const response = translate(await app.mcp_tokens.call(identity.id, resource, name, args, public_origin));
+          return name === "add_subscription" ? resolve_discovery_source_feed_urls(response, public_origin, true) : response;
+        } catch (error) {
+          if (error instanceof DurableObjectError) return json_response({ error: error.error, ...error.details }, error.status, error.headers);
+          throw error;
+        }
+      },
+    });
+  }
+  const mcp_token_match = url.pathname.match(/^\/_admin\/mcp-tokens(?:\/([A-Za-z0-9-]+)\/(revoke|calls))?$/);
+  if (mcp_token_match) {
+    const [, id, action] = mcp_token_match;
+    const resource = request.headers.get("X-MCP-Resource");
+    if (request.method === "GET" && !id) return app.mcp_tokens.list(resource);
+    if (request.method === "POST" && action === "revoke") return app.mcp_tokens.revoke(id);
+    if (request.method === "GET" && action === "calls") return app.mcp_tokens.calls(id);
+    throw new DurableObjectError("method not allowed", 405);
+  }
   if (url.pathname === "/_admin/background-tasks") {
     if (request.method === "GET") return app.background_tasks.list();
     throw new DurableObjectError("method not allowed", 405);

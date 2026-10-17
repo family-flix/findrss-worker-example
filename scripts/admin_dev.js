@@ -25,11 +25,11 @@ export const admin_dev_import_map_hash = createHash("sha256").update(admin_dev_i
 const shared_modules = ["server/lib/datetime.js", "server/lib/poll_schedule.js", "server/domain/rss_route.js", "server/lib/admin_agent_context.js", "server/domain/feed_format.js", "server/lib/discovery_platform.js", "server/lib/constants.js", "server/lib/script_config.js", "packages/feed-fetch/src/feed_parser.js"];
 const aliases = ["devices.html", "discovery-admin.html", "rss-scripts.html"];
 
-function dev_html(source, login) {
+function dev_html(source, entry) {
   return source.replace(/  <script src="(?:\.\/|\/admin\/)ui\.js"><\/script>/,
     `  <script type="importmap">${admin_dev_import_map}</script>`)
-    .replace(login ? '  <script src="./login.js"></script>' : '  <script src="/admin/app.js" defer></script>',
-      `  <script type="module" src="/admin/${login ? "login" : "app"}.dev.js"></script>`);
+    .replace(/  <script src="(?:\.\/|\/admin\/)(?:login|oauth|app)\.js"(?: defer)?><\/script>/,
+      `  <script type="module" src="/admin/${entry}.dev.js"></script>`);
 }
 
 function source_allowed(path) {
@@ -50,8 +50,9 @@ function sync_source(root, assets, path) {
   const stats = statSync(source, { throwIfNoEntry: false });
   if (!stats) { rmSync(target, { recursive: true, force: true }); return; }
   if (!stats.isFile()) return;
-  if (path === "admin/index.html" || path === "admin/login.html") {
-    const html = dev_html(readFileSync(source, "utf8"), path.endsWith("login.html"));
+  if (["admin/index.html", "admin/login.html", "admin/oauth.html"].includes(path)) {
+    const entry = path.endsWith("login.html") ? "login" : path.endsWith("oauth.html") ? "oauth" : "app";
+    const html = dev_html(readFileSync(source, "utf8"), entry);
     write_changed(target, html);
     if (path === "admin/index.html") for (const name of aliases) write_changed(join(assets, "admin", name), html);
   } else {
@@ -86,7 +87,7 @@ export async function prepare_admin_dev({ root = project_root, assets = build_st
     outdir: join(assets, "admin/vendor"), bundle: true, splitting: true, format: "esm",
     charset: "utf8", target: "es2022", nodePaths: [join(root, "node_modules")],
   });
-  for (const [name, entry] of [["app", "./app.js"], ["login", "./pages/login.js"]]) {
+  for (const [name, entry] of [["app", "./app.js"], ["login", "./pages/login.js"], ["oauth", "./pages/oauth.js"]]) {
     writeFileSync(join(assets, `admin/${name}.dev.js`),
       `import "./components/ui.js";\nawait import(${JSON.stringify(entry)});\n`);
   }

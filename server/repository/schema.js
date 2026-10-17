@@ -34,6 +34,12 @@ export const API_TABLE_NAMES = Object.freeze([
   "tags",
   "rss_cookie_grants",
   "device_tokens",
+  "mcp_tokens",
+  "mcp_calls",
+  "mcp_oauth_clients",
+  "mcp_oauth_requests",
+  "mcp_oauth_grants",
+  "mcp_oauth_credentials",
   "script_agent_settings",
   "calls",
   "devices",
@@ -111,6 +117,35 @@ export const API_SCHEMA_SQL = `
     created_at INTEGER NOT NULL, expires_at INTEGER, revoked_at INTEGER, last_used_at INTEGER
   );
   CREATE INDEX IF NOT EXISTS device_tokens_expiry ON device_tokens(expires_at) WHERE revoked_at IS NULL;
+
+  CREATE TABLE IF NOT EXISTS mcp_tokens (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, token_hint TEXT NOT NULL,
+    scopes_json TEXT NOT NULL, resource TEXT NOT NULL, created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL, revoked_at INTEGER, last_used_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS mcp_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, token_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS mcp_calls_token ON mcp_calls(token_id, id DESC);
+
+  CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+    id TEXT PRIMARY KEY, resource TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS mcp_oauth_requests (
+    id TEXT PRIMARY KEY, resource TEXT NOT NULL, client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL,
+    state TEXT NOT NULL, scopes_json TEXT NOT NULL, code_challenge TEXT NOT NULL, code_hash TEXT UNIQUE,
+    status TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS mcp_oauth_requests_expiry ON mcp_oauth_requests(expires_at);
+  CREATE TABLE IF NOT EXISTS mcp_oauth_grants (
+    id TEXT PRIMARY KEY, client_id TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS mcp_oauth_credentials (
+    id TEXT PRIMARY KEY, grant_id TEXT NOT NULL, access_hash TEXT NOT NULL UNIQUE,
+    refresh_hash TEXT NOT NULL UNIQUE, access_expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL, used_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS mcp_oauth_credentials_grant ON mcp_oauth_credentials(grant_id);
 
   CREATE TABLE IF NOT EXISTS script_agent_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
