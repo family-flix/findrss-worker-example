@@ -12,7 +12,7 @@ if (
 ) {
   throw new Error("用户管理页无法启动：管理运行时未加载");
 }
-const { Button, For, Input, Show, View, combine, computed } = Timeless;
+const { Button, For, Input, Popconfirm, Show, View, combine, computed } = Timeless;
 
 function format_time(value) {
   return value ? format_datetime(value) : "—";
@@ -70,15 +70,7 @@ function UserCardView(props) {
     vm$.state.busy_action,
     (action) => vm$.state.busy_user_id.value === user_id && action === "delete",
   );
-  const is_confirming = computed(
-    vm$.state.confirm_delete_id,
-    (id) => id === user_id,
-  );
-  const delete_label_ = combine(
-    { confirming: is_confirming, busy: busy_delete },
-    (state) =>
-      state.confirming ? (state.busy ? "删除中…" : "确认删除") : "删除",
-  );
+  const delete_label_ = computed(busy_delete, busy => busy ? "删除中…" : "删除");
 
   return View(
     {
@@ -358,35 +350,12 @@ function UserCardView(props) {
             },
             ["重置密码"],
           ),
-          Button(
-            {
-              class: "box-border flex-none",
-              attributes: { n: "users-delete-button", type: "button" },
-              onClick() {
-                if (is_confirming.value)
-                  return vm$.methods.confirmDelete(user_id);
-                return vm$.methods.askDelete(user_id);
-              },
-            },
-            [delete_label_],
-          ),
-          Show({
-            when: is_confirming,
-            ok() {
-              return Button(
-                {
-                  class: "box-border flex-none justify-self-center",
-                  attributes: {
-                    n: "users-delete-cancel-button",
-                    type: "button",
-                  },
-                  onClick() {
-                    return vm$.methods.cancelDelete();
-                  },
-                },
-                ["取消"],
-              );
-            },
+          Popconfirm({
+            title: `删除用户“${user.email || user.name || user_id}”？此操作无法撤销。`,
+            disabled: busy_delete, attributes: { n: "users-delete-confirmation" },
+            onConfirm: () => vm$.methods.confirmDelete(user_id),
+            trigger: props => Button({ ...props, class: "box-border flex-none", disabled: busy_delete,
+              attributes: { ...props.attributes, n: "users-delete-button", type: "button" } }, [delete_label_]),
           }),
         ],
       ),

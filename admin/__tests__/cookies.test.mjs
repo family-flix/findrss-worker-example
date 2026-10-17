@@ -17,6 +17,7 @@ function setup(fetch, confirm = () => true) {
       combine: (sources, map) => ({ get value() { return map(Object.fromEntries(Object.entries(sources).map(([key, value]) => [key, value.value]))); } }),
       For: ({ each, render }) => element({}, each.value.map(render)),
       Show: ({ when, ok }) => when.value ? ok() : element({}),
+      Popconfirm: props => element(props, [props.trigger({})]),
       Button: element, Dialog: element, Input: element, Textarea: element, View: element },
   } });
   context.window.FindRSSAdminUI = context.window.Timeless;
@@ -188,12 +189,11 @@ test("域名内添加 key/value，失败保留输入，成功添加并清空添�
 
 test("左侧删除整个域名，切换选择并保留其他域名草稿，最后一个域名删除后显示空状态", async () => {
   const calls = [];
-  const confirmations = [];
   const context = setup(async (url, options) => {
     if (!options.body) return Response.json({ cookies: [fixture, { ...fixture, path: "/account" }, { ...fixture, domain: ".other.com" }] });
     calls.push({ url, options });
     return Response.json({ count: calls.length === 1 ? 1 : 0 });
-  }, text => { confirmations.push(text); return true; });
+  });
   const { model } = context;
   await model.methods.refresh();
   const other = model.state.groups.value[1];
@@ -203,11 +203,14 @@ test("左侧删除整个域名，切换选择并保留其他域名草稿，最�
   const sidebar = walk(root).find(node => node.props.attributes?.n === "cookies-domains");
   const remove = walk(sidebar).find(node => node.props.attributes?.n === "cookie-domain-delete-.example.com");
   assert.match(remove.props.attributes["aria-label"], /example\.com.*所有 Cookie/);
-  await remove.props.onClick();
+  assert.equal(remove.props.onClick, undefined);
+  assert.equal(calls.length, 0);
+  const confirmation = walk(sidebar).find(node => node.props.attributes?.n === "cookie-domain-delete-confirmation-.example.com");
+  assert.match(confirmation.props.title, /example\.com.*所有路径.*无法撤销/);
+  await confirmation.props.onConfirm();
   assert.equal(calls[0].url, "/admin/api/cookies/domain");
   assert.equal(calls[0].options.method, "DELETE");
   assert.deepEqual(JSON.parse(calls[0].options.body), { domain: ".example.com" });
-  assert.match(confirmations[0], /example\.com.*所有路径.*无法撤销/);
   assert.equal(model.state.groups.value.length, 1);
   assert.equal(model.state.selected_domain.value, ".other.com");
   assert.equal(model.state.selected_groups.value[0], other);
@@ -222,8 +225,7 @@ test("左侧删除整个域名，切换选择并保留其他域名草稿，最�
   assert.match(model.state.message.value, /other\.com.*已删除/);
 });
 
-test("取消或删除域名失败时保留 Cookie、选择和草稿，忙碌时禁止重复删除", async () => {
-  let confirmed = false;
+test("删除域名失败时保留 Cookie、选择和草稿，忙碌时禁止重复删除", async () => {
   let writes = 0;
   let finish;
   const { model } = setup(async (_, options) => {
@@ -231,13 +233,10 @@ test("取消或删除域名失败时保留 Cookie、选择和草稿，忙碌时�
     writes++;
     await new Promise(resolve => { finish = resolve; });
     return Response.json({ error: "删除失败" }, { status: 500 });
-  }, () => confirmed);
+  });
   await model.methods.refresh();
   const group = model.state.groups.value[0];
   model.methods.set_value(group.rows.value[0].value, "draft");
-  await model.methods.remove_domain(group);
-  assert.equal(writes, 0);
-  confirmed = true;
   const pending = model.methods.remove_domain(group);
   assert.equal(model.state.busy.value, true);
   await model.methods.remove_domain(group);

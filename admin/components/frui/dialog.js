@@ -164,7 +164,7 @@ function Dialog(props = {}, children = []) {
       ...rest,
       store,
       class: atomic_classes([
-        "position-fixed top-50-percent left-50-percent z-index-301 width-min-480-pixels-calc-100-vw-32-pixels max-height-85-vh overflow-auto transform-translate-negative-50-percent-negative-50-percent border-0 border-radius-radius-card padding-space-4 background-color-surface color-color-text box-shadow-shadow-card focus-outline-2-pixels-solid-color-focus focus-outline-offset-3-pixels",
+        "position-fixed top-50-percent left-50-percent z-index-301 width-min-480-pixels-calc-100-vw-32-pixels max-height-85-vh overflow-auto transform-translate-negative-50-percent-negative-50-percent border-0 border-radius-radius-card padding-space-4 background-color-surface color-color-text box-shadow-shadow-card outline-none",
         custom_class
       ].filter(Boolean).join(" ")),
       attributes: {
@@ -183,9 +183,7 @@ function Dialog(props = {}, children = []) {
       style: {
         ...{
           "--width-min-480-pixels-calc-100-vw-32-pixels": "min(480px,calc(100vw - 32px))",
-          "--max-height-85-vh": "85vh",
-          "--focus-outline-2-pixels-solid-color-focus": "2px solid var(--frui-color-focus)",
-          "--focus-outline-offset-3-pixels": "3px"
+          "--max-height-85-vh": "85vh"
         },
         ...(rest)?.style
       }

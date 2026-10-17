@@ -7,7 +7,7 @@ const Timeless = window.FindRSSAdminUI;
 if (!Timeless || !Timeless.DOM || !window.FindRSSAdminAuth || !window.FindRSSAdminShell) {
   throw new Error("兑换卡管理页无法启动：管理运行时未加载");
 }
-const { Button, For, Input, Show, Textarea, View, computed } = Timeless;
+const { Button, For, Input, Popconfirm, Show, Textarea, View, computed } = Timeless;
 
 function source_value(value) {
   return value && value.__is_ref ? value.value : value;
@@ -128,16 +128,12 @@ function CardRowView({ store, card }) {
         : "创建于 " + format_time(card.created_at),
     ]),
     card.status === "available"
-      ? Button(
-          {
-            class: "box-border flex-none justify-self-center",
-            attributes: { n: "revoke-redemption-card-" + card.id },
-            onClick() {
-              return store.methods.revokeCard(card.id);
-            },
-          },
-          ["停用卡片"],
-        )
+      ? Popconfirm({ title: "停用这张尚未兑换的卡？停用后无法恢复。", confirmText: "确认停用",
+          attributes: { n: "revoke-redemption-card-confirmation-" + card.id },
+          onConfirm: () => store.methods.revokeCard(card.id),
+          trigger: props => Button({ ...props, class: "box-border flex-none justify-self-center",
+            attributes: { ...props.attributes, n: "revoke-redemption-card-" + card.id } }, ["停用卡片"]),
+        })
       : null,
   ]);
 }

@@ -1,2 +1,53 @@
-// Geometry from public/illustrations/xiaoxun-loading.svg; animation utilities live in admin/style.css.
-export const loading_art = {"tag":"svg","attrs":{"viewBox":"0 0 1254 1254","data-n":"xiaoxun-loading-art","aria-hidden":"true","focusable":"false"},"children":[{"tag":"rect","attrs":{"width":"1254","height":"1254","fill":"#D6E7FC","data-n":"pale-blue-background"}},{"tag":"g","attrs":{"class":"animation-frui-loading-peek-2-8s-ease-in-out-infinite media-prefers-reduced-motion-reduce-animation-none","data-n":"xiaoxun-loading-bird"},"children":[{"tag":"path","attrs":{"fill":"#1268FD","data-n":"bird-head-and-rss-crest","d":"M0 1254V994C155 755 370 674 558 653C470 644 389 648 324 645C286 644 263 625 263 591C262 555 286 524 320 504C372 472 455 474 526 496C602 523 645 574 675 635C664 540 619 476 534 446C485 433 443 430 392 430C337 430 307 421 286 402C270 388 262 369 262 350C262 314 289 281 327 264C411 223 514 249 586 279C694 335 754 427 775 531C780 572 783 618 774 660C994 698 1157 824 1254 994V1254Z"}},{"tag":"path","attrs":{"fill":"#FFFEFE","data-n":"left-comma-cheek","d":"M300 926C380 926 436 982 436 1060C436 1148 344 1213 287 1207C292 1217 301 1224 313 1231C326 1243 289 1261 266 1270C193 1259 160 1221 138 1194C101 1146 110 1080 120 1050C145 970 225 926 300 926Z"}},{"tag":"path","attrs":{"fill":"#FFFEFE","transform":"translate(1254 0) scale(-1 1)","data-n":"right-comma-cheek","d":"M300 926C380 926 436 982 436 1060C436 1148 344 1213 287 1207C292 1217 301 1224 313 1231C326 1243 289 1261 266 1270C193 1259 160 1221 138 1194C101 1146 110 1080 120 1050C145 970 225 926 300 926Z"}},{"tag":"path","attrs":{"fill":"#15295E","data-n":"left-curious-eyebrow","d":"M247 898C231 897 231 885 246 863C269 834 306 829 337 830C356 830 357 852 342 856C309 856 285 868 261 891C256 897 253 899 247 898Z"}},{"tag":"path","attrs":{"fill":"#15295E","transform":"translate(1254 0) scale(-1 1)","data-n":"right-curious-eyebrow","d":"M247 898C231 897 231 885 246 863C269 834 306 829 337 830C356 830 357 852 342 856C309 856 285 868 261 891C256 897 253 899 247 898Z"}},{"tag":"path","attrs":{"fill":"#FFFBE9","data-n":"ivory-beak","d":"M625 1090C649 1090 758 1163 758 1195C758 1223 690 1258 625 1266C562 1258 494 1224 494 1197C494 1163 558 1099 607 1092C613 1091 620 1090 625 1090Z"}},{"tag":"g","attrs":{"class":"animation-frui-loading-look-2-8s-ease-in-out-infinite media-prefers-reduced-motion-reduce-animation-none","data-n":"xiaoxun-loading-eyes"},"children":[{"tag":"circle","attrs":{"cx":"342","cy":"1070","r":"72","fill":"#15295E","data-n":"left-eye"}},{"tag":"circle","attrs":{"cx":"912","cy":"1070","r":"72","fill":"#15295E","data-n":"right-eye"}}]}]}]};
+// Geometry from public/brand/logo.svg. Keep paths and timing in sync with public/brand/loading.svg.
+export const loading_art = {
+  "tag": "svg",
+  "attrs": {
+    "viewBox": "0 0 1024 1024",
+    "data-n": "findrss-loading-art",
+    "aria-hidden": "true",
+    "focusable": "false"
+  },
+  "children": [
+    {
+      "tag": "path",
+      "attrs": {
+        "fill": "var(--frui-brand-blue, #2563EB)",
+        "d": "M512 100c172 0 258 0 321 31 27 13 47 33 60 60 31 63 31 149 31 321s0 258-31 321c-13 27-33 47-60 60-63 31-149 31-321 31s-258 0-321-31c-27-13-47-33-60-60-31-63-31-149-31-321s0-258 31-321c13-27 33-47 60-60 63-31 149-31 321-31Z"
+      }
+    },
+    {
+      "tag": "g",
+      "attrs": {
+        "fill": "var(--frui-brand-white, #FFFFFF)",
+        "transform": "translate(138.88 151.91) scale(1.5) rotate(4 256 256)"
+      },
+      "children": [
+        {
+          "tag": "path",
+          "attrs": {
+            "d": "M116 365 L116 148 C116 108 138 88 177 88 L318 88 C340 88 354 101 354 122 C354 143 340 156 318 156 L224 156 C202 156 184 174 184 196 L184 365 C184 389 171 403 150 403 C129 403 116 389 116 365 Z"
+          }
+        },
+        {
+          "tag": "path",
+          "attrs": {
+            "class": "animation-findrss-signal-1-8s-ease-in-out-infinite media-prefers-reduced-motion-reduce-animation-none",
+            "data-n": "findrss-loading-signal",
+            "transform": "translate(22 0)",
+            "d": "M229 191 C321 191 396 266 396 358 C396 378 384 390 365 390 C346 390 334 378 334 358 C334 300 287 253 229 253 C209 253 197 241 197 222 C197 203 209 191 229 191 Z"
+          }
+        },
+        {
+          "tag": "circle",
+          "attrs": {
+            "class": "animation-findrss-dot-1-8s-ease-in-out-infinite media-prefers-reduced-motion-reduce-animation-none",
+            "data-n": "findrss-loading-dot",
+            "cx": "270",
+            "cy": "350",
+            "r": "46"
+          }
+        }
+      ]
+    }
+  ]
+};

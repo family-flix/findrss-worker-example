@@ -7,11 +7,10 @@ const {
   ref,
   computed
 } = Timeless;
-import {
-  Tooltip
-} from "./tooltip.js";
+import { notify } from "./toaster.js";
 import {
   normalize_autocomplete,
+  source_value,
   as_children,
   next_uid,
   dispose_all
@@ -130,12 +129,12 @@ function Field({
           for: control_id || `${field_id}-input`
         }
       }, as_children(state.label)),
-      tooltip === undefined ? null : Tooltip({
+      tooltip === undefined ? null : View({
         as: "button",
-        content: tooltip,
+        onClick: () => notify(source_value(tooltip)),
         class: "flex-none border-0 padding-space-1 background-transparent color-color-muted cursor-help focus-visible-outline-2-pixels-solid-color-focus focus-visible-outline-offset-2-pixels focus-visible-border-radius-radius-sm",
         attributes: {
-          n: `${name}-tooltip`,
+          n: `${name}-help-button`,
           type: "button",
           "aria-label": computed(state.label, value => `${value}说明`)
         },

@@ -1,5 +1,7 @@
 // Generated from file/*.svg by tools/build-icons.js. Edit the SVG sources.
 
+import { Earth } from "./earth.js";
+
 export const Activity = {"tag":"svg","attrs":{"viewBox":"0 0 24 24","fill":"none","stroke":"currentColor","stroke-width":"2","stroke-linecap":"round","stroke-linejoin":"round","class":"flex-none","data-n":"icon-activity","aria-hidden":"true","focusable":"false"},"children":[{"tag":"path","attrs":{"data-n":"activity-path-1","d":"M3 12h4l3-8 4 16 3-8h4"}}]};
 export const ArrowDownToLine = {"tag":"svg","attrs":{"viewBox":"0 0 24 24","fill":"none","stroke":"currentColor","stroke-width":"2","stroke-linecap":"round","stroke-linejoin":"round","class":"flex-none","data-n":"icon-arrow-down-to-line","aria-hidden":"true","focusable":"false"},"children":[{"tag":"path","attrs":{"data-n":"arrow-down-to-line-path-1","d":"M12 3v12m-5-5 5 5 5-5M4 19v2h16v-2"}}]};
 export const ArrowDown = {"tag":"svg","attrs":{"viewBox":"0 0 24 24","fill":"none","stroke":"currentColor","stroke-width":"2","stroke-linecap":"round","stroke-linejoin":"round","class":"flex-none","data-n":"icon-arrow-down","aria-hidden":"true","focusable":"false"},"children":[{"tag":"path","attrs":{"data-n":"arrow-down-path-1","d":"M12 4v16m-6-6 6 6 6-6"}}]};
@@ -287,6 +289,7 @@ export const iconRegistry = {
   "git-branch-filled": GitBranchFilled,
   "git-branch": GitBranch,
   "git-fork": GitFork,
+  "earth": Earth,
   "globe": Globe,
   "grid-3x3": Grid3x3,
   "hard-drive-download": HardDriveDownload,

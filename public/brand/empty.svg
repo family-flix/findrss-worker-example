@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 376" role="img" aria-labelledby="findrss-empty-title findrss-empty-desc">
+  <title id="findrss-empty-title">FindRSS empty collection</title>
+  <desc id="findrss-empty-desc">An empty card carrying the original F and RSS mark, with a second card waiting behind it.</desc>
+  <g fill="none" stroke="#2563EB" stroke-width="2">
+    <path opacity=".12" d="M170 88V78a18 18 0 0 1 18-18h226a18 18 0 0 1 18 18v168a18 18 0 0 1-18 18h-10"/>
+    <rect x="128" y="92" width="276" height="204" rx="20" fill="#2563EB" fill-opacity=".035" stroke-opacity=".24"/>
+    <path opacity=".1" stroke-linecap="round" d="M108 322h344"/>
+    <path opacity=".2" stroke-width="6" stroke-linecap="round" d="M270 164h88m-88 22h64"/>
+    <path opacity=".12" stroke-width="6" stroke-linecap="round" d="M164 250h110m20 0h64"/>
+  </g>
+  <g fill="#2563EB" transform="translate(150 124) scale(.1)">
+    <path opacity=".08" d="M512 100c172 0 258 0 321 31 27 13 47 33 60 60 31 63 31 149 31 321s0 258-31 321c-13 27-33 47-60 60-63 31-149 31-321 31s-258 0-321-31c-27-13-47-33-60-60-31-63-31-149-31-321s0-258 31-321c13-27 33-47 60-60 63-31 149-31 321-31Z"/>
+    <g opacity=".65" transform="translate(138.88 151.91) scale(1.5) rotate(4 256 256)">
+      <path d="M116 365 L116 148 C116 108 138 88 177 88 L318 88 C340 88 354 101 354 122 C354 143 340 156 318 156 L224 156 C202 156 184 174 184 196 L184 365 C184 389 171 403 150 403 C129 403 116 389 116 365 Z"/>
+      <path transform="translate(22 0)" d="M229 191 C321 191 396 266 396 358 C396 378 384 390 365 390 C346 390 334 378 334 358 C334 300 287 253 229 253 C209 253 197 241 197 222 C197 203 209 191 229 191 Z"/>
+      <circle cx="270" cy="350" r="46"/>
+    </g>
+  </g>
+</svg>

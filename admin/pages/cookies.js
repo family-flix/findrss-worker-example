@@ -5,15 +5,13 @@ const Timeless = window.FindRSSAdminUI;
 if (!Timeless?.DOM || !window.FindRSSAdminAuth || !window.FindRSSAdminShell) {
   throw new Error("Cookie 管理页无法启动：管理运行时未加载");
 }
-const { Button, Dialog, For, Input, Show, Textarea, View, combine, computed } = Timeless;
+const { Button, Dialog, For, Input, Popconfirm, Show, Textarea, Toaster, View, combine, computed } = Timeless;
 
 function CookieRowView({ model, group, row }) {
   return View({ class: "box-border grid items-start bg-surface-raised rounded-card max-960-grid-template-columns", style: {
     "grid-template-columns": "minmax(120px,.6fr) minmax(0,1.6fr) auto",
     "gap": "12px",
-    "border-top": "1px solid var(--frui-color-border-soft)",
     "padding-top": "12px",
-    "border": "1px solid var(--frui-color-border)",
     "padding": "14px",
     "--max-960-grid-template-columns": "minmax(0,1fr)"
   }, attributes: { n: "cookie-row" } }, [
@@ -37,8 +35,12 @@ function CookieRowView({ model, group, row }) {
     }, attributes: { n: "cookie-actions" } }, [
       Button({class: "box-border",  attributes: { n: "cookie-save-button" }, disabled: model.state.busy,
         onClick: () => model.methods.save_cookie(row) }, ["保存"]),
-      Button({ class: "box-border flex-none justify-self-center", attributes: { n: "cookie-delete-button" }, disabled: model.state.busy,
-        onClick: () => model.methods.remove_cookie(group, row) }, ["删除"]),
+      Popconfirm({ title: `删除 ${group.domain} 路径 ${row.cookie.path} 下的 Cookie“${row.cookie.name}”？此操作无法撤销。`,
+        disabled: model.state.busy, attributes: { n: "cookie-delete-confirmation" },
+        onConfirm: () => model.methods.remove_cookie(group, row),
+        trigger: props => Button({ ...props, class: "box-border flex-none justify-self-center", disabled: model.state.busy,
+          attributes: { ...props.attributes, n: "cookie-delete-button" } }, ["删除"]),
+      }),
     ]),
   ]);
 }
@@ -47,16 +49,21 @@ function CookieGroupView({ model, group }) {
   return View({ class: "box-border grid min-w-0", style: {
     "gap": "14px"
   }, attributes: { n: "cookie-domain-group" } }, [
-    View({ class: "box-border flex items-center justify-between", style: {
-      "gap": "12px"
-    }, attributes: { n: "cookie-domain-heading" } }, [
-      View({ class: "box-border min-w-0 break-anywhere", style: {
-        "font-size": "13px",
-        "font-weight": "680"
-      }, attributes: { n: "cookie-domain-name" } }, [group.domain]),
-      View({ class: "box-border text-muted flex-none", style: {
-        "font-size": "11px"
-      }, attributes: { n: "cookie-domain-count" } }, [computed(group.rows, (rows) => rows.length + " 条")]),
+    View({ class: "box-border grid rounded-card bg-surface max-960-grid-template-columns", style: {
+      "grid-template-columns": "minmax(120px,.6fr) minmax(0,1.6fr) auto",
+      "gap": "12px",
+      "padding-top": "14px",
+      "padding": "16px",
+      "--max-960-grid-template-columns": "minmax(0,1fr)"
+    }, attributes: { n: "cookie-add-form" } }, [
+      Input({class: "box-border",  value: group.new_name, disabled: model.state.busy, placeholder: "key",
+        attributes: { n: "cookie-add-key", "aria-label": group.domain + " 新 Cookie key", spellcheck: "false" },
+        onInput: (event) => model.methods.set_value(group.new_name, event.target.value) }),
+      Input({class: "box-border",  value: group.new_value, disabled: model.state.busy, placeholder: "value",
+        attributes: { n: "cookie-add-value", "aria-label": group.domain + " 新 Cookie value", spellcheck: "false" },
+        onInput: (event) => model.methods.set_value(group.new_value, event.target.value) }),
+      Button({class: "box-border",  attributes: { n: "cookie-add-button" }, disabled: model.state.busy,
+        onClick: () => model.methods.add_cookie(group) }, ["添加键值对"]),
     ]),
     View({ class: "box-border grid min-w-0", style: {
       "gap": "14px"
@@ -70,46 +77,26 @@ function CookieGroupView({ model, group }) {
         return CookieRowView({ model, group, row: value?.__is_ref ? value.value : value });
       } }),
     ]),
-    View({ class: "box-border grid rounded-card bg-surface max-960-grid-template-columns", style: {
-      "grid-template-columns": "minmax(120px,.6fr) minmax(0,1.6fr) auto",
-      "gap": "12px",
-      "padding-top": "14px",
-      "border-top": "1px solid var(--frui-color-border-soft)",
-      "padding": "16px",
-      "border": "1px solid var(--frui-color-border-soft)",
-      "--max-960-grid-template-columns": "minmax(0,1fr)"
-    }, attributes: { n: "cookie-add-form" } }, [
-      Input({class: "box-border",  value: group.new_name, disabled: model.state.busy, placeholder: "key",
-        attributes: { n: "cookie-add-key", "aria-label": group.domain + " 新 Cookie key", spellcheck: "false" },
-        onInput: (event) => model.methods.set_value(group.new_name, event.target.value) }),
-      Input({class: "box-border",  value: group.new_value, disabled: model.state.busy, placeholder: "value",
-        attributes: { n: "cookie-add-value", "aria-label": group.domain + " 新 Cookie value", spellcheck: "false" },
-        onInput: (event) => model.methods.set_value(group.new_value, event.target.value) }),
-      Button({class: "box-border",  attributes: { n: "cookie-add-button" }, disabled: model.state.busy,
-        onClick: () => model.methods.add_cookie(group) }, ["添加键值对"]),
-    ]),
   ]);
 }
 
 function CookieWorkspaceView({ model }) {
   const state = model.state;
-  return View({ class: "box-border grid items-start max-760-grid-template-columns max-760-gap", style: {
+  return View({ class: "box-border grid flex-1 min-w-0 min-h-0 overflow-hidden max-760-grid-template-columns max-760-grid-template-rows max-760-gap", style: {
     "grid-template-columns": "minmax(180px, 240px) minmax(0, 1fr)",
-    "gap": "24px",
+    "grid-template-rows": "minmax(0, 1fr)",
+    "gap": "var(--frui-space-3)",
     "--max-760-grid-template-columns": "minmax(0,1fr)",
-    "--max-760-gap": "20px"
+    "--max-760-grid-template-rows": "minmax(0, min(180px, 30%)) minmax(0, 1fr)",
+    "--max-760-gap": "var(--frui-space-3)"
   }, attributes: { n: "cookies-workspace" } }, [
-    View({ class: "box-border sticky grid min-w-0 max-760-position", style: {
-      "top": "20px",
-      "gap": "14px",
-      "--max-760-position": "static"
+    View({ class: "box-border grid min-w-0 min-h-0", style: {
+      "grid-template-rows": "minmax(0, 1fr)"
     }, attributes: { n: "cookies-domains", "aria-label": "Cookie 域名" } }, [
-      View({ class: "box-border grid overflow-auto rounded-card bg-surface max-760-max-height", style: {
+      View({ class: "box-border grid min-h-0 align-content-start overflow-auto rounded-card bg-surface", style: {
         "gap": "6px",
-        "max-height": "60dvh",
         "padding": "8px",
-        "border": "1px solid var(--frui-color-border-soft)",
-        "--max-760-max-height": "180px"
+        "border": "1px solid var(--frui-color-border-soft)"
       }, attributes: { n: "cookie-domain-list", "aria-label": "域名列表" } }, [
         Show({ when: computed(state.groups, groups => groups.length === 0),
           ok: () => View({ class: "box-border text-muted rounded-card", style: {
@@ -138,14 +125,17 @@ function CookieWorkspaceView({ model }) {
             }, attributes: { n: "cookie-domain-count" } }, [computed(group.rows, rows => String(rows.length))]),
             ]),
           ]),
-          Button({ variant: "danger", size: "small", class: "box-border flex-none", disabled: state.busy,
-            attributes: { n: "cookie-domain-delete-" + group.domain, title: "删除域名及其所有 Cookie", "aria-label": "删除域名 " + group.domain + " 及其所有 Cookie" },
-            onClick: () => model.methods.remove_domain(group) }, []),
+          Popconfirm({ title: `删除域名 ${group.domain} 及其所有路径下的 Cookie？该域名未保存的修改也会丢失，此操作无法撤销。`,
+            disabled: state.busy, attributes: { n: "cookie-domain-delete-confirmation-" + group.domain },
+            onConfirm: () => model.methods.remove_domain(group),
+            trigger: props => Button({ ...props, variant: "danger", size: "small", class: "box-border flex-none", disabled: state.busy,
+              attributes: { ...props.attributes, n: "cookie-domain-delete-" + group.domain, title: "删除域名及其所有 Cookie", "aria-label": "删除域名 " + group.domain + " 及其所有 Cookie" } }, []),
+          }),
           ]);
         } }),
       ]),
     ]),
-    View({ class: "box-border min-w-0", attributes: { n: "cookies-details", "aria-label": "域名键值对" } }, [
+    View({ class: "box-border min-w-0 min-h-0 overflow-auto", attributes: { n: "cookies-details", "aria-label": "域名键值对" } }, [
       Show({ when: computed(state.selected_groups, groups => groups.length === 0),
         ok: () => View({ class: "box-border text-muted rounded-card", style: {
           "padding": "20px",
@@ -208,20 +198,17 @@ function CookiesPage() {
   const state = model.state;
   return window.FindRSSAdminShell.Page({
     page_id: "cookies", title: "Cookie 管理", count: computed(state.count, String),
+    class: "h-full min-h-0 overflow-hidden",
+    contentProps: { class: "flex-1", style: { "grid-template-rows": "minmax(0, 1fr)" } },
     actions: [Button({ attributes: { n: "cookies-import-button" },
       disabled: combine({ busy: state.busy, loaded: state.loaded }, values => values.busy || !values.loaded),
       onClick: model.methods.open_import }, ["导入 Cookies"]),
       Button({ class: "box-border flex-none justify-self-center", attributes: { n: "cookies-refresh-button" },
       disabled: state.busy, onClick: model.methods.refresh }, ["重新读取"])],
-  }, [View({ class: "box-border grid min-w-0", style: {
+  }, [View({ class: "box-border flex flex-col h-full min-w-0 min-h-0", style: {
     "gap": "16px"
   }, attributes: { n: "cookies-management" }, onMounted: model.methods.refresh }, [
-    View({ class: "box-border text-success", style: {
-      "font-size": "12px"
-    }, attributes: { n: "cookies-message", role: "status" } }, [state.message]),
-    View({ class: "box-border text-danger whitespace-pre-wrap break-anywhere", style: {
-      "font-size": "12px"
-    }, attributes: { n: "cookies-error", role: "alert" } }, [state.error]),
+    Toaster({ message: state.message, error: state.error, onDismiss: model.methods.dismiss_notification }),
     CookieWorkspaceView({ model }),
     Show({ when: state.import_open, ok: () => CookieImportView({ model }) }),
   ])]);

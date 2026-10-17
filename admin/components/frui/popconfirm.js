@@ -1,6 +1,9 @@
 const {
-  View
+  View,
+  ref,
+  combine
 } = Timeless;
+import { source_value } from "./shared.js";
 import {
   Button
 } from "./button.js";
@@ -17,8 +20,18 @@ function Popconfirm({
   attributes = {}
 }) {
   const name = attributes.n || "popconfirm";
+  const pending = ref(false);
+  const disabled_source = disabled?.__is_ref ? disabled : ref(Boolean(disabled));
+  const busy = combine({ pending, disabled: disabled_source },
+    ({ pending, disabled }) => pending || Boolean(disabled));
   return DropdownMenu({
     trigger,
+    disabled: busy,
+    onUnmounted() {
+      busy.destroy?.();
+      pending.destroy?.();
+      if (disabled_source !== disabled) disabled_source.destroy?.();
+    },
     align: "end",
     side: "top",
     attributes: {
@@ -56,21 +69,27 @@ function Popconfirm({
           }
         }, [
           Button({
-            disabled,
+            disabled: busy,
             attributes: {
               n: `${name}-cancel`
             },
             onClick: close
           }, ["取消"]),
           Button({
-            disabled,
+            disabled: busy,
             variant: "danger",
             attributes: {
               n: `${name}-confirm`
             },
             async onClick() {
-              await onConfirm();
-              close();
+              if (pending.value || source_value(disabled, false)) return;
+              pending.as(true);
+              try {
+                await onConfirm();
+                close();
+              } finally {
+                pending.as(false);
+              }
             }
           }, [confirmText]),
         ]),

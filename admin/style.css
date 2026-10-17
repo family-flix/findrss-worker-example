@@ -127,6 +127,8 @@
 .whitespace-pre-wrap { white-space: pre-wrap; }
 .animate-slide-in { animation: var(--route-enter); }
 .animate-slide-out { animation: var(--route-exit); }
+.animate-tooltip-in { animation: var(--tooltip-enter); }
+.animate-tooltip-out { animation: var(--tooltip-exit); }
 .justify-self-start { justify-self: start; }
 .overflow-visible { overflow: visible; }
 .box-border { box-sizing: border-box; }
@@ -193,8 +195,8 @@
 .width-loading-size { width: var(--frui-loading-size); }
 .height-loading-size { height: var(--frui-loading-size); }
 .aspect-ratio-1 { aspect-ratio: 1; }
-.animation-frui-loading-peek-2-8s-ease-in-out-infinite { animation: frui-loading-peek 2.8s ease-in-out infinite; }
-.animation-frui-loading-look-2-8s-ease-in-out-infinite { animation: frui-loading-look 2.8s ease-in-out infinite; }
+.animation-findrss-signal-1-8s-ease-in-out-infinite { animation: findrss-signal 1.8s ease-in-out infinite; }
+.animation-findrss-dot-1-8s-ease-in-out-infinite { animation: findrss-dot 1.8s ease-in-out infinite; }
 .gap-loading-dot-size { gap: var(--frui-loading-dot-size); }
 .height-calc-loading-dot-size-2 { height: calc(var(--frui-loading-dot-size)*2); }
 .width-loading-dot-size { width: var(--frui-loading-dot-size); }
@@ -659,6 +661,7 @@
 .max-760-gap { gap: var(--max-760-gap) !important; }
 .max-760-grid-column { grid-column: var(--max-760-grid-column) !important; }
 .max-760-grid-template-columns { grid-template-columns: var(--max-760-grid-template-columns) !important; }
+.max-760-grid-template-rows { grid-template-rows: var(--max-760-grid-template-rows) !important; }
 .max-760-height { height: var(--max-760-height) !important; }
 .max-760-inset-block-end { inset-block-end: var(--max-760-inset-block-end) !important; }
 .max-760-inset-inline-end { inset-inline-end: var(--max-760-inset-inline-end) !important; }
@@ -736,6 +739,7 @@
 .animate-slide-in { animation: none; }
 .animate-slide-out { animation: none; }
 .media-prefers-reduced-motion-reduce-animation-none { animation: none; }
+.media-prefers-reduced-motion-reduce-animation-duration { animation-duration: var(--media-prefers-reduced-motion-reduce-animation-duration); }
 .media-prefers-reduced-motion-reduce-opacity-8 { opacity: .8; }
 .media-prefers-reduced-motion-reduce-transition-none { transition: none; }
 .media-prefers-reduced-motion-reduce-after-transition-none::after { transition: none; }
@@ -762,8 +766,10 @@
 @keyframes admin-route-view-in{from{opacity:0;transform:translate3d(24px,0,0) scale(.985)}to{opacity:1;transform:translate3d(0,0,0) scale(1)}}
 @keyframes admin-route-view-out{from{opacity:1;transform:translate3d(0,0,0) scale(1)}to{opacity:0;transform:translate3d(-12px,0,0) scale(.995)}}
 @keyframes frui-spin{to{transform:rotate(360deg)}}
-@keyframes frui-loading-peek{0%,100%{transform:translateY(40px)}35%,65%{transform:translateY(0)}}
-@keyframes frui-loading-look{0%,15%,100%{transform:translateX(0)}30%,45%{transform:translateX(-28px)}60%,75%{transform:translateX(28px)}}
+@keyframes findrss-signal{0%,18%,82%,100%{opacity:.28}42%,58%{opacity:1}}
+@keyframes findrss-dot{0%,68%,100%{opacity:.5}18%,38%{opacity:1}}
 @keyframes frui-loading-dot{0%,70%,100%{opacity:.35;transform:translateY(0)}35%{opacity:1;transform:translateY(calc(var(--frui-loading-dot-size)/-2))}}
 @keyframes frui-tree-line-in{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 @keyframes frui-table-pulse{50%{opacity:.5}}
+@keyframes frui-tooltip-in{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+@keyframes frui-tooltip-out{from{opacity:1;transform:scale(1)}to{opacity:0;transform:scale(.96)}}

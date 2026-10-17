@@ -4,7 +4,8 @@ import {
 const {
   View,
   For,
-  computed
+  computed,
+  ref
 } = Timeless;
 import {
   SelectViewModel
@@ -45,21 +46,32 @@ function Select({
     state,
     items
   } = model;
+  const popup_width = ref("auto");
   const floating = FloatingModel({
-    store
+    store,
+    onOpenChange(open) { if (open) sync_popup_width(); }
   });
+  function sync_popup_width() {
+    const width = floating.popper.reference?.getRect().width;
+    if (Number.isFinite(width) && width > 0 && popup_width.value !== `${width}px`) {
+      popup_width.set(`${width}px`);
+    }
+  }
+  const unlisten_width = floating.popper.onStateChange(sync_popup_width);
   const name = attributes.n || "select",
     id = attributes.id || next_uid("frui-select");
   const option_id = item => `${id}-option-${String(item.value)}`;
   return View({
     style,
-    class: "width-100-percent min-width-0",
+    class: "box-sizing-border-box width-100-percent max-width-100-percent min-width-0",
     attributes: {
       n: `${name}-root`
     },
     onUnmounted() {
+      unlisten_width();
       floating.destroy();
       model.destroy();
+      popup_width.destroy?.();
     }
   }, [ui.SelectPrimitive.Root({
     store,
@@ -108,7 +120,7 @@ function Select({
       onKeyDown: model.handle_key,
     }, [
       View({
-        class: "min-width-0 overflow-hidden text-overflow-ellipsis white-space-nowrap",
+        class: "flex-1 min-width-0 overflow-hidden text-overflow-ellipsis white-space-nowrap",
         attributes: {
           n: `${name}-value`
         }
@@ -136,7 +148,7 @@ function Select({
     ]),
     FloatingContent({
       model: floating,
-      class: "z-index-70 min-width-180-pixels max-width-calc-100-vw-16-pixels max-height-min-320-pixels-60-dynamic-vh overflow-auto padding-space-1 border-radius-radius-card background-color-surface-raised color-color-text box-shadow-shadow-card font-font-size-1-4-font-family",
+      class: "z-index-70 min-width-0 max-width-calc-100-vw-16-pixels max-height-min-320-pixels-60-dynamic-vh overflow-y-auto padding-space-1 border-radius-radius-card background-color-surface-raised color-color-text box-shadow-shadow-card font-font-size-1-4-font-family",
       attributes: {
         n: `${name}-popup`,
         id: `${id}-popup`,
@@ -153,7 +165,7 @@ function Select({
           return View({
             as: "button",
             class: atomic_classes(computed(state, () =>
-              `display-flex align-items-center justify-content-space-between gap-space-2 width-100-percent min-height-control-height border-0 border-radius-radius-control padding-0-space-3 background-transparent color-inherit font-inherit text-align-start cursor-pointer not-disabled-hover-background-color-surface-hover disabled-opacity-6 disabled-cursor-not-allowed active-transform-none${item.selected ? " background-color-selected color-color-link" : ""}${item.focused ? " background-color-surface-hover" : ""}`
+              `box-sizing-border-box display-flex align-items-center justify-content-space-between gap-space-2 width-100-percent max-width-100-percent min-width-0 min-height-control-height border-0 border-radius-radius-control padding-0-space-3 background-transparent color-inherit font-inherit text-align-start cursor-pointer not-disabled-hover-background-color-surface-hover disabled-opacity-6 disabled-cursor-not-allowed active-transform-none${item.selected ? " background-color-selected color-color-link" : ""}${item.focused ? " background-color-surface-hover" : ""}`
               )),
             attributes: {
               n: `${name}-option-${item.value}`,
@@ -171,9 +183,10 @@ function Select({
             onMouseEnter() {
               store.handleMouseEnterItem(item);
             },
+            style: { "padding-block": "var(--frui-space-1)" },
           }, [
             View({
-              class: "min-width-0 overflow-hidden text-overflow-ellipsis white-space-nowrap",
+              class: "flex-1 min-width-0 white-space-normal overflow-wrap-anywhere",
               attributes: {
                 n: `${name}-option-label`
               }
@@ -204,8 +217,8 @@ function Select({
         }
       })],
       style: {
+        width: popup_width,
         ...{
-          "--min-width-180-pixels": "180px",
           "--max-width-calc-100-vw-16-pixels": "calc(100vw - 16px)",
           "--max-height-min-320-pixels-60-dynamic-vh": "min(320px,60dvh)"
         }

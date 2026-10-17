@@ -46,12 +46,12 @@ window.FindRSSAdminUI = window.Timeless;
 window.FindRSSAdminUI.Card = (props, children) => create_element("view", props, children);
 window.FindRSSAdminUI.Icon = (name) => create_element("svg", { attributes: { n: "admin-icon-" + name } }, []);
 window.FindRSSAdminUI.Field = (props, children) => create_element("view", props, children);
+window.FindRSSAdminUI.Toaster = () => create_element("portal", { attributes: { n: "toaster" } }, []);
+window.FindRSSAdminUI.TooltipHost = () => create_element("portal", { attributes: { n: "tooltip-host" } }, []);
+window.FindRSSAdminUI.notify = () => {};
+window.FindRSSAdminUI.PageLayout = (props, children) => create_element("section", props, [props.header, ...children].filter(Boolean));
+window.FindRSSAdminUI.PageContent = (props, children) => create_element("view", props, children.filter(Boolean));
 window.FindRSSAdminUI.PageHeader = (props) => create_element("view", props, [create_element("h1", { attributes: props.title_attributes }, Array.isArray(props.title) ? props.title : [props.title])]);
-window.FindRSSAdminUI.DropdownMenuItem = (props, children) => create_element("button", props, children);
-window.FindRSSAdminUI.DropdownMenu = props => ({ type: "dropdown", props, get children() {
-  return [props.trigger({ attributes: props.attributes, onClick() { props.onOpenChange(!props.open.value); } }),
-    ...(props.open.value ? [create_element("menu", props.contentProps, props.content())] : [])];
-} });
 
 await import("../components/shell.js");
 
@@ -85,6 +85,8 @@ test("Shell 渲染侧边栏、当前菜单和子页面内容", () => {
   assert.equal(root.props.attributes.n, "admin-shell");
   assert.equal(root.props.attributes["data-page"], "discovery");
   assert.ok(nodes.some((node) => node.props?.attributes?.n === "admin-shell-sidebar"));
+  assert.equal(nodes.filter(node => node.props?.attributes?.n === "toaster").length, 1);
+  assert.equal(nodes.filter(node => node.props?.attributes?.n === "tooltip-host").length, 1);
   assert.ok(nodes.includes(child));
 
   const navigation = nodes.filter((node) =>
@@ -111,31 +113,22 @@ test("Shell 渲染侧边栏、当前菜单和子页面内容", () => {
   );
 });
 
-test("消息移到账号上方，右键或键盘打开账号菜单，退出后关闭菜单并调用认证模块", () => {
+test("侧边栏底部在消息下方直接显示退出登录，点击调用认证模块", () => {
   const root = window.FindRSSAdminShell.View({ page_id: "overview" }, []);
   const navigation = walk(root).find(node => node.props?.attributes?.n === "admin-shell-nav");
   assert.equal(walk(navigation).some(node => node.props?.attributes?.n === "admin-shell-nav-messages"), false);
   const footer = walk(root).find(node => node.props?.attributes?.n === "admin-shell-footer");
   assert.equal(footer.children[0].props.attributes.n, "admin-shell-nav-messages");
-  const account = walk(footer).find(node => node.props?.attributes?.n === "admin-shell-account" && node.type === "button");
-  assert.equal(walk(root).some(node => node.props?.attributes?.n === "admin-shell-logout"), false);
-  let prevented = 0;
-  account.props.onContextMenu({ preventDefault() { prevented++; } });
-  account.props.onContextMenu({ preventDefault() { prevented++; } });
-  assert.equal(prevented, 2);
-  const logout = walk(root).find((node) => node.props?.attributes?.n === "admin-shell-logout");
-  assert.ok(logout);
+  const logout = footer.children[1];
+  assert.equal(logout.props.attributes.n, "admin-shell-logout");
+  assert.equal(logout.type, "button");
+  assert.equal(logout.props.attributes.type, "button");
+  assert.ok(walk(logout).some(node => node.children?.includes("退出登录")));
+  assert.ok(walk(logout).some(node => node.props?.attributes?.n === "admin-icon-log-out"));
+  assert.equal(walk(root).some(node => String(node.props?.attributes?.n || "").startsWith("admin-shell-account")), false);
+  const previous_calls = logout_calls;
   logout.props.onClick();
-  assert.equal(logout_calls, 1);
-  assert.equal(walk(root).some(node => node.props?.attributes?.n === "admin-shell-logout"), false);
-  for (const key of [{ key: "ContextMenu" }, { key: "F10", shiftKey: true }]) {
-    account.props.onKeyDown({ ...key, preventDefault() { prevented++; } });
-    assert.ok(walk(root).some(node => node.props?.attributes?.n === "admin-shell-logout"));
-    account.props.onClick();
-  }
-  account.props.onClick();
-  assert.ok(walk(root).some(node => node.props?.attributes?.n === "admin-shell-logout"));
-  assert.equal(prevented, 4);
+  assert.equal(logout_calls, previous_calls + 1);
 });
 
 test("页面数量在标题中响应更新，页面说明与外层 Card 不再渲染", () => {
@@ -202,4 +195,39 @@ test("导航与 Logo 使用链接，普通点击走 SPA，修饰键点击保留�
   assert.equal(nodes.filter((node) => node.type === "a" && node.props?.attributes?.n?.startsWith("admin-shell-nav-")).length, 10);
   assert.equal(nodes.filter((node) => node.type === "button" && (node.props?.attributes?.n === "admin-shell-brand" || node.props?.attributes?.n?.startsWith("admin-shell-nav-"))).length, 0);
   assert.ok(nodes.some((node) => node.props?.attributes?.n === "keep-alive-subviews"));
+});
+
+test("设置子路由保持后台设置菜单高亮，并更新助手的实际页面上下文", () => {
+  let route_changed;
+  const pathnames = [];
+  window.FindRSSAdminAgent = { set_pathname(pathname) { pathnames.push(pathname); } };
+  const root = window.FindRSSAdminShell.Root({
+    app: {}, client: {}, hlsPlayer: {}, storage: {}, views: {},
+    history: {
+      state: { href: "/admin/settings/models?search=model" },
+      onRouteChange(callback) { route_changed = callback; return () => { route_changed = null; }; },
+    },
+    view: { curView: { name: "root.admin.settings.models" } },
+  });
+  const nodes = walk(root);
+  const settings = nodes.find(node => node.props?.attributes?.n === "admin-shell-nav-settings");
+  const overview = nodes.find(node => node.props?.attributes?.n === "admin-shell-nav-overview");
+  try {
+    assert.equal(settings.props.attributes["aria-current"].value, "page");
+    root.props.onMounted();
+    assert.equal(pathnames.at(-1), "/admin/settings/models");
+    route_changed({ name: "root.admin.settings.cookies", pathname: "/admin/settings/cookies" });
+    assert.equal(settings.props.attributes["aria-current"].value, "page");
+    assert.equal(pathnames.at(-1), "/admin/settings/cookies");
+    route_changed({ name: "root.admin.overview", pathname: "/admin/overview" });
+    assert.equal(settings.props.attributes["aria-current"].value, undefined);
+    assert.equal(overview.props.attributes["aria-current"].value, "page");
+    route_changed({ name: "root.admin.settings.webhook", pathname: "/admin/settings/webhook" });
+    assert.equal(settings.props.attributes["aria-current"].value, "page");
+    assert.equal(pathnames.at(-1), "/admin/settings/webhook");
+  } finally {
+    root.props.onUnmounted();
+    delete window.FindRSSAdminAgent;
+  }
+  assert.equal(route_changed, null);
 });

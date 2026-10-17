@@ -67,6 +67,10 @@ function CookiesViewModel() {
   }
 
   const methods = {
+    dismiss_notification() {
+      message.set("");
+      error.set("");
+    },
     open_import() {
       if (busy.value || !loaded.value) return;
       import_domain.set(selected_domain.value);
@@ -180,7 +184,6 @@ function CookiesViewModel() {
     },
     async remove_domain(group) {
       if (busy.value || !loaded.value || !groups.value.includes(group)) return;
-      if (!window.confirm("删除域名 " + group.domain + " 及其所有路径下的 Cookie？该域名未保存的修改也会丢失，此操作无法撤销。")) return;
       error.set("");
       message.set("");
       busy.set(true);

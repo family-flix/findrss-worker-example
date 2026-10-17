@@ -21,8 +21,9 @@ function PageHeader({
 }) {
   return View({
     ...rest,
+    as: rest.as || "header",
     class: atomic_classes([
-      "display-flex align-items-center justify-content-space-between flex-wrap-nowrap flex-none height-56-pixels box-sizing-border-box padding-8-pixels-12-pixels border-bottom-1-pixels-solid-color-border gap-space-3 margin-block-end-space-3 color-color-text",
+      "display-flex align-items-center justify-content-space-between flex-wrap flex-none min-height-control-height-lg box-sizing-border-box p-0 border-bottom-0 gap-space-3 m-0 color-color-text",
       custom_class
     ].filter(Boolean).join(" ")),
     attributes: {
@@ -30,11 +31,6 @@ function PageHeader({
       ...attributes
     },
     style: {
-      ...{
-        "--height-56-pixels": "56px",
-        "--padding-8-pixels-12-pixels": "8px 12px",
-        "--border-bottom-1-pixels-solid-color-border": "1px solid var(--frui-color-border)"
-      },
       ...(rest)?.style
     }
   }, [
@@ -48,13 +44,14 @@ function PageHeader({
         ...titleProps,
         as: heading,
         class: atomic_classes([
-          "margin-0 font-size-font-size-lg line-height-1-5 font-weight-650 overflow-hidden text-overflow-ellipsis white-space-nowrap",
+          "margin-0 font-size-font-size-lg line-height-1-5 font-weight-650 break-anywhere",
           titleProps.class
         ].filter(Boolean).join(" ")),
         attributes: {
           n: "page-header-title",
           role: "heading",
           "aria-level": heading === "h1" ? "1" : "2",
+          ...titleProps.attributes,
           ...title_attributes
         }
       }, as_children(title)),
@@ -62,17 +59,14 @@ function PageHeader({
     actions === undefined ? null : View({
       ...actionsProps,
       class: atomic_classes([
-        "display-flex align-items-center flex-wrap-nowrap white-space-nowrap gap-space-2 min-width-0 overflow-x-auto padding-block-4-pixels margin-block-negative-4-pixels",
+        "display-flex align-items-center flex-wrap gap-space-2 min-width-0 max-w-full p-0 m-0",
         actionsProps.class
       ].filter(Boolean).join(" ")),
       attributes: {
-        n: "page-header-actions"
+        n: "page-header-actions",
+        ...actionsProps.attributes
       },
       style: {
-        ...{
-          "--padding-block-4-pixels": "4px",
-          "--margin-block-negative-4-pixels": "-4px"
-        },
         ...(actionsProps)?.style
       }
     }, as_children(actions)),

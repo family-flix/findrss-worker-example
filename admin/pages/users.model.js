@@ -41,7 +41,6 @@ function UsersViewModel() {
   const detail_tokens_ = refarr([]);
   const edit_ = refobj({ saving: false, error: "", name: "", email: "" });
   const reset_ = refobj({ saving: false, error: "", password: "" });
-  const confirm_delete_id_ = ref("");
   const busy_user_id_ = ref("");
   const busy_action_ = ref("");
   let generation = 0;
@@ -102,7 +101,6 @@ function UsersViewModel() {
     detail_tokens_.as([]);
     edit_.as({ saving: false, error: "", name: "", email: "" });
     reset_.as({ saving: false, error: "", password: "" });
-    confirm_delete_id_.set("");
     error_.set("");
     try {
       const payload = await request_json(
@@ -254,21 +252,13 @@ function UsersViewModel() {
     busy_action_.set("");
   }
 
-  function ask_delete(user_id) {
-    confirm_delete_id_.set(user_id);
-  }
-
-  function cancel_delete() {
-    confirm_delete_id_.set("");
-  }
-
   async function confirm_delete(user_id) {
+    if (busy_action_.value) return;
     begin_busy(user_id, "delete");
     try {
       await request_json("/admin/api/users/" + encodeURIComponent(user_id), {
         method: "DELETE",
       });
-      confirm_delete_id_.set("");
       message_.set("用户已删除");
       if (expanded_user_id_.value === user_id) {
         expanded_user_id_.set("");
@@ -279,7 +269,6 @@ function UsersViewModel() {
       await load_users(previous);
     } catch (failure) {
       error_.set(failure instanceof Error ? failure.message : String(failure));
-      confirm_delete_id_.set("");
     } finally {
       end_busy();
     }
@@ -315,7 +304,6 @@ function UsersViewModel() {
       detail_tokens: detail_tokens_,
       edit: edit_,
       reset: reset_,
-      confirm_delete_id: confirm_delete_id_,
       busy_user_id: busy_user_id_,
       busy_action: busy_action_,
     },
@@ -328,8 +316,6 @@ function UsersViewModel() {
       setResetField: set_reset_field,
       resetPassword: reset_password,
       verifyEmail: verify_email,
-      askDelete: ask_delete,
-      cancelDelete: cancel_delete,
       confirmDelete: confirm_delete,
       setSearchText(value) {
         search_text_.set(value);

@@ -19,7 +19,7 @@ export function ScriptConfigView({ model }) {
       Button({ disabled: state.busy, attributes: { n: "script-config-save" }, onClick: methods.save }, [computed(state.busy, busy => busy ? "保存中…" : "保存")]),
     ],
   }, [
-    View({ class: "box-border grid gap-4", attributes: { n: "script-config-fields" } }, [For({
+    View({ class: "box-border grid gap-space-3", attributes: { n: "script-config-fields" } }, [For({
       each: state.fields, key: "key",
       render(raw) {
         const field = raw?.__is_ref ? raw.value : raw;

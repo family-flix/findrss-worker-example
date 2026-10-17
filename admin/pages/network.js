@@ -1,6 +1,8 @@
 import { NetworkTestModel } from "./network.model.js";
 import { ScriptMediaPreviewView } from "../components/script_media.js";
 import { Checkbox } from "../components/frui/checkbox.js";
+import { IconButton } from "../components/frui/icon-button.js";
+import { Popconfirm } from "../components/frui/popconfirm.js";
 
 const { View, Badge, Button, Input, For, Show, CodeEditor, computed, combine } = window.FindRSSAdminUI;
 
@@ -21,7 +23,7 @@ function NetworkTestPage({ view } = {}) {
       attributes: { n: "network-" + name + "-value" } }, [value]),
   ]);
   return window.FindRSSAdminShell.Page({ page_id: "network", title: "网络测试" }, [
-    View({ class: "grid min-w-0 gap-space-4", attributes: { n: "network-test", "aria-busy": computed(state.busy, String) },
+    View({ class: "grid min-w-0 gap-space-3", attributes: { n: "network-test", "aria-busy": computed(state.busy, String) },
       onMounted() {
         stop_show = view?.onShow(methods.load_cookie_domains);
         stop_hide = view?.onBeforeHide(methods.leave);
@@ -79,8 +81,12 @@ function NetworkTestPage({ view } = {}) {
             Input({ value: row.value, disabled: state.busy, placeholder: "请求头值",
               attributes: { n: "network-header-value-" + row.id, "aria-label": "请求头值", spellcheck: "false" },
               onInput: event => methods.update_header(row.id, "value", event.target.value) }),
-            Button({ size: "small", disabled: state.busy, attributes: { n: "network-header-remove-" + row.id, "aria-label": "删除此请求头" },
-              onClick: () => methods.remove_header(row.id) }, ["删除"]),
+            Popconfirm({ title: "确认删除此请求头？", disabled: state.busy,
+              attributes: { n: "network-header-remove-confirm-" + row.id },
+              onConfirm: () => methods.remove_header(row.id),
+              trigger: IconButton({ icon: "trash", label: "删除此请求头", size: "small", disabled: state.busy,
+                attributes: { n: "network-header-remove-" + row.id } }),
+            }),
           ]);
         } }),
         View({ class: "text-muted text-sm", attributes: { n: "network-headers-help" } }, [
@@ -96,7 +102,7 @@ function NetworkTestPage({ view } = {}) {
         "curl 包含当前请求头、超时和匹配的已选 Cookie，可在本机终端运行并查看响应头；仅复现首个请求，不自动跟随重定向。命令含登录凭证，请勿公开分享。",
       ]),
       View({ class: "text-danger whitespace-pre-wrap break-anywhere", attributes: { n: "network-error", role: "alert" } }, [state.error]),
-      Show({ when: computed(state.result, Boolean), ok: () => View({ class: "grid min-w-0 gap-space-4", attributes: { n: "network-result" } }, [
+      Show({ when: computed(state.result, Boolean), ok: () => View({ class: "grid min-w-0 gap-space-3", attributes: { n: "network-result" } }, [
         View({ class: "flex flex-wrap items-center gap-space-2 text-sm break-anywhere", attributes: { n: "network-summary", role: "status" } }, [
           For({ each: computed(state.result, result => result ? [result] : []), key: "status", render(value) {
             const result = value?.__is_ref ? value.value : value;

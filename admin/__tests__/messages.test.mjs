@@ -31,6 +31,7 @@ test("消息模型接收实时通知、标记已读、删除已读并在断线�
     FindRSSAdminShell: { Page: (options, children) => element(options, children) },
     Timeless: {
       View: element, Button: element, Link: element,
+      Popconfirm: props => element(props, [props.trigger({})]),
       For: props => element(props, props.each.value.map(props.render)),
       Show: props => element(props, (props.when?.value ?? props.when) ? [props.ok()] : []),
       ref, refarr: ref,
@@ -86,16 +87,20 @@ test("消息模型接收实时通知、标记已读、删除已读并在断线�
   const read_page = context.MessagesPage();
   const delete_action = read_page.props.actions[0];
   assert.equal(delete_action.props.when.value, true);
-  const delete_button = delete_action.children[0];
+  const confirmation = delete_action.children[0];
+  const delete_button = confirmation.children[0];
   assert.equal(delete_button.props.attributes.n, "admin-messages-delete-read");
   assert.equal(delete_button.children[0].value, "删除全部");
+  assert.equal(delete_button.props.onClick, undefined);
+  assert.deepEqual(deleted_read_ids, []);
+  assert.match(confirmation.props.title, /全部已读消息.*无法撤销/);
   request_error = true;
-  await delete_button.props.onClick();
+  await confirmation.props.onConfirm();
   assert.equal(model.state.error.value, "删除失败");
   assert.equal(model.state.visible_rows.value.length, 1);
   assert.equal(model.state.deleting.value, false);
   request_error = false;
-  const deletion = delete_button.props.onClick();
+  const deletion = confirmation.props.onConfirm();
   assert.equal(delete_button.props.disabled.value, true);
   await model.methods.delete_read();
   await deletion;

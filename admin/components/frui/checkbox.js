@@ -50,6 +50,9 @@ function Checkbox(props = {}, children = []) {
       "display-inline-flex align-items-center gap-space-2 color-color-text font-font-size-1-4-font-family cursor-pointer user-select-none aria-disabled-true-cursor-not-allowed aria-disabled-true-opacity-6",
       "", rootClass
     ].filter(Boolean).join(" ")),
+    style: {
+      "padding-block": "max(0px, calc((var(--frui-control-height) - max(18px, 1.4em)) / 2))"
+    },
     attributes: {
       n: `${semantic_name}-field`,
       "aria-disabled": computed(model.state.disabled, state => String(state)),

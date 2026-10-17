@@ -37,6 +37,7 @@ const shorthand_groups = {
   padding: /^p-/,
   "line-height": /^leading-/,
   "grid-column": /^col-span-/,
+  "animation-duration": /^animation-duration(?:-|$)/,
   animation: /^animate-/,
 };
 

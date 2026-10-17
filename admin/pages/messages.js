@@ -1,7 +1,7 @@
 import { message_value, messages_model } from "./messages.model.js";
 import { ScriptEditorView } from "./script.js";
 
-const { View, Button, For, Show, computed } = window.FindRSSAdminUI;
+const { View, Button, For, Popconfirm, Show, computed } = window.FindRSSAdminUI;
 
 function MessageView(value) {
   const row = message_value(value);
@@ -9,7 +9,7 @@ function MessageView(value) {
     {
       class: "box-border rounded-card grid break-anywhere bg-surface-raised",
       style: {
-        padding: "20px",
+        padding: "var(--frui-space-3)",
         "border-left": "3px solid var(--frui-color-border-soft)",
         gap: "10px",
         border: "1px solid var(--frui-color-border)",
@@ -157,18 +157,18 @@ function MessagesPage() {
       actions: [
         Show({
           when: computed(model.state.tab, value => value === "read"),
-          ok: () => Button(
-            {
-              class: "box-border flex-none justify-self-center",
-              attributes: { n: "admin-messages-delete-read", type: "button" },
-              disabled: window.Timeless.combine(
+          ok: () => {
+            const disabled = window.Timeless.combine(
                 { loading: model.state.loading, deleting: model.state.deleting, read_id: model.state.read_id },
                 state => state.loading || state.deleting || state.read_id <= 0,
-              ),
-              onClick: model.methods.delete_read,
-            },
-            [computed(model.state.deleting, value => value ? "删除中…" : "删除全部")],
-          ),
+            );
+            return Popconfirm({ title: "删除全部已读消息？此操作无法撤销。", disabled,
+              attributes: { n: "admin-messages-delete-read-confirmation" }, onConfirm: model.methods.delete_read,
+              trigger: props => Button({ ...props, class: "box-border flex-none justify-self-center", disabled,
+                attributes: { ...props.attributes, n: "admin-messages-delete-read", type: "button" } },
+              [computed(model.state.deleting, value => value ? "删除中…" : "删除全部")]),
+            });
+          },
         }),
         Button(
           {
@@ -194,7 +194,7 @@ function MessagesPage() {
         {
           class: "box-border grid",
           style: {
-            gap: "16px",
+            gap: "var(--frui-space-3)",
           },
           attributes: { n: "admin-messages" },
           onMounted: model.methods.start,

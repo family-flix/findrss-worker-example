@@ -296,7 +296,7 @@ function RedemptionCardsViewModel() {
 
   async function revoke_card(card_id) {
     const campaign_id = selected_campaign_id_.value;
-    if (!campaign_id || !window.confirm("停用这张尚未兑换的卡？停用后无法恢复。")) return;
+    if (!campaign_id) return;
     error_.set("");
     try {
       await request_json(

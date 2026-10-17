@@ -14,14 +14,18 @@ import { Select as ReaderSelect } from "./frui/select.js";
 import { Checkbox } from "./frui/checkbox.js";
 import { FilePicker } from "./frui/file-picker.js";
 import { Card } from "./frui/card.js";
+import { EmptyCard } from "./illustration-card.js";
 import { Badge } from "./frui/badge.js";
 import { Field } from "./frui/field.js";
 import { TableField } from "./frui/table-field.js";
 import { PageHeader } from "./frui/page-header.js";
+import { PageLayout, PageContent } from "./frui/page-layout.js";
 import { Dialog } from "./frui/dialog.js";
+import { Popconfirm } from "./frui/popconfirm.js";
 import { Tabs } from "./frui/tabs.js";
 import { CopyButton } from "./frui/copy-button.js";
 import { Switch } from "./frui/switch.js";
+import { Toaster, notify } from "./frui/toaster.js";
 import { Tooltip, TooltipHost } from "./frui/tooltip.js";
 import { DropdownMenu, DropdownMenuItem } from "./frui/dropdown-menu.js";
 import { configure_frui } from "./frui/platform.js";
@@ -78,4 +82,4 @@ function Select(props = {}) {
   return ReaderSelect({ ...props, onChange: value => props.onChange?.({ target: { value } }) });
 }
 
-window.FindRSSAdminUI = { ...Timeless, AIPreferencesView, XiaoxunDialogueView, XiaoxunComposerModel, AIProviderLogoModel, ensure_ai_presets, add_ai_preset, ai_provider_preset, Button, Input, Select, Textarea, CodeEditor, FeedAddressEditor, FilePicker, Card, Badge, Field, TableField, PageHeader, Dialog, Tabs, CopyButton, Switch, Tooltip, TooltipHost, DropdownMenu, DropdownMenuItem, Icon };
+window.FindRSSAdminUI = { ...Timeless, AIPreferencesView, XiaoxunDialogueView, XiaoxunComposerModel, AIProviderLogoModel, ensure_ai_presets, add_ai_preset, ai_provider_preset, Button, Input, Select, Textarea, CodeEditor, FeedAddressEditor, FilePicker, Card, EmptyCard, Badge, Field, TableField, PageLayout, PageHeader, PageContent, Dialog, Popconfirm, Tabs, CopyButton, Switch, Toaster, notify, Tooltip, TooltipHost, DropdownMenu, DropdownMenuItem, Icon };

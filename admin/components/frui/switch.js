@@ -67,6 +67,7 @@ function Switch(props = {}) {
     checked,
     disabled,
     label,
+    labelProps = {},
     size = "default",
     onChange,
     class: custom_class,
@@ -160,9 +161,11 @@ function Switch(props = {}) {
   }, [
     root_node,
     View({
-      class: "color-color-text font-size-font-size",
+      ...labelProps,
+      class: atomic_classes(["color-color-text font-size-font-size", labelProps.class].filter(Boolean).join(" ")),
       attributes: {
-        n: "switch-label"
+        n: "switch-label",
+        ...labelProps.attributes,
       }
     }, as_children(label)),
   ]);

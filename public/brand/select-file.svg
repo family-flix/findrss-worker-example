@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 376" role="img" aria-labelledby="findrss-select-file-title findrss-select-file-desc">
+  <title id="findrss-select-file-title">FindRSS file selection</title>
+  <desc id="findrss-select-file-desc">A document bearing the original FindRSS logo, with a pointer ready to select it for preview.</desc>
+  <g fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path opacity=".14" d="M170 86V72a16 16 0 0 1 16-16h132"/>
+    <path fill="#2563EB" fill-opacity=".035" stroke-opacity=".4" d="M166 82h132l64 64v144a18 18 0 0 1-18 18H166a18 18 0 0 1-18-18V100a18 18 0 0 1 18-18Z"/>
+    <path fill="#2563EB" fill-opacity=".07" stroke-opacity=".4" d="M298 82v48a16 16 0 0 0 16 16h48"/>
+    <path opacity=".26" stroke-width="6" d="M184 246h106"/>
+    <path opacity=".14" stroke-width="6" d="M184 268h72"/>
+    <path opacity=".12" d="M116 330h328"/>
+    <path opacity=".2" d="M112 168h12m-6-6v12m280 20h12m-6-6v12"/>
+    <circle cx="394" cy="100" r="5" opacity=".18"/>
+  </g>
+  <!-- Original logo geometry, including the 4 degree tilt. -->
+  <g transform="translate(176 116) scale(.1)">
+    <path fill="#2563EB" d="M512 100c172 0 258 0 321 31 27 13 47 33 60 60 31 63 31 149 31 321s0 258-31 321c-13 27-33 47-60 60-63 31-149 31-321 31s-258 0-321-31c-27-13-47-33-60-60-31-63-31-149-31-321s0-258 31-321c13-27 33-47 60-60 63-31 149-31 321-31Z"/>
+    <g fill="#FFFFFF" transform="translate(138.88 151.91) scale(1.5) rotate(4 256 256)">
+      <path d="M116 365 L116 148 C116 108 138 88 177 88 L318 88 C340 88 354 101 354 122 C354 143 340 156 318 156 L224 156 C202 156 184 174 184 196 L184 365 C184 389 171 403 150 403 C129 403 116 389 116 365 Z"/>
+      <path transform="translate(22 0)" d="M229 191 C321 191 396 266 396 358 C396 378 384 390 365 390 C346 390 334 378 334 358 C334 300 287 253 229 253 C209 253 197 241 197 222 C197 203 209 191 229 191 Z"/>
+      <circle cx="270" cy="350" r="46"/>
+    </g>
+  </g>
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#2563EB" fill-opacity=".08" stroke="#2563EB" stroke-opacity=".2" stroke-width="2" d="M322 232V218m-16 21-10-10m42 0 10-10"/>
+    <path fill="#2563EB" stroke="#FFFFFF" stroke-width="4" d="m324 244 66 42-30 5-13 28Z"/>
+  </g>
+</svg>
