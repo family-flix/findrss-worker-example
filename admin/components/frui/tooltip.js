@@ -80,6 +80,7 @@ function TooltipViewModel({ content, side, align }) {
 function TooltipHost() {
   const session = get_tooltip_session();
   const portal = ui.TooltipPrimitive.Portal({ store: session.store, style: frui_host.floating_style, class: "" }, [
+    // Transition 退场会卸载内容；每次打开都创建新的列表以读取当前会话。
     ui.Transition({
       store: session.store.presence,
       animation: { in: "animate-tooltip-in", out: "animate-tooltip-out pointer-events-none" },
@@ -94,7 +95,7 @@ function TooltipHost() {
       attributes: { n: "tooltip-content", id: session.id, role: "tooltip" },
       onMouseEnter() { session.hover(true); },
       onMouseLeave() { session.hover(false); },
-    }, [For({ each: session.content, key: "id", render(item) {
+    }, () => [For({ each: session.content, key: "id", render(item) {
       return View({ class: "contents", attributes: { n: "tooltip-body" } }, as_children(source_value(item).content));
     } })]),
   ]);

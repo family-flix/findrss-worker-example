@@ -953,15 +953,39 @@ test("刷新失败在对应行显示错误、警示时间与原因提示，重�
 
 test("自动抓取失败保留成功时间，info 图标悬停展示原因且不触发 Toaster，私密源仅提示 XML 错误", () => {
   ui.DOM = {};
+  context.FindRSSAdminAuth = { fetch: async () => Response.json({ sources: [] }) };
+  context.FindRSSAdminShell = {};
   vm.runInContext("(() => {\n" + page_source("discovery.js") +
     "\nglobalThis.failed_snapshot_view = source => SourceSnapshotView({ source: normalize_source(source) }); })();", context);
   for (const saved_at of [0, 10]) {
     for (const require_token of [false, true]) {
-      const root = context.failed_snapshot_view({ require_token, cache: { saved_at, status: saved_at ? "fresh" : "empty" },
+      const root = context.failed_snapshot_view({ enabled: true, feed_url: "{{hostname}}/rss/example", require_token,
+        cache: { saved_at, status: saved_at ? "fresh" : "empty" },
         snapshot: { saved_at, error: "上游返回 HTTP 502", articles: [] } });
       const toaster = ui.Toaster();
       const host = ui.TooltipHost();
+      const transition = find(host, "tooltip-positioner").children[0];
+      // 模拟 DOM 在退场动画结束后卸载子树、再次显示时挂载子树。
+      function unmount(node) {
+        for (const child of node.children || []) unmount(child);
+        node.onUnmounted?.();
+      }
+      transition.$elm = {
+        removeChildren() { for (const child of transition.children) unmount(child); },
+        insertChildren(children) { for (const child of children) child.onMounted?.({ target: child.$elm }); },
+      };
+      function close_tooltip(trigger) {
+        trigger.events.onMouseLeave();
+        const element = {};
+        find(host, "tooltip-content").events.onAnimationEnd({ target: element, currentTarget: element });
+      }
       try {
+        const poll_help = find(root, "discovery-source-poll-rule-help");
+        if (poll_help) {
+          poll_help.events.onMouseEnter();
+          assert.match(find(host, "tooltip-body").children[0].state.value, /^抓取规则：/);
+          close_tooltip(poll_help);
+        }
         for (const name of ["xml-saved-at", ...(!require_token ? ["snapshot-saved-at"] : [])]) {
           const time = find(root, "discovery-source-" + name);
           assert.ok(time.state.styleSet.includes(saved_at ? "text-warning" : "text-danger"));
@@ -976,9 +1000,15 @@ test("自动抓取失败保留成功时间，info 图标悬停展示原因且不
             contains: () => false,
           } });
           info.events.onMouseEnter();
-          const tooltip = find(host, "tooltip-content");
+          let tooltip = find(host, "tooltip-content");
           assert.equal(tooltip.state.attributes.role, "tooltip");
           assert.equal(info.state.attributes["aria-describedby"], tooltip.state.attributes.id);
+          assert.match(find(host, "tooltip-body").children[0].state.value, /HTTP 502/);
+          assert.match(find(host, "tooltip-body").children[0].state.value,
+            name === "xml-saved-at" ? /^抓取失败：/ : /^快照生成失败：/);
+          close_tooltip(info);
+          info.events.onMouseEnter();
+          tooltip = find(host, "tooltip-content");
           assert.match(find(host, "tooltip-body").children[0].state.value, /HTTP 502/);
           info.events.onClick();
           assert.equal(find(toaster, "toast"), null);
@@ -1044,6 +1074,10 @@ test("Tooltip 共用浮层，焦点和悬停显示最新内容，Esc 收起，�
     second.events.onMouseEnter();
     assert.equal(find(host, "tooltip-body").children[0].state.value, "另一原因");
     assert.equal(first.state.attributes["aria-describedby"], second.state.attributes["aria-describedby"]);
+    first.events.onMouseEnter();
+    assert.equal(find(host, "tooltip-body").children[0].state.value, "更新原因");
+    second.events.onMouseEnter();
+    assert.equal(find(host, "tooltip-body").children[0].state.value, "另一原因");
     first.onUnmounted();
     assert.equal(first_handlers.size, 0);
     assert.equal(find(host, "tooltip-body").children[0].state.value, "另一原因", "旧触发节点卸载不关闭当前提示");

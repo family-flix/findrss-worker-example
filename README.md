@@ -4,7 +4,7 @@
 
 <h1 align="center">FindRSS</h1>
 
-<p align="center">v1.1.0</p>
+<p align="center">v1.1.1</p>
 
 <p align="center">一键部署到 Cloudflare，拥有自己的 RSS 采集工具<br>脚本随时添加、编辑，无需重新部署</p>
 
