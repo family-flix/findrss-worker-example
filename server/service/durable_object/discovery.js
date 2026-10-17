@@ -3,6 +3,7 @@
 // 只回数据或抛 DurableObjectError，绝不造 Response：头像取回回 `{ bytes, content_type }`，
 // 由 api 层组装需要长缓存的二进制 Response。
 import { DiscoverySourceModel, SourceAvatarModel } from "../../domain/discovery_source.js";
+import { list_pagination, pagination_value } from "../../lib/list_pagination.js";
 import { DISCOVERY_CATEGORIES } from "../../lib/constants.js";
 import { do_error, do_result } from "./error.js";
 import { rss_route_cache_key } from "../../infra/rss_cache.js";
@@ -84,6 +85,10 @@ export class ServiceDiscovery {
     const query = (url.searchParams.get("q") ?? "").trim().slice(0, 100);
     const tags = [...new Set(url.searchParams.getAll("tag").map((tag) => tag.trim()).filter(Boolean))];
     const source_type = (url.searchParams.get("source_type") ?? "").trim();
+    const status = include_disabled ? url.searchParams.get("status") || "all" : "all";
+    const visibility = include_disabled ? url.searchParams.get("visibility") || "all" : "all";
+    if (!["all", "enabled", "disabled"].includes(status)) throw do_error("invalid status", 400);
+    if (!["all", "public", "private"].includes(visibility)) throw do_error("invalid visibility", 400);
     const platforms = this.platforms();
     if (source_type && !DiscoverySourceModel.TYPES.has(source_type) && !platforms.some(platform => platform.id === source_type)) throw do_error("invalid source_type", 400);
     if (category !== "" && !DISCOVERY_CATEGORIES.has(category)) {
@@ -98,16 +103,14 @@ export class ServiceDiscovery {
       query,
       tags,
       source_type,
+      ...(include_disabled ? { status, visibility } : {}),
     };
     let pagination = {};
-    if (!include_disabled && (url.searchParams.has("limit") || url.searchParams.has("offset"))) {
-      const limit_value = Number(url.searchParams.get("limit") ?? "20");
-      const offset_value = Number(url.searchParams.get("offset") ?? "0");
-      const limit = Number.isFinite(limit_value) ? Math.max(1, Math.min(100, Math.floor(limit_value))) : 20;
-      const offset = Number.isFinite(offset_value) ? Math.max(0, Math.min(1_000_000, Math.floor(offset_value))) : 0;
+    const page = list_pagination(url);
+    if (page) {
       const total_count = this.repo.discovery.count_filtered(filters);
-      Object.assign(filters, { limit, offset });
-      pagination = { total_count, limit, offset, has_more: offset + limit < total_count };
+      Object.assign(filters, page);
+      pagination = pagination_value(page, total_count);
     }
     const rows = this.repo.discovery.list(filters);
     return { ...pagination, platforms: discovery_platforms(platforms, rows), sources: rows.map(row => this.source_value(row, include_disabled)), tags: this.tags() }

@@ -161,7 +161,7 @@ async function dispatch(request, app) {
     return app.tasks.get_task(request, task_match[1]);
   }
   if (url.pathname === "/_admin/access-tokens" && request.method === "GET") {
-    return app.access_tokens.list_access_tokens();
+    return app.access_tokens.list_access_tokens(url);
   }
   if (url.pathname === "/_admin/access-tokens" && request.method === "POST") {
     return app.access_tokens.create_access_token(request);

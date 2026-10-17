@@ -12,11 +12,19 @@ export class RepositoryDiscoverySource {
     this.sql = sql;
   }
 
-  query_conditions({ include_disabled, category = "", query = "", tags = [], source_type = "" }) {
+  query_conditions({ include_disabled, category = "", query = "", tags = [], source_type = "", status = "all", visibility = "all" }) {
     const conditions = [];
     const parameters = [];
     if (!include_disabled) {
       conditions.push("enabled = 1");
+    }
+    if (include_disabled && status !== "all") {
+      conditions.push("enabled = ?");
+      parameters.push(status === "enabled" ? 1 : 0);
+    }
+    if (include_disabled && visibility !== "all") {
+      conditions.push("require_token = ?");
+      parameters.push(visibility === "private" ? 1 : 0);
     }
     if (category !== "") {
       conditions.push("category = ?");
@@ -43,7 +51,7 @@ export class RepositoryDiscoverySource {
     return { where, parameters };
   }
 
-  /** 管理列表读取全部源；公开列表支持显式 limit/offset，无分页参数时兼容原有调用。 */
+  /** 管理及公开列表支持 limit/offset，无分页参数时供内部调用及全量导出使用。 */
   list(filters) {
     const { include_disabled, limit, offset = 0 } = filters;
     const { where, parameters } = this.query_conditions(filters);

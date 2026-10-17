@@ -8,6 +8,7 @@ import { generate_password_salt, hash_reader_password } from "../../infra/reader
 import { sha256_hex } from "../../lib/crypto.js";
 import { access_token_hint, generate_access_token, valid_access_token } from "../../lib/identifiers.js";
 import { do_error, do_result } from "./error.js";
+import { list_pagination, pagination_value } from "../../lib/list_pagination.js";
 
 export class ServiceAccessToken {
   /**
@@ -19,10 +20,12 @@ export class ServiceAccessToken {
   }
 
   /** @returns {Record<string, unknown>} */
-  list_access_tokens() {
-    const rows = this.repo.access_tokens.list();
+  list_access_tokens(url) {
+    const page = list_pagination(url);
+    const rows = this.repo.access_tokens.list(page || undefined);
     const now = Date.now();
-    return { access_tokens: rows.map((row) => AccessTokenModel.fromRow(row).toValue(now)) }
+    return { ...(page ? pagination_value(page, this.repo.access_tokens.count_listed()) : {}),
+      access_tokens: rows.map((row) => AccessTokenModel.fromRow(row).toValue(now)) }
   }
 
   /**

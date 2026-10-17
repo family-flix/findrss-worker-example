@@ -72,7 +72,7 @@ assert len(public)==500
   assert.equal(result.status, 0, result.stderr);
 });
 
-test("公开目录按筛选后的总数返回分页元数据，管理列表维持完整响应", () => {
+test("公开目录和管理列表都按筛选后的总数返回分页元数据，无分页参数保留全量响应", () => {
   const calls = [];
   const service = new ServiceDiscovery({ repo: { tags: { list: () => ["科技", "文章", "其他"] }, discovery: {
     count_filtered(filters) { calls.push({ count: { ...filters } }); return 41; },
@@ -96,7 +96,10 @@ test("公开目录按筛选后的总数返回分页元数据，管理列表维�
     assert.equal(page.has_more, offset + limit < 41);
   }
   const admin = service.list_discovery_sources(url, true);
-  assert.equal("total_count" in admin, false);
+  assert.equal(admin.total_count, 41);
+  assert.equal(calls.at(-1).list.limit, 20);
+  const full = service.list_discovery_sources(new URL("https://api/discovery/sources"), true);
+  assert.equal("total_count" in full, false);
   assert.equal("limit" in calls.at(-1).list, false);
 });
 

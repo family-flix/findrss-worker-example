@@ -201,15 +201,20 @@ export class RepositoryAccessToken {
   }
 
   /** @returns {Record<string, unknown>[]} 未撤销令牌 + 邮箱，创建时间倒序。 */
-  list() {
+  list({ limit, offset = 0 } = {}) {
     return this.sql
       .exec(
         `SELECT access_tokens.*, user_credentials.email
          FROM access_tokens
          LEFT JOIN user_credentials ON user_credentials.user_id = access_tokens.user_id
          WHERE access_tokens.revoked_at IS NULL
-         ORDER BY access_tokens.created_at DESC`)
+         ORDER BY access_tokens.created_at DESC, access_tokens.id ${limit === undefined ? "" : "LIMIT ? OFFSET ?"}`,
+        ...(limit === undefined ? [] : [limit, offset]))
       .toArray();
+  }
+
+  count_listed() {
+    return Number(this.sql.exec("SELECT COUNT(*) AS count FROM access_tokens WHERE revoked_at IS NULL").toArray()[0]?.count ?? 0);
   }
 
   /** @param {string} user_id @returns {Record<string, unknown>[]} 含已撤销，倒序。 */

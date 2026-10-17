@@ -51,7 +51,9 @@ export async function admin_management_overview(env) {
  */
 export async function admin_access_token_request(env, request, path) {
   const object = env.API.getByName(API_OBJECT_NAME);
-  return object.fetch(new Request("https://internal/_admin/access-tokens" + path, request));
+  const internal_url = new URL("https://internal/_admin/access-tokens" + path);
+  internal_url.search = new URL(request.url).search;
+  return object.fetch(new Request(internal_url, request));
 }
 
 /**
