@@ -25,7 +25,7 @@ export async function handle_mcp(request, { name, tools, call, authorize }) {
   let result;
   if (message.method === "initialize") {
     if (typeof message.params?.protocolVersion !== "string") return error(-32602, "protocolVersion is required");
-    result = { protocolVersion: versions.includes(message.params.protocolVersion) ? message.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name, version: "1.2.0" } };
+    result = { protocolVersion: versions.includes(message.params.protocolVersion) ? message.params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name, version: "1.3.0" } };
   } else if (message.method === "ping") result = {};
   else if (message.method === "tools/list") result = { tools: visible_tools };
   else if (message.method === "tools/call") {
