@@ -200,7 +200,7 @@ export class ServiceDiscovery {
   }
 
   /**
-   * 广场详情页（`/s/<id>`）的数据：单条源 + 同平台的相关源。
+   * 广场详情页（`/s/<id>`）的数据：单条源 + 同来源的相关源。
    * 单开一个端点而不是让广场去 list 里捞：目录上限 1000 条、列表还夹了 500，捞法既慢
    * 又会让第 500 条之后的详情页永远 404。
    * `related` 只回 id/title —— 详情页把它们渲染成 `<a href="/s/<id>">`，是给爬虫发现
@@ -393,6 +393,8 @@ export class ServiceDiscovery {
       title: source.title,
       description: source.description,
       website: source.website,
+      social_url: source.social_url,
+      social_urls_json: JSON.stringify(source.social_urls),
       feed_url: source.feed_url,
       category: source.category,
       tags_json: JSON.stringify(source.tags),
@@ -475,6 +477,8 @@ export class ServiceDiscovery {
       title: source.title,
       description: source.description,
       website: source.website,
+      social_url: source.social_url,
+      social_urls_json: JSON.stringify(source.social_urls),
       feed_url: source.feed_url,
       category: source.category,
       tags_json: JSON.stringify(source.tags),
@@ -489,7 +493,7 @@ export class ServiceDiscovery {
     });
     if (existing.feed_url !== source.feed_url || Boolean(existing.require_token) !== source.require_token) this.repo.discovery.snapshot_delete(source_id);
     this.statistics?.invalidate_sources();
-    if (existing.feed_url !== source.feed_url || Boolean(existing.require_token) !== source.require_token || Boolean(existing.enabled) !== source.enabled) this.route_cache?.invalidate_all?.();
+    if (existing.feed_url !== source.feed_url || (existing.social_url || "") !== source.social_url || Boolean(existing.require_token) !== source.require_token || Boolean(existing.enabled) !== source.enabled) this.route_cache?.invalidate_all?.();
     await this.publish_catalog();
     await this.schedule_alarm?.();
     const row = this.repo.discovery.find(source_id);

@@ -31,6 +31,13 @@ function tags_from_json(value) {
   }
 }
 
+function social_urls_from_source(source) {
+  const values = Array.isArray(source.social_urls) ? source.social_urls
+    : tags_from_json(source.social_urls_json);
+  if (!values.length && !Array.isArray(source.social_urls) && source.social_url) return [String(source.social_url)];
+  return [...new Set(values.filter(value => typeof value === "string").map(value => value.trim()).filter(Boolean))];
+}
+
 /**
  * 订阅源头像实体：`path()` 给出带版本号的同源相对路径（无头像时为空串），
  * `sniff()` 按文件头魔数判断上传图片的类型。
@@ -118,11 +125,14 @@ SourceAvatarModel.sniff = (bytes) => {
  */
 export function DiscoverySourceModel(state) {
   const source = state ?? {};
+  const social_urls = social_urls_from_source(source);
   const state_ = Object.freeze({
     id: String(source.id ?? ""),
     title: String(source.title ?? ""),
     description: String(source.description ?? ""),
     website: String(source.website ?? ""),
+    social_url: social_urls[0] || "",
+    social_urls: Object.freeze(social_urls),
     feed_url: String(source.feed_url ?? ""),
     category: String(source.category ?? ""),
     tags: Object.freeze(Array.isArray(source.tags) ? source.tags.map(String) : tags_from_json(source.tags_json)),
@@ -160,6 +170,8 @@ export function DiscoverySourceModel(state) {
       title: state_.title,
       description: state_.description,
       website: state_.website,
+      social_url: state_.social_url,
+      social_urls: [...state_.social_urls],
       feed_url: state_.feed_url,
       category: state_.category,
       tags: [...state_.tags],
@@ -205,6 +217,9 @@ DiscoverySourceModel.merge_for_patch = (current, body) => {
     title: source.title ?? String(current.title),
     description: source.description ?? String(current.description),
     website: source.website ?? String(current.website),
+    social_url: source.social_url ?? current.social_url,
+    social_urls: source.social_urls !== undefined ? source.social_urls
+      : source.social_url !== undefined ? (source.social_url === "" ? [] : [source.social_url]) : [...current.social_urls],
     feed_url: source.feed_url ?? String(current.feed_url),
     category: source.category ?? String(current.category),
     tags: source.tags ?? [...current.tags],
@@ -282,6 +297,19 @@ DiscoverySourceModel.validate = (body, source_types = DISCOVERY_SOURCE_TYPES, in
   const website = website_value === "" ? "" : public_http_url(website_value);
   if (website_value !== "" && website === null) {
     return invalid("website must be a public HTTP(S) URL");
+  }
+  if (body.social_url !== undefined && typeof body.social_url !== "string") {
+    return invalid("social_url must be a string");
+  }
+  if (body.social_urls !== undefined && (!Array.isArray(body.social_urls) || body.social_urls.some(value => typeof value !== "string"))) {
+    return invalid("social_urls must be an array of strings");
+  }
+  const social_urls = [];
+  for (const value of body.social_urls ?? [body.social_url ?? ""]) {
+    if (!value.trim()) continue;
+    const url = public_http_url(value.trim());
+    if (url === null) return invalid("social_urls must contain public HTTP(S) URLs");
+    if (!social_urls.includes(url)) social_urls.push(url);
   }
   if (body.feed_url !== undefined && typeof body.feed_url !== "string") {
     return invalid("feed_url must be a string");
@@ -373,6 +401,7 @@ DiscoverySourceModel.validate = (body, source_types = DISCOVERY_SOURCE_TYPES, in
       title,
       description,
       website,
+      social_urls,
       feed_url,
       category,
       tags,

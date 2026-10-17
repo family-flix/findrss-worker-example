@@ -27,6 +27,36 @@ function source_row(overrides = {}) {
 /** @param {Record<string, unknown>} overrides */
 const value_of = (overrides = {}) => DiscoverySourceModel.fromRow(source_row(overrides)).toValue();
 
+test("社媒主页校验支持清空并拒绝非公网 URL", () => {
+  const body = { title: "源", feed_url: "https://example.com/feed.xml" };
+  for (const social_url of [undefined, "", "   ", " https://x.com/example?a=1&b=2 "]) {
+    const result = DiscoverySourceModel.validate({ ...body, social_url });
+    assert.equal(result.ok, true);
+    assert.equal(result.model.toValue().social_url, (social_url || "").trim());
+  }
+  for (const social_url of [null, 123, [], {}, "bad", "javascript:alert(1)", "https://a:b@x.com/", "http://localhost/", "http://192.168.1.1/", "https://x.com/" + "a".repeat(2048)]) {
+    assert.equal(DiscoverySourceModel.validate({ ...body, social_url }).ok, false, JSON.stringify(social_url));
+  }
+});
+
+test("多个社媒主页去空去重，第一项兼容旧字段，旧行读取及 PATCH 清空不丢配置", () => {
+  const body = { title: "源", feed_url: "https://example.com/feed.xml" };
+  const social_urls = ["https://x.com/one", "https://www.douyin.com/user/one"];
+  const result = DiscoverySourceModel.validate({ ...body, social_urls: [" " + social_urls[0] + " ", "", social_urls[1], social_urls[0]] });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.model.toValue().social_urls, social_urls);
+  assert.equal(result.model.social_url, social_urls[0]);
+  for (const value of [null, "https://x.com/one", [null], [123], [social_urls[0], "http://localhost/"], [social_urls[0], "javascript:alert(1)"]]) {
+    assert.equal(DiscoverySourceModel.validate({ ...body, social_urls: value }).ok, false, JSON.stringify(value));
+  }
+  const legacy = DiscoverySourceModel.fromRow({ ...body, social_url: social_urls[0], social_urls_json: "[]" });
+  assert.deepEqual(legacy.social_urls, [social_urls[0]]);
+  const current = DiscoverySourceModel.fromRow({ ...body, social_url: social_urls[0], social_urls_json: JSON.stringify(social_urls) });
+  assert.deepEqual(DiscoverySourceModel.merge_for_patch(current, { title: "新标题" }).social_urls, social_urls);
+  assert.deepEqual(DiscoverySourceModel.validate(DiscoverySourceModel.merge_for_patch(current, { social_urls: [] })).model.social_urls, []);
+  assert.deepEqual(DiscoverySourceModel.validate(DiscoverySourceModel.merge_for_patch(current, { social_url: social_urls[1] })).model.social_urls, [social_urls[1]]);
+});
+
 test("DiscoverySourceModel.TYPES 支持平台目录", () => {
   assert.deepEqual([...DiscoverySourceModel.TYPES].sort(), ["douyin", "wxchannels", "wxmp", "zhihu", "x", "xiaohongshu", "bilibili", "weibo", "kuaishou", "youtube", "instagram", "telegram", "website"].sort());
   assert.equal(SourceAvatarModel.MAX_BYTES, 5 * 1024 * 1024);
@@ -112,6 +142,8 @@ test("DiscoverySourceModel.fromRow().toValue() 把 0/1 列翻成布尔，tags �
     title: "标题",
     description: "描述",
     website: "https://example.com",
+    social_url: "",
+    social_urls: [],
     feed_url: "https://example.com/feed.xml",
     category: "technology",
     tags: ["a", "b"],
@@ -292,6 +324,8 @@ test("DiscoverySourceModel.merge_for_patch 只覆盖出现过的字段", () => {
     title: "旧标题",
     description: "旧描述",
     website: "https://example.com",
+    social_url: "",
+    social_urls: [],
     feed_url: "https://example.com/feed.xml",
     category: "technology",
     tags: ["a"],

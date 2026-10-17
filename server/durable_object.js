@@ -230,6 +230,12 @@ export class APIDurableObject extends DurableObject {
     const discovery_source_columns = this.ctx.storage.sql
       .exec("PRAGMA table_info(discovery_sources)")
       .toArray();
+    if (!discovery_source_columns.some(column => column.name === "social_url")) {
+      this.ctx.storage.sql.exec("ALTER TABLE discovery_sources ADD COLUMN social_url TEXT NOT NULL DEFAULT ''");
+    }
+    if (!discovery_source_columns.some(column => column.name === "social_urls_json")) {
+      this.ctx.storage.sql.exec("ALTER TABLE discovery_sources ADD COLUMN social_urls_json TEXT NOT NULL DEFAULT '[]'");
+    }
     if (!discovery_source_columns.some((column) => column.name === "require_token")) {
       this.ctx.storage.sql.exec(
         "ALTER TABLE discovery_sources ADD COLUMN require_token INTEGER NOT NULL DEFAULT 0");

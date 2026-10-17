@@ -10,7 +10,7 @@ import { ServiceBackgroundTasks } from "../server/service/durable_object/backgro
 register("./support/quickjs_wasm_hook.js", import.meta.url);
 const { ServiceScript } = await import("../server/service/durable_object/scripts.js");
 
-function fixture(public_source = true) {
+function fixture(public_source = true, social_routes = []) {
   const store = snapshot_store();
   const jobs = [];
   let calls = 0, fail = false, scheduled = 0;
@@ -24,7 +24,8 @@ function fixture(public_source = true) {
     schedule_alarm: async () => { scheduled++; }, wait_until: task => jobs.push(task) };
   const repo = { rss_route_cache: store.repo, scripts: { list_enabled: () => row.enabled ? [row] : [] },
     discovery: { list_public_routes: () => public_source ? [{ feed_url: "https://feeds.example.com/rss/snapshot/1", enabled: 1 }] : [],
-      list_private_routes: () => public_source ? [] : [{ feed_url: "https://feeds.example.com/rss/snapshot/1" }] },
+      list_private_routes: () => public_source ? [] : [{ feed_url: "https://feeds.example.com/rss/snapshot/1" }],
+      list_social_routes: () => social_routes },
   };
   const token = { credit_balance: 1000 };
   repo.access_tokens = { find: () => token, set_balance_used: (_id, balance) => { token.credit_balance = balance; } };
@@ -40,6 +41,41 @@ function fixture(public_source = true) {
     get calls() { return calls; }, get scheduled() { return scheduled; },
     set_public(value) { public_source = value; }, fail(value = true) { fail = value; } };
 }
+
+for (const public_source of [true, false]) test(`${public_source ? "公开" : "私密"} XML 按完整源地址写入社媒主页，持久化后 RSS/Atom 均保留`, async t => {
+  const routes = [
+    { feed_url: "{{hostname}}/rss/snapshot/1?account=other", social_url: "https://x.com/other" },
+    { feed_url: "{{hostname}}/rss/snapshot/2?account=one&lang=zh", social_url: "https://x.com/wrong-route" },
+    { feed_url: "{{hostname}}/atom/snapshot/1?lang=zh&account=one", social_url: 'https://x.com/one?a=1&b=2&quote="yes"' },
+  ];
+  const f = fixture(public_source, routes); t.after(() => f.db.close());
+  const options = { token: public_source ? "" : "user-1", query: "?account=one&lang=zh" };
+  const rss = await f.serve("rss", options, true);
+  assert.match(rss.body, /<link>https:\/\/x.com\/one\?a=1&amp;b=2&amp;quote="yes"<\/link>/);
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo, object_store: f.object_store });
+  const atom = await f.serve("atom", { ...options, query: "?lang=zh&account=one" });
+  assert.match(atom.body, /<link rel="alternate" href="https:\/\/x.com\/one\?a=1&amp;b=2&amp;quote=&quot;yes&quot;" \/>/);
+  assert.match(atom.body, /<link rel="self" href="https:\/\/feeds.example.com\/atom\/snapshot\/1\?/);
+  assert.equal(f.calls, 1);
+  routes[2].social_url = "https://x.com/updated";
+  assert.doesNotMatch((await f.serve("rss", options)).body, /x.com\/updated/);
+  assert.match((await f.serve("rss", options, true)).body, /<link>https:\/\/x.com\/updated<\/link>/);
+});
+
+test("未匹配社媒主页时沿用脚本链接，社媒主页不修改文章链接", async t => {
+  const routes = [{ feed_url: "{{hostname}}/rss/snapshot/1?account=other", social_url: "https://x.com/other" }];
+  const f = fixture(true, routes); t.after(() => f.db.close());
+  f.row.script = `export const route = { path: "/snapshot/:id", async handler() {
+    return Result.Ok({ title: "源", link: "https://example.com/original", items: [{ title: "文章", link: "https://example.com/post" }] });
+  } };`;
+  assert.match((await f.serve("rss", undefined, true)).body, /<link>https:\/\/example.com\/original<\/link>/);
+  routes[0].feed_url = "{{hostname}}/rss/snapshot/1";
+  const rss = await f.serve("rss", undefined, true);
+  assert.match(rss.body, /<link>https:\/\/x.com\/other<\/link>/);
+  assert.match(rss.body, /<link>https:\/\/example.com\/post<\/link>/);
+  routes.length = 0;
+  assert.match((await f.serve("atom", undefined, true)).body, /rel="alternate" href="https:\/\/example.com\/original"/);
+});
 
 test("XML 刷新记录后台任务，终止真实脚本后保留旧 XML 且不会误报脚本失败", async t => {
   const f = fixture(); t.after(() => f.db.close());

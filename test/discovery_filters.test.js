@@ -46,7 +46,7 @@ test("标签查询使用 JSON 精确值和 AND；参数绑定，旧分类可匹�
   assert.match(statement, /enabled = 1 AND source_type = \? AND/);
   assert.equal((statement.match(/EXISTS \(SELECT 1 FROM json_each/g) || []).length, 2);
   assert.match(statement, /OR category = \?\) AND \(EXISTS/);
-  assert.deepEqual(parameters, ["x", ...Array(5).fill("%100\\%\\_%"), "[]", "科技", "technology", 'a"b\\c', "__no_category__"]);
+  assert.deepEqual(parameters, ["x", ...Array(6).fill("%100\\%\\_%"), "[]", "科技", "technology", 'a"b\\c', "__no_category__"]);
   assert.equal(statement.includes('a"b'), false);
   repository.list({ include_disabled: false, query: "科技" });
   assert.equal(parameters.at(-1), '["technology"]');

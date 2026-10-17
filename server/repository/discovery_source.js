@@ -28,9 +28,9 @@ export class RepositoryDiscoverySource {
     }
     if (query !== "") {
       conditions.push(
-        "(title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR website LIKE ? ESCAPE '\\' OR discovery_sources.feed_url LIKE ? ESCAPE '\\' OR tags_json LIKE ? ESCAPE '\\' OR category IN (SELECT value FROM json_each(?)))");
+        "(title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR website LIKE ? ESCAPE '\\' OR (social_url || social_urls_json) LIKE ? ESCAPE '\\' OR discovery_sources.feed_url LIKE ? ESCAPE '\\' OR tags_json LIKE ? ESCAPE '\\' OR category IN (SELECT value FROM json_each(?)))");
       const pattern = "%" + escape_like(query) + "%";
-      parameters.push(pattern, pattern, pattern, pattern, pattern, JSON.stringify(
+      parameters.push(pattern, pattern, pattern, pattern, pattern, pattern, JSON.stringify(
         Object.entries(DISCOVERY_CATEGORY_TAGS).filter(([, label]) => label.toLowerCase().includes(query.toLowerCase())).map(([key]) => key),
       ));
     }
@@ -140,7 +140,7 @@ export class RepositoryDiscoverySource {
   }
 
   /**
-   * 同平台的其它启用源（只回 id/title，用于详情页内部链接网）。
+   * 同来源的其它启用源（只回 id/title，用于详情页内部链接网）。
    * @param {string} id @param {string} source_type @param {number} limit
    * @returns {Array<{ id: string, title: string }>}
    */
@@ -193,9 +193,14 @@ export class RepositoryDiscoverySource {
     return this.sql.exec("SELECT id, title, feed_url, credit_cost FROM discovery_sources WHERE enabled = 1 AND require_token = 1 ORDER BY id LIMIT ?", MAX_DISCOVERY_SOURCES).toArray();
   }
 
+  /** XML 构建时按完整路由地址匹配社媒主页，公开与私密源共用。 */
+  list_social_routes() {
+    return this.sql.exec("SELECT feed_url, social_url FROM discovery_sources WHERE enabled = 1 AND social_url != '' ORDER BY id LIMIT ?", MAX_DISCOVERY_SOURCES).toArray();
+  }
+
   /**
    * @param {{
-   *   id: string, title: string, description: string, website: string, feed_url: string,
+   *   id: string, title: string, description: string, website: string, social_url?: string, social_urls_json?: string, feed_url: string,
    *   category: string, tags_json: string, enabled: number, require_token: number, credit_cost: number,
    *   sort_order: number, source_type: string, created_at: number, updated_at: number,
    * }} fields
@@ -204,13 +209,15 @@ export class RepositoryDiscoverySource {
   insert(fields) {
     this.sql.exec(
       `INSERT INTO discovery_sources (
-        id, title, description, website, feed_url, category, tags_json,
+        id, title, description, website, social_url, social_urls_json, feed_url, category, tags_json,
         enabled, require_token, credit_cost, sort_order, source_type, created_at, updated_at, poll_policy_json, poll_updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       fields.id,
       fields.title,
       fields.description,
       fields.website,
+      fields.social_url ?? "",
+      fields.social_urls_json ?? JSON.stringify(fields.social_url ? [fields.social_url] : []),
       fields.feed_url,
       fields.category,
       fields.tags_json,
@@ -227,7 +234,7 @@ export class RepositoryDiscoverySource {
 
   /**
    * @param {{
-   *   id: string, title: string, description: string, website: string, feed_url: string,
+   *   id: string, title: string, description: string, website: string, social_url?: string, social_urls_json?: string, feed_url: string,
    *   category: string, tags_json: string, enabled: number, require_token: number, credit_cost: number,
    *   sort_order: number, source_type: string, updated_at: number,
    * }} fields
@@ -236,13 +243,15 @@ export class RepositoryDiscoverySource {
   update(fields) {
     this.sql.exec(
       `UPDATE discovery_sources
-       SET title = ?, description = ?, website = ?, feed_url = ?, category = ?,
+       SET title = ?, description = ?, website = ?, social_url = ?, social_urls_json = ?, feed_url = ?, category = ?,
            tags_json = ?, enabled = ?, require_token = ?, credit_cost = ?, sort_order = ?, source_type = ?,
            updated_at = ?, poll_policy_json = ?, poll_updated_at = ?
        WHERE id = ?`,
       fields.title,
       fields.description,
       fields.website,
+      fields.social_url ?? "",
+      fields.social_urls_json ?? JSON.stringify(fields.social_url ? [fields.social_url] : []),
       fields.feed_url,
       fields.category,
       fields.tags_json,

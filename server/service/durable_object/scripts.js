@@ -1390,6 +1390,15 @@ export class ServiceScript {
     };
     const started_at = Date.now();
     try {
+      const feed_model = output => {
+        const value = JSON.parse(output);
+        const source = (this.repo.discovery?.list_social_routes?.() || []).find(row => {
+          const address = SourceAddressModel(row.feed_url);
+          return address.matches(route_pathname) && rss_route_cache_key(address.route_pathname,
+            new URL(address.resolve("https://template.invalid")).searchParams) === request_key;
+        });
+        return FeedModel.fromValue(source ? { ...value, link: source.social_url } : value);
+      };
       const produce = async () => {
         signal?.throwIfAborted();
         const source = metadata.source_ref ? await this.source_store.read(selected.row.route, metadata.source_ref) : String(selected.row.script);
@@ -1412,7 +1421,7 @@ export class ServiceScript {
         result.assert_current = assert_current;
         cookie_access?.assert_grant();
         if (snapshot) {
-          const feed = FeedModel.fromValue(JSON.parse(result.output));
+          const feed = feed_model(result.output);
           const rendered = new Map();
           for (const type of ["rss", "atom"]) {
             const url = this.public_origin ? new URL("/" + type + route_pathname, this.public_origin) : self_url ? new URL(self_url) : null;
@@ -1454,7 +1463,7 @@ export class ServiceScript {
         cache_key,
         format,
         self_url,
-        () => FeedModel.fromValue(JSON.parse(output)).render(format, { self_url }));
+        () => feed_model(output).render(format, { self_url }));
       return {
         body,
         // 匿名公开源按约定共享 120 秒；登录用户保留原有个性化缓存策略。

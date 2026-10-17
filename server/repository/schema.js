@@ -297,6 +297,8 @@ export const API_SCHEMA_SQL = `
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     website TEXT NOT NULL DEFAULT '',
+    social_url TEXT NOT NULL DEFAULT '',
+    social_urls_json TEXT NOT NULL DEFAULT '[]',
     feed_url TEXT NOT NULL UNIQUE,
     category TEXT NOT NULL,
     tags_json TEXT NOT NULL DEFAULT '[]',

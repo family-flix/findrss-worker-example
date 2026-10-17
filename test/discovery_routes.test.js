@@ -28,6 +28,34 @@ const request = (body, method = "POST") => new Request("https://internal/_admin/
   method, body: JSON.stringify(body),
 });
 
+test("社媒主页随新增和编辑保存，局部修改保留原值，空串可清除", async () => {
+  const { service, rows } = fixture();
+  const social_url = "https://www.douyin.com/user/example?a=1&b=2";
+  const created = await service.create_discovery_source(request({ title: "源", feed_url: "{{hostname}}/rss/news/123", social_url }));
+  const id = created.data.source.id;
+  assert.equal(created.data.source.social_url, social_url);
+  assert.equal(rows.get(id).social_url, social_url);
+  assert.equal((await service.update_discovery_source(request({ title: "新标题" }, "PATCH"), id)).source.social_url, social_url);
+  assert.equal((await service.update_discovery_source(request({ social_url: "https://x.com/example" }, "PATCH"), id)).source.social_url, "https://x.com/example");
+  assert.equal((await service.update_discovery_source(request({ social_url: "" }, "PATCH"), id)).source.social_url, "");
+});
+
+test("多个社媒主页新增、局部更新和清空均保持数组与首项一致", async () => {
+  const { service, rows } = fixture();
+  const social_urls = ["https://x.com/example", "https://www.douyin.com/user/example"];
+  const created = await service.create_discovery_source(request({ title: "源", feed_url: "{{hostname}}/rss/news/123", social_urls }));
+  const id = created.data.source.id;
+  assert.deepEqual(created.data.source.social_urls, social_urls);
+  assert.deepEqual(JSON.parse(rows.get(id).social_urls_json), social_urls);
+  assert.deepEqual((await service.update_discovery_source(request({ title: "新标题" }, "PATCH"), id)).source.social_urls, social_urls);
+  const changed = await service.update_discovery_source(request({ social_urls: social_urls.slice(1) }, "PATCH"), id);
+  assert.equal(changed.source.social_url, social_urls[1]);
+  const cleared = await service.update_discovery_source(request({ social_urls: [] }, "PATCH"), id);
+  assert.equal(cleared.source.social_url, "");
+  assert.deepEqual(cleared.source.social_urls, []);
+  assert.deepEqual(JSON.parse(rows.get(id).social_urls_json), []);
+});
+
 test("新增与编辑源拒绝热榜和未匹配脚本的 RSS/Atom 路由，失败不写库", async () => {
   const { service, rows } = fixture();
   const before = structuredClone(rows);
