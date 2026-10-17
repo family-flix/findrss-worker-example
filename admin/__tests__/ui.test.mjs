@@ -1,3 +1,4 @@
+import { paged_fixture } from "./list_fixture.mjs";
 import { PollPolicyView, poll_policy_label } from "../components/poll_policy.js";
 import { PollPolicyModel } from "../components/poll_policy.model.js";
 import { page_source } from "./page_source.mjs";
@@ -11,11 +12,8 @@ import { fileURLToPath } from "node:url";
 import { AdminAgentModel, AdminAgentView } from "../components/admin_agent.js";
 import { ScriptAgentModel, ScriptAgentPanelView } from "../components/script_agent.js";
 import { AISettingsStore } from "../components/ai_settings.js";
-import { SnapshotSettingsModel } from "../components/snapshot_settings.model.js";
-import { CookiePushSettingsModel } from "../components/cookie_push_settings.model.js";
-import { WebhookSettingsModel } from "../components/webhook_settings.model.js";
 import { AI_PROVIDER_PRESETS } from "../domain/preferences/ai_presets.js";
-import { PaginationModel, PaginationView } from "../components/pagination.js";
+import { ListPaginationModel, PaginationModel, PaginationView } from "../components/pagination.js";
 import * as platform_helpers from "../components/discovery_platform.js";
 import { RssRoutePatternModel } from "../../server/domain/rss_route.js";
 
@@ -29,7 +27,7 @@ const bundle = await build({
     build.onLoad({ filter: /node_modules\/codemirror\/.*\.js$/ }, () => ({ contents: "export default {};", loader: "js" }));
   } }],
 });
-const context = vm.createContext({ pages: navigation, ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, PaginationModel, PaginationView, URL, console, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {} });
+const context = vm.createContext({ pages: navigation, ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, ListPaginationModel, PaginationModel, PaginationView, URL, console, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {} });
 context.window = context;
 vm.runInContext(readFileSync(new URL("../../public/assets/timeless/0.34.2/timeless.umd.min.js", import.meta.url), "utf8"), context);
 vm.runInContext(bundle.outputFiles[0].text, context);
@@ -40,6 +38,69 @@ function find(node, name) {
   for (const child of node?.children || []) { const result = find(child, name); if (result) return result; }
   return null;
 }
+
+test("页面布局分离页头和内容，复用间距且操作区允许换行", () => {
+  const item = ui.View({ attributes: { n: "layout-test-item" } }, ["业务内容"]);
+  const action = ui.Button({ attributes: { n: "layout-test-action" } }, ["新增"]);
+  const content = ui.PageContent({}, [item, null, false]);
+  const header = ui.PageHeader({
+    title: "订阅源管理",
+    actions: [action],
+    titleProps: { attributes: { id: "layout-test-title" } },
+    actionsProps: { attributes: { "aria-label": "页面操作" } },
+  });
+  const root = ui.PageLayout({ header, attributes: { "aria-labelledby": "layout-test-title" } }, [content]);
+  try {
+    assert.deepEqual(Array.from(root.children), [header, content]);
+    assert.deepEqual(Array.from(content.children), [item]);
+    assert.equal(root.state.attributes["aria-labelledby"], "layout-test-title");
+    assert.equal(root.state.style.padding, "var(--frui-space-4) var(--frui-space-4) var(--frui-space-6)");
+    assert.equal(root.state.style["--max-640-padding"], "var(--frui-space-3) var(--frui-space-3) var(--frui-space-5)");
+    assert.ok(root.state.styleSet.includes("w-full"));
+    assert.ok(root.state.styleSet.includes("gap-space-3"));
+    assert.ok(header.state.styleSet.includes("m-0"));
+    assert.ok(header.state.styleSet.includes("flex-wrap"));
+    assert.ok(!header.state.styleSet.includes("height-56-pixels"));
+    assert.equal(find(header, "page-header-title").state.attributes.id, "layout-test-title");
+    const actions = find(header, "page-header-actions");
+    assert.deepEqual(Array.from(actions.children), [action]);
+    assert.equal(actions.state.attributes["aria-label"], "页面操作");
+    assert.ok(actions.state.styleSet.includes("flex-wrap"));
+    assert.ok(!actions.state.styleSet.includes("overflow-x-auto"));
+  } finally { root.onUnmounted(); }
+});
+
+test("Popconfirm 取消不提交，确认期间阻止重复操作并响应禁用状态", async () => {
+  const disabled = ui.ref(false);
+  let calls = 0, finish;
+  const root = ui.Popconfirm({ title: "删除此记录？", disabled,
+    attributes: { n: "delete-test-confirmation" },
+    trigger: props => ui.Button({ ...props, attributes: { ...props.attributes, n: "delete-test-button" } }, ["删除"]),
+    onConfirm: () => { calls++; return new Promise(resolve => { finish = resolve; }); },
+  });
+  try {
+    const trigger = find(root, "delete-test-button");
+    trigger.events.onClick();
+    find(root, "delete-test-confirmation-cancel").events.onClick();
+    assert.equal(calls, 0);
+    assert.equal(find(root, "delete-test-confirmation-confirm"), null);
+    trigger.events.onClick();
+    const confirm = find(root, "delete-test-confirmation-confirm");
+    disabled.as(true);
+    confirm.events.onClick();
+    assert.equal(calls, 0);
+    disabled.as(false);
+    confirm.events.onClick();
+    confirm.events.onClick();
+    assert.equal(calls, 1);
+    assert.equal(confirm.state.attributes.disabled, true);
+    assert.equal(find(root, "delete-test-confirmation-cancel").state.attributes.disabled, true);
+    finish();
+    await new Promise(setImmediate);
+    assert.equal(find(root, "delete-test-confirmation-confirm"), null);
+    assert.equal(trigger.state.attributes.disabled, undefined);
+  } finally { root.onUnmounted(); disabled.destroy(); }
+});
 
 test("存储文件树使用虚拟窗口，目录可展开且只提供预览", async () => {
   const storage_bundle = await build({
@@ -164,9 +225,21 @@ test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使�
     await new Promise(setImmediate);
     assert.equal(submitted.at(-1).headers["Cache-Control"], "no-cache");
     assert.equal(submitted.at(-1).headers.Origin, undefined);
-    await find(root, "network-header-remove-4").events.onClick();
+    const remove_button = find(root, "network-header-remove-4");
+    assert.equal(remove_button.state.attributes["aria-label"], "删除此请求头");
+    assert.ok(find(remove_button, "button-icon"));
+    assert.equal(find(remove_button, "button-content"), null);
+    await find(root, "network-header-remove-confirm-4").events.onClick();
+    assert.equal(find(root, "network-header-row-4"), header_row);
+    assert.ok(find(root, "network-header-remove-confirm-4-title"));
+    await find(root, "network-header-remove-confirm-4-cancel").events.onClick();
+    assert.equal(find(root, "network-header-row-4"), header_row);
+    assert.equal(find(root, "network-header-remove-confirm-4-confirm"), null);
+    await find(root, "network-header-remove-confirm-4").events.onClick();
+    await find(root, "network-header-remove-confirm-4-confirm").events.onClick();
     assert.equal(find(root, "network-header-row-4"), null);
-    await find(root, "network-header-remove-0").events.onClick();
+    await find(root, "network-header-remove-confirm-0").events.onClick();
+    await find(root, "network-header-remove-confirm-0-confirm").events.onClick();
     find(root, "network-url").events.onInput({ target: { value: "https://www.example.com/changed#section" } });
     assert.ok(find(root, "network-header-key-5"));
     find(root, "network-header-value-5").events.onInput({ target: { value: "https://manual.example/" } });
@@ -235,8 +308,7 @@ test("设备 Token 管理使用共享组件，创建、查看、复制、隐藏�
   } };
   vm.runInContext("(() => {\n" + page_source("dashboard.js") +
     "\nglobalThis.device_tokens_model = DeviceTokensModel; globalThis.device_tokens_view = DeviceTokensView; })();", context);
-  const confirmations = [];
-  const model = context.device_tokens_model(async value => { confirmations.push(value); return true; });
+  const model = context.device_tokens_model();
   await model.toggle();
   model.set_draft("name", "笔记本"); model.set_draft("note", "调试");
   await model.create();
@@ -266,9 +338,15 @@ test("设备 Token 管理使用共享组件，创建、查看、复制、隐藏�
     await model.reveal(token.id);
     [...timers.values()].find(timer => timer.delay === 30000).callback();
     assert.equal(model.revealed.value[token.id], undefined);
-    await model.revoke(token);
+    const revoke = find(view, "revoke-device-token-button");
+    revoke.events.onClick();
+    assert.equal(requests.some(request => request.url.endsWith("/revoke")), false);
+    find(view, "revoke-device-token-confirmation-cancel").events.onClick();
+    assert.equal(model.tokens.value[0].status, "active");
+    revoke.events.onClick();
+    await find(view, "revoke-device-token-confirmation-confirm").events.onClick();
+    await new Promise(setImmediate);
     assert.equal(model.tokens.value[0].status, "revoked");
-    assert.equal(confirmations[0].danger, true);
     assert.equal(find(view, "preview-device-token-button").state.attributes.disabled, true);
   } finally { model.dispose(); view.onUnmounted(); context.setTimeout = () => 0; context.clearTimeout = () => {}; }
 });
@@ -382,6 +460,71 @@ test("真实 Select 回调保持后台事件形状，Checkbox 点击回传 check
   checkbox.onUnmounted();
 });
 
+test("Select 菜单宽度跟随触发框，布局改变后鼠标和键盘重新打开均同步宽度", () => {
+  let width = 112;
+  const select = ui.Select({ attributes: { n: "width-select" },
+    options: [{ value: "one", label: "很长的选项名称".repeat(20) }] });
+  const trigger = find(select, "width-select");
+  const element = { getBoundingClientRect: () => ({ x: 0, y: 0, width, height: 32, top: 0, left: 0, right: width, bottom: 32 }), focus() {} };
+  try {
+    trigger.onMounted({ target: element });
+    trigger.events.onClick({ currentTarget: element });
+    assert.equal(find(select, "width-select-popup").state.style.width, "112px");
+    find(select, "width-select-option-one").events.onClick();
+    width = 320;
+    trigger.events.onKeyDown({ key: "ArrowDown", preventDefault() {}, stopPropagation() {} });
+    assert.equal(find(select, "width-select-popup").state.style.width, "320px");
+    find(select, "width-select-option-one").events.onClick();
+    width = 180;
+    trigger.events.onClick({ currentTarget: element });
+    assert.equal(find(select, "width-select-popup").state.style.width, "180px");
+  } finally { select.onUnmounted(); }
+});
+
+test("社媒主页使用真实 ArrayFieldCore，立即编辑、确认删中间项再新增及清空均同步草稿", async () => {
+  ui.DOM = {};
+  context.document = { querySelector: () => null };
+  context.FindRSSAdminAuth = { fetch() {} };
+  context.FindRSSAdminShell = {};
+  vm.runInContext("(() => {\n" + page_source("discovery.js") +
+    "\nglobalThis.social_model = DiscoveryAdminViewModel(); globalThis.social_editor = () => SourceSocialUrlsView({ store: social_model }); })();", context);
+  const all = (node, name) => [
+    ...(node?.state?.attributes?.n === name ? [node] : []),
+    ...(node?.children || []).flatMap(child => all(child, name)),
+  ];
+  const model = context.social_model;
+  const original = ["https://x.com/one", "https://x.com/two", "https://x.com/three"];
+  model.methods.set_draft("social_urls", original);
+  const editor = context.social_editor();
+  const values = () => Array.from(model.state.draft_social_urls.value);
+  try {
+    let inputs = all(editor, "discovery-source-social-input");
+    assert.equal(inputs.length, 3);
+    inputs[0].events.onInput({ target: { value: "https://x.com/edited" } });
+    assert.deepEqual(values(), ["https://x.com/edited", ...original.slice(1)]);
+    all(editor, "discovery-source-social-remove")[1].events.onClick();
+    assert.deepEqual(values(), ["https://x.com/edited", original[1], original[2]]);
+    await find(editor, "discovery-source-social-remove-confirmation-confirm").events.onClick();
+    assert.deepEqual(values(), ["https://x.com/edited", original[2]]);
+    find(editor, "discovery-source-social-add").events.onClick();
+    inputs = all(editor, "discovery-source-social-input");
+    assert.equal(inputs.length, 3);
+    inputs[2].events.onInput({ target: { value: "https://x.com/new" } });
+    assert.deepEqual(values(), ["https://x.com/edited", original[2], "https://x.com/new"]);
+    all(editor, "discovery-source-social-remove")[1].events.onClick();
+    await find(editor, "discovery-source-social-remove-confirmation-confirm").events.onClick();
+    assert.deepEqual(values(), ["https://x.com/edited", "https://x.com/new"]);
+    while (all(editor, "discovery-source-social-remove").length) {
+      all(editor, "discovery-source-social-remove")[0].events.onClick();
+      await find(editor, "discovery-source-social-remove-confirmation-confirm").events.onClick();
+    }
+    assert.deepEqual(values(), []);
+    find(editor, "discovery-source-social-add").events.onClick();
+    find(editor, "discovery-source-social-input").events.onInput({ target: { value: "https://x.com/fresh" } });
+    assert.deepEqual(values(), ["https://x.com/fresh"]);
+  } finally { editor.onUnmounted(); }
+});
+
 test("抓取规则不再提供每天指定时间，单时间点显示在多个时间点中", () => {
   const model = PollPolicyModel({ ui });
   model.methods.reset({ mode: "times", times: ["08:30"], days: [0,1,2,3,4,5,6], timezone: "UTC" });
@@ -415,6 +558,13 @@ test("分页复用真实 Button 与 Select，页码、总数和禁用状态随�
   const total = ui.ref(41), loading = ui.ref(false);
   const model = PaginationModel(ui, { total, loading });
   const pager = PaginationView(ui, { model, name: "pager", label: "列表分页" });
+  const token_pager = PaginationView(ui, { model, name: "access-token-pagination", label: "Token 分页" });
+  for (const suffix of ["first", "prev", "next", "last"]) {
+    const button = find(token_pager, "access-token-pagination-" + suffix);
+    assert.equal(find(button, "button-icon"), null);
+    assert.equal(find(button, "admin-icon-lock"), null);
+    assert.equal(button.state.attributes.disabled, find(pager, "pager-" + suffix).state.attributes.disabled);
+  }
   assert.equal(find(pager, "pager-first").state.attributes.disabled, true);
   assert.equal(find(pager, "pager-next").state.attributes.disabled, undefined);
   find(pager, "pager-last").events.onClick();
@@ -434,7 +584,10 @@ test("分页复用真实 Button 与 Select，页码、总数和禁用状态随�
   assert.equal(model.state.value.first, 0);
   assert.equal(model.state.value.pages, 1);
   assert.equal(find(pager, "pager-next").state.attributes.disabled, true);
+  assert.equal(find(token_pager, "access-token-pagination-next").state.attributes.disabled, true);
+  assert.equal(find(token_pager, "button-icon"), null);
   pager.onUnmounted();
+  token_pager.onUnmounted();
 });
 
 test("SVG 状态图标随 Model 更新", () => {
@@ -471,12 +624,13 @@ test("订阅源表格使用 Link 与 CopyButton，复制实际地址并显示成
   assert.equal(find(list, "card-body"), null);
   assert.equal(find(list, "discovery-source-list-heading-group"), null);
   const source = { id: "one", title: "示例", website: "https://example.com", feed_url: "https://feeds.example.com/atom/demo",
+    social_url: "https://x.com/example",
     feed_url_template: "{{hostname}}/atom/demo", avatar_url: "", enabled: true, tags: [], snapshot: { saved_at: 0, articles: [], error: "" } };
   const copied = [];
   const click_copy = async button => { button.events.onClick(); await new Promise(setImmediate); };
   context.navigator = { clipboard: { async writeText(url) { copied.push(url); } } };
   const card = context.discovery_card(source);
-  for (const [kind, name, url] of [["website", "website", source.website], ["feed", "feed-link", source.feed_url]]) {
+  for (const [kind, name, url] of [["website", "website", source.website], ["social", "social", source.social_url], ["feed", "feed-link", source.feed_url]]) {
     const link = find(card, "discovery-source-row-" + name);
     assert.equal(link.t, ui.Link({ href: url }).t);
     assert.equal(link.state.href, url);
@@ -487,15 +641,16 @@ test("订阅源表格使用 Link 与 CopyButton，复制实际地址并显示成
     await click_copy(copy);
     assert.equal(copy.state.attributes["aria-label"], "已复制");
   }
-  assert.deepEqual(copied, [source.website, source.feed_url]);
+  assert.deepEqual(copied, [source.website, source.social_url, source.feed_url]);
   card.onUnmounted();
 
   const template_card = context.discovery_card({ ...source, website: "", feed_url: source.feed_url_template });
+  assert.equal(find(template_card, "discovery-source-row-website-address"), null);
+  assert.equal(find(template_card, "discovery-source-row-copy-website"), null);
   assert.equal(find(template_card, "discovery-source-row-feed-link"), null);
   assert.ok(find(template_card, "discovery-source-row-feed-value"));
-  await click_copy(find(template_card, "discovery-source-row-copy-website"));
   await click_copy(find(template_card, "discovery-source-row-copy-feed"));
-  assert.deepEqual(copied.slice(-2), [source.feed_url_template, source.feed_url_template]);
+  assert.equal(copied.at(-1), source.feed_url_template);
   template_card.onUnmounted();
 
   context.navigator.clipboard.writeText = async () => { throw new Error("denied"); };
@@ -513,9 +668,11 @@ test("订阅源表格使用 Link 与 CopyButton，复制实际地址并显示成
 test("订阅源搜索区右侧可刷新列表，加载期间禁用按钮并保留筛选", async () => {
   ui.DOM = {};
   context.document = { querySelector: () => null };
-  let finish, calls = 0;
+  let finish, calls = 0, delayed = false;
   context.FindRSSAdminAuth = { fetch: async url => {
-    assert.equal(url, "/admin/api/discovery/sources"); calls++;
+    assert.match(url, /^\/admin\/api\/discovery\/sources\?limit=20&offset=0/);
+    if (!delayed) return Response.json({ sources: [], total_count: 0 });
+    calls++;
     return new Promise(resolve => { finish = resolve; });
   } };
   vm.runInContext("(() => {\n" + page_source("discovery.js") +
@@ -526,11 +683,12 @@ test("订阅源搜索区右侧可刷新列表，加载期间禁用按钮并保�
     const form = find(root, "discovery-source-filter-form");
     const refresh = find(form, "discovery-source-list-refresh");
     assert.equal(form.children.at(-1), refresh);
-    model.methods.set_filter("query", "更新");
-    model.methods.set_filter("status", "enabled");
+    await model.methods.set_filter("query", "更新");
+    await model.methods.set_filter("status", "enabled");
+    delayed = true;
     const pending = refresh.events.onClick();
     assert.equal(refresh.state.attributes.disabled, true);
-    finish(Response.json({ sources: [{ id: "one", title: "更新的源", enabled: true }] }));
+    finish(Response.json({ sources: [{ id: "one", title: "更新的源", enabled: true }], total_count: 1 }));
     await pending; await new Promise(setImmediate);
     assert.equal(calls, 1);
     assert.equal(refresh.state.attributes.disabled, undefined);
@@ -545,9 +703,14 @@ test("订阅源表格选择控制批量菜单，启停后行内容和数量同�
   ui.DOM = {};
   context.document = { querySelector: () => null };
   const sources = [{ id: "one", title: "源一", enabled: true }, { id: "two", title: "源二", enabled: true }];
-  context.FindRSSAdminAuth = { fetch: async (url, options) => options.method === "PATCH"
-    ? Response.json({ source: { ...sources.find(source => url.endsWith("/" + source.id)), ...JSON.parse(options.body) } })
-    : Response.json({ sources }) };
+  context.FindRSSAdminAuth = { fetch: async (url, options) => {
+    if (options.method === "PATCH") {
+      const source = sources.find(source => url.endsWith("/" + source.id));
+      Object.assign(source, JSON.parse(options.body));
+      return Response.json({ source });
+    }
+    return paged_fixture(Response.json({ sources }), url);
+  } };
   vm.runInContext("(() => {\n" + page_source("discovery.js") +
     "\nglobalThis.table_model = DiscoveryAdminViewModel(); globalThis.table_list = SourceListView({ store: table_model }); })();", context);
   const root = context.table_list;
@@ -559,6 +722,25 @@ test("订阅源表格选择控制批量菜单，启停后行内容和数量同�
     await model.methods.refresh_list();
     await new Promise(setImmediate);
     assert.ok(find(root, "discovery-source-row"));
+    const poll_help = find(root, "discovery-source-poll-rule-help");
+    assert.ok(poll_help);
+    assert.equal(poll_help.state.attributes["aria-label"], "查看抓取规则");
+    assert.match(poll_help.state.attributes["aria-describedby"], /^frui-tooltip-/);
+    const toaster = ui.Toaster();
+    const host = ui.TooltipHost();
+    try {
+      poll_help.onMounted({ target: {
+        getBoundingClientRect: () => ({ x: 20, y: 20, width: 14, height: 14 }),
+        addEventListener() {}, removeEventListener() {}, contains: () => false,
+      } });
+      poll_help.events.onMouseEnter();
+      assert.equal(poll_help.state.attributes["aria-describedby"], find(host, "tooltip-content").state.attributes.id);
+      assert.match(find(host, "tooltip-body").children[0].state.value, /^抓取规则：/);
+      poll_help.events.onClick();
+      assert.ok(find(host, "tooltip-content").state.styleSet.includes("animate-tooltip-out"));
+      assert.equal(find(toaster, "toast"), null);
+    } finally { host.onUnmounted(); toaster.onUnmounted(); }
+    assert.ok(find(find(root, "discovery-source-next-snapshot-details"), "discovery-source-poll-rule-help"));
     assert.equal(find(root, "discovery-source-bulk-menu").state.attributes.disabled, true);
     find(root, "discovery-source-select").events.onClick({});
     assert.equal(model.state.selected_ids.value.length, 1);
@@ -576,16 +758,86 @@ test("订阅源表格选择控制批量菜单，启停后行内容和数量同�
     assert.equal(find(root, "discovery-source-enabled-control").state.attributes["aria-checked"], "false");
     assert.equal(find(root, "discovery-source-public-control").state.attributes["aria-checked"], "true");
     assert.equal(find(root, "discovery-source-toggle-button"), null);
-    assert.equal(find(root, "discovery-source-header-platform"), null);
-    assert.ok(find(find(root, "discovery-source-cell-identity"), "discovery-platform-option"));
+    assert.ok(find(root, "discovery-source-header-platform"));
+    assert.ok(find(find(root, "discovery-source-cell-platform"), "discovery-platform-option"));
+    assert.equal(find(find(root, "discovery-source-cell-identity"), "discovery-platform-option"), null);
     const metadata = find(root, "discovery-source-row-metadata");
     assert.ok(metadata.state.styleSet.includes("display-grid"));
     assert.equal(metadata.state.style["grid-template-columns"], "64px minmax(0, 1fr)");
     assert.ok(find(metadata, "discovery-source-row-metadata-snapshot-label"));
-    assert.ok(find(metadata, "discovery-source-row-metadata-poll-rule-value"));
+    assert.equal(find(metadata, "discovery-source-row-metadata-poll-rule-value"), null);
     assert.equal(find(root, "discovery-source-row-updated"), null);
     assert.equal(model.state.selected_ids.value.length, 0);
   } finally { root.onUnmounted(); }
+});
+
+test("抓取与快照每 60 秒仅更新相对时间，保留列表与选择，卸载后停止计时", async () => {
+  ui.DOM = {};
+  let current_time = Date.UTC(2026, 9, 17, 12);
+  let requests = 0;
+  const timers = new Map();
+  let timer_id = 0;
+  const previous_date = context.Date;
+  const previous_set_interval = context.setInterval;
+  const previous_clear_interval = context.clearInterval;
+  context.Date = class extends Date { static now() { return current_time; } };
+  context.setInterval = (callback, delay) => {
+    assert.equal(delay, 60_000);
+    timers.set(++timer_id, callback);
+    return timer_id;
+  };
+  context.clearInterval = id => timers.delete(id);
+  context.FindRSSAdminAuth = { fetch: async () => {
+    requests++;
+    return Response.json({ sources: [{ id: "relative", title: "相对时间", enabled: true,
+      feed_url: "https://example.com/rss/time", next_snapshot_at: current_time + 60_000,
+      cache: { saved_at: current_time - 600_000, status: "fresh", bytes: 100 },
+      snapshot: { saved_at: current_time - 600_000, articles: [], error: "" },
+    }] });
+  } };
+  let root;
+  try {
+    vm.runInContext("(() => {\n" + page_source("discovery.js") +
+      "\nglobalThis.relative_model = DiscoveryAdminViewModel(); globalThis.relative_table = SourceTableView({ store: relative_model }); })();", context);
+    root = context.relative_table;
+    const model = context.relative_model;
+    await model.methods.refresh_list();
+    await new Promise(setImmediate);
+    model.methods.toggle_selection("relative");
+    const row = find(root, "discovery-source-row");
+    const sources = model.state.sources.value;
+    const displayed = {};
+    for (const name of ["xml-saved-at", "snapshot-saved-at", "next-snapshot-time"]) {
+      const time = find(root, "discovery-source-" + name);
+      assert.match(time.state.attributes.title, /2026-10-17/);
+      displayed[name] = time.children[0].state.value;
+      time.children[0].$elm = { setText(value) { displayed[name] = value; } };
+    }
+    assert.deepEqual(displayed, { "xml-saved-at": "10分钟前", "snapshot-saved-at": "10分钟前", "next-snapshot-time": "1分钟后" });
+    root.onMounted();
+    root.onMounted();
+    assert.equal(timers.size, 1);
+    const request_count = requests;
+    current_time += 60_000;
+    for (const callback of timers.values()) callback();
+    assert.deepEqual(displayed, { "xml-saved-at": "11分钟前", "snapshot-saved-at": "11分钟前", "next-snapshot-time": "等待调度" });
+    assert.equal(requests, request_count);
+    assert.equal(model.state.sources.value, sources);
+    assert.equal(find(root, "discovery-source-row"), row);
+    assert.deepEqual(Array.from(model.state.selected_ids.value), ["relative"]);
+    root.onUnmounted();
+    assert.equal(timers.size, 0);
+    current_time += 60_000;
+    root.onMounted();
+    assert.equal(displayed["xml-saved-at"], "12分钟前");
+    assert.equal(timers.size, 1);
+  } finally {
+    root?.onUnmounted();
+    if (previous_date === undefined) delete context.Date;
+    else context.Date = previous_date;
+    context.setInterval = previous_set_interval;
+    context.clearInterval = previous_clear_interval;
+  }
 });
 
 test("启用与公开 Switch 直接保存明确状态，请求中禁用，失败恢复原开关", async () => {
@@ -608,7 +860,9 @@ test("启用与公开 Switch 直接保存明确状态，请求中禁用，失败
     "\nglobalThis.switch_model = DiscoveryAdminViewModel(); switch_model.methods.set_filter('status', 'all'); globalThis.switch_list = SourceListView({ store: switch_model }); })();", context);
   const root = context.switch_list;
   const model = context.switch_model;
+  const toaster = ui.Toaster();
   try {
+    assert.equal(find(root, "discovery-source-list-message"), null);
     await model.methods.refresh_list();
     await new Promise(setImmediate);
     find(root, "discovery-source-public-control").events.onClick();
@@ -622,6 +876,7 @@ test("启用与公开 Switch 直接保存明确状态，请求中禁用，失败
     assert.equal(find(root, "discovery-source-public-control").state.attributes["aria-checked"], "true");
     assert.equal(find(root, "discovery-source-public-control").state.attributes["aria-disabled"], "false");
     assert.equal(model.state.list_error.value, "保存失败");
+    assert.equal(find(toaster, "toast"), null);
     find(root, "discovery-source-public-control").events.onClick();
     finish();
     await new Promise(setImmediate);
@@ -629,6 +884,7 @@ test("启用与公开 Switch 直接保存明确状态，请求中禁用，失败
     assert.equal(model.state.sources.value[0].require_token, true);
     assert.equal(model.state.sources.value[0].credit_cost, 7);
     assert.equal(model.state.list_error.value, "");
+    assert.equal(find(toaster, "toast").children[0].children[0].state.value, "开关测试 已设为需要 token 访问。");
     find(root, "discovery-source-public-control").events.onClick();
     finish();
     await new Promise(setImmediate);
@@ -640,10 +896,11 @@ test("启用与公开 Switch 直接保存明确状态，请求中禁用，失败
     assert.deepEqual(writes.at(-1), { enabled: false });
     assert.equal(find(root, "discovery-source-enabled-control").state.attributes["aria-checked"], "false");
     assert.equal(find(root, "discovery-source-toggle-button"), null);
-  } finally { root.onUnmounted(); }
+    assert.equal(find(toaster, "toast").children[0].children[0].state.value, "开关测试 已停用。");
+  } finally { root.onUnmounted(); toaster.onUnmounted(); }
 });
 
-test("刷新快照的完整错误响应显示在对应行操作按钮下方，重试成功后清除", async () => {
+test("刷新失败在对应行显示错误、警示时间与原因提示，重试成功后恢复", async () => {
   ui.DOM = {};
   context.document = { querySelector: () => null };
   let fail = true;
@@ -654,7 +911,8 @@ test("刷新快照的完整错误响应显示在对应行操作按钮下方，�
   context.FindRSSAdminPages = {};
   vm.runInContext("(() => {\n" + page_source("discovery.js") +
     "\nglobalThis.snapshot_model = DiscoveryAdminViewModel(); globalThis.snapshot_card = source => SourceRowView({ store: snapshot_model, source: normalize_source(source) }); })();", context);
-  const source = { id: "one", title: "示例", feed_url: "https://example.com/feed", enabled: true };
+  const source = { id: "one", title: "示例", feed_url: "https://example.com/feed", enabled: true,
+    cache: { status: "fresh", saved_at: 10 }, snapshot: { saved_at: 10, articles: [], error: "" } };
   context.snapshot_model.state.sources.as([source]);
   const card = context.snapshot_card(source);
   const other_card = context.snapshot_card({ ...source, id: "two" });
@@ -671,40 +929,261 @@ test("刷新快照的完整错误响应显示在对应行操作按钮下方，�
     await new Promise(setImmediate);
     assert.equal(displayed, "脚本执行失败：设备离线\n请稍后重试");
     assert.equal(other_displayed, "");
+    for (const name of ["xml-saved-at", "snapshot-saved-at"]) {
+      assert.ok(find(card, "discovery-source-" + name).state.styleSet.includes("text-warning"));
+      const info = find(card, "discovery-source-" + name + "-info");
+      assert.equal(info.state.attributes.title, undefined);
+      assert.match(info.state.attributes["aria-label"], /设备离线\n请稍后重试/);
+      assert.match(info.state.attributes["aria-describedby"], /^frui-tooltip-/);
+      assert.match(info.state.attributes["aria-label"], /上次成功时间/);
+      assert.ok(find(info, "admin-icon-info-circle"));
+      assert.equal(find(other_card, "discovery-source-" + name + "-info"), null);
+    }
     assert.equal(context.snapshot_model.state.list_error.value, "");
     fail = false;
     await find(card, "discovery-source-refresh-snapshot").events.onClick();
     await new Promise(setImmediate);
     assert.equal(displayed, "");
+    for (const name of ["xml-saved-at", "snapshot-saved-at"]) {
+      assert.equal(find(card, "discovery-source-" + name).state.styleSet.includes("text-warning"), false);
+      assert.equal(find(card, "discovery-source-" + name + "-info"), null);
+    }
   } finally { card.onUnmounted(); other_card.onUnmounted(); }
 });
 
-test("账号菜单复用真实 DropdownMenu，右键打开、Escape 关闭，点击退出只调用一次", () => {
+test("自动抓取失败保留成功时间，info 图标悬停展示原因且不触发 Toaster，私密源仅提示 XML 错误", () => {
+  ui.DOM = {};
+  vm.runInContext("(() => {\n" + page_source("discovery.js") +
+    "\nglobalThis.failed_snapshot_view = source => SourceSnapshotView({ source: normalize_source(source) }); })();", context);
+  for (const saved_at of [0, 10]) {
+    for (const require_token of [false, true]) {
+      const root = context.failed_snapshot_view({ require_token, cache: { saved_at, status: saved_at ? "fresh" : "empty" },
+        snapshot: { saved_at, error: "上游返回 HTTP 502", articles: [] } });
+      const toaster = ui.Toaster();
+      const host = ui.TooltipHost();
+      try {
+        for (const name of ["xml-saved-at", ...(!require_token ? ["snapshot-saved-at"] : [])]) {
+          const time = find(root, "discovery-source-" + name);
+          assert.ok(time.state.styleSet.includes(saved_at ? "text-warning" : "text-danger"));
+          if (!saved_at) assert.match(time.children[0].state.value, /失败/);
+          const info = find(root, "discovery-source-" + name + "-info");
+          assert.equal(info.state.attributes.title, undefined);
+          const handlers = {};
+          info.onMounted({ target: {
+            getBoundingClientRect: () => ({ x: 20, y: 20, width: 14, height: 14 }),
+            addEventListener: (name, handler) => { handlers[name] = handler; },
+            removeEventListener: name => { delete handlers[name]; },
+            contains: () => false,
+          } });
+          info.events.onMouseEnter();
+          const tooltip = find(host, "tooltip-content");
+          assert.equal(tooltip.state.attributes.role, "tooltip");
+          assert.equal(info.state.attributes["aria-describedby"], tooltip.state.attributes.id);
+          assert.match(find(host, "tooltip-body").children[0].state.value, /HTTP 502/);
+          info.events.onClick();
+          assert.equal(find(toaster, "toast"), null);
+          assert.ok(tooltip.state.styleSet.includes("animate-tooltip-out"));
+          const element = {};
+          tooltip.events.onAnimationEnd({ target: element, currentTarget: element });
+          assert.equal(find(host, "tooltip-positioner").state.style.display, "none");
+          info.onUnmounted();
+          assert.deepEqual(Object.keys(handlers), []);
+        }
+        if (require_token) assert.equal(find(root, "discovery-source-snapshot-saved-at-info"), null);
+      } finally { root.onUnmounted(); host.onUnmounted(); toaster.onUnmounted(); }
+    }
+  }
+});
+
+test("Tooltip 共用浮层，焦点和悬停显示最新内容，Esc 收起，卸载清理事件与当前内容", () => {
+  const previous_document = context.document;
+  const document_handlers = new Map();
+  context.document = {
+    addEventListener: (name, handler) => document_handlers.set(name, handler),
+    removeEventListener: name => document_handlers.delete(name),
+  };
+  const host = ui.TooltipHost();
+  const explanation = ui.ref("初始原因");
+  const first = ui.Tooltip({ as: "button", content: explanation });
+  const second = ui.Tooltip({ as: "button", content: "另一原因" });
+  function mount(trigger) {
+    const handlers = new Map();
+    trigger.onMounted({ target: {
+      getBoundingClientRect: () => ({ x: 20, y: 20, width: 14, height: 14 }),
+      addEventListener: (name, handler) => handlers.set(name, handler),
+      removeEventListener: name => handlers.delete(name),
+      contains: () => false,
+    } });
+    return handlers;
+  }
+  function finish_animation() {
+    const element = {};
+    find(host, "tooltip-content").events.onAnimationEnd({ target: element, currentTarget: element });
+  }
+  const first_handlers = mount(first);
+  const second_handlers = mount(second);
+  host.onMounted();
+  try {
+    const positioner = find(host, "tooltip-positioner");
+    assert.equal(positioner.state.style.display, "none");
+    first_handlers.get("focusin")();
+    assert.equal(positioner.state.style.display, "block");
+    assert.equal(find(host, "tooltip-body").children[0].state.value, "初始原因");
+    finish_animation();
+    let displayed;
+    find(host, "tooltip-body").children[0].$elm = { setText(value) { displayed = value; } };
+    explanation.set("更新原因");
+    assert.equal(displayed, "更新原因");
+    first.events.onMouseEnter();
+    first.events.onMouseLeave();
+    assert.ok(!find(host, "tooltip-content").state.styleSet.includes("animate-tooltip-out"), "保留键盘焦点时继续显示");
+    document_handlers.get("keydown")({ key: "Escape" });
+    assert.ok(find(host, "tooltip-content").state.styleSet.includes("animate-tooltip-out"));
+    finish_animation();
+    assert.equal(positioner.state.style.display, "none");
+    second.events.onMouseEnter();
+    assert.equal(find(host, "tooltip-body").children[0].state.value, "另一原因");
+    assert.equal(first.state.attributes["aria-describedby"], second.state.attributes["aria-describedby"]);
+    first.onUnmounted();
+    assert.equal(first_handlers.size, 0);
+    assert.equal(find(host, "tooltip-body").children[0].state.value, "另一原因", "旧触发节点卸载不关闭当前提示");
+    second.events.onMouseLeave();
+    finish_animation();
+    assert.equal(positioner.state.style.display, "none");
+    second.onUnmounted();
+    assert.equal(second_handlers.size, 0);
+    assert.equal(find(host, "tooltip-body"), null);
+  } finally {
+    first.onUnmounted(); second.onUnmounted(); host.onUnmounted();
+    context.document = previous_document;
+  }
+  assert.equal(document_handlers.size, 0);
+});
+
+test("Token 成功加载空列表时显示品牌 EmptyCard，创建入口可用，加载与错误时隐藏", async () => {
+  ui.DOM = {};
+  context.document = { querySelector: () => null, activeElement: null, addEventListener() {}, removeEventListener() {} };
+  context.FindRSSAdminShell = {};
+  let finish;
+  context.FindRSSAdminAuth = { fetch: () => new Promise(resolve => { finish = resolve; }) };
+  vm.runInContext("(() => {\n" + page_source("dashboard.js") +
+    "\nglobalThis.empty_token_model = DashboardViewModel('tokens'); globalThis.empty_token_view = AccessTokenManagementView({ store: empty_token_model }); })();", context);
+  const root = context.empty_token_view;
+  const model = context.empty_token_model;
+  try {
+    assert.equal(find(root, "empty-access-token-list"), null);
+    const loading = model.methods.refresh();
+    assert.equal(find(root, "empty-access-token-list"), null);
+    finish(Response.json({ devices: [], access_tokens: [] }));
+    await loading;
+    const empty = find(root, "empty-access-token-list");
+    assert.ok(empty);
+    const image = find(empty, "empty-access-token-list-illustration");
+    assert.equal(image.state.src, "/brand/empty.svg");
+    assert.equal(image.state.attributes["aria-hidden"], "true");
+    assert.equal(find(empty, "empty-access-token-list-title").children[0].state.value, "还没有 Token");
+    find(empty, "empty-create-access-token-button").events.onClick();
+    assert.ok(find(root, "access-token-create-dialog"));
+    model.methods.closeAccessTokenForm();
+    const failed = model.methods.refresh();
+    assert.equal(find(root, "empty-access-token-list"), null);
+    finish(Response.json({ error: "加载失败" }, { status: 503 }));
+    await failed;
+    assert.equal(find(root, "empty-access-token-list"), null);
+    model.state.error.as("");
+    model.state.access_tokens.assign([{ id: "one", name: "已有 Token", status: "active" }]);
+    assert.equal(find(root, "empty-access-token-list"), null);
+    assert.ok(find(root, "access-token-card"));
+  } finally { root.onUnmounted(); model.methods.dispose(); }
+});
+
+test("侧边栏移除账号信息，真实退出按钮直接调用认证模块一次", () => {
   let logouts = 0;
   context.FindRSSAdminAuth = { logout() { logouts++; } };
   vm.runInContext("(() => {\n" + readFileSync(new URL("../components/shell.js", import.meta.url), "utf8").replace(/^export \{[^}]*\};?$/gm, "").replace(/^import .*;$/gm, "") + "\n})();", context);
-  assert.ok(Object.keys(bundle.metafile.inputs).some(path => path.endsWith("frui/dropdown-menu.js")));
   const root = context.FindRSSAdminShell.View({ page_id: "messages" }, []);
-  const account = find(root, "admin-shell-account");
-  assert.equal(account.state.attributes["aria-expanded"], "false");
-  assert.equal(find(root, "admin-shell-logout"), null);
-  let prevented = 0;
-  account.events.onContextMenu({ preventDefault() { prevented++; } });
-  assert.equal(account.state.attributes["aria-expanded"], "true");
-  assert.ok(find(root, "admin-shell-logout"));
-  account.events.onKeyDown({ key: "Escape", stopPropagation() {} });
-  assert.equal(account.state.attributes["aria-expanded"], "false");
-  assert.equal(find(root, "admin-shell-logout"), null);
-  account.events.onKeyDown({ key: "F10", shiftKey: true, preventDefault() { prevented++; } });
-  const menu = find(root, "admin-shell-account-menu");
-  assert.equal(menu.state.attributes.role, "menu");
-  const logout = find(root, "admin-shell-logout");
-  assert.equal(logout.state.attributes.role, "menuitem");
+  for (const name of ["account", "account-avatar", "account-name", "account-role", "account-menu"]) {
+    assert.equal(find(root, "admin-shell-" + name), null);
+  }
+  const logout = find(find(root, "admin-shell-footer"), "admin-shell-logout");
+  assert.ok(logout);
+  assert.equal(logout.state.attributes["aria-label"], "退出登录");
+  assert.equal(logout.state.attributes["aria-haspopup"], undefined);
+  assert.equal(logout.state.attributes["aria-expanded"], undefined);
+  assert.ok(find(logout, "admin-icon-log-out"));
   logout.events.onClick({});
   assert.equal(logouts, 1);
-  assert.equal(account.state.attributes["aria-expanded"], "false");
-  assert.equal(prevented, 2);
   root.onUnmounted();
+});
+
+test("Toaster 空闲时无提示，错误优先显示，关闭和卸载清理自动消失计时", () => {
+  const message = ui.ref(""), error = ui.ref("");
+  const timers = new Map();
+  const previous_timeout = context.setTimeout, previous_clear = context.clearTimeout;
+  let next_timer = 0;
+  context.setTimeout = (callback, delay) => { timers.set(++next_timer, { callback, delay }); return next_timer; };
+  context.clearTimeout = id => timers.delete(id);
+  const dismiss = () => { message.set(""); error.set(""); };
+  const root = ui.Toaster({ message, error, onDismiss: dismiss });
+  try {
+    assert.equal(root.t, "portal");
+    assert.equal(find(root, "toast"), null);
+    message.set("Cookie 已保存");
+    const success = find(root, "toast");
+    assert.equal(success.state.attributes.role, "status");
+    success.onMounted();
+    assert.equal([...timers.values()][0].delay, 4000);
+    [...timers.values()][0].callback();
+    assert.equal(find(root, "toast"), null);
+    assert.equal(timers.size, 0);
+    message.set("之前的成功提示");
+    error.set("保存失败，草稿已保留");
+    const failure = find(root, "toast");
+    assert.equal(failure.state.attributes.role, "alert");
+    assert.equal(failure.children[0].children[0].state.value, error.value);
+    failure.onMounted();
+    assert.equal([...timers.values()][0].delay, 8000);
+    find(root, "toast-dismiss").events.onClick();
+    assert.equal(find(root, "toast"), null);
+    assert.equal(timers.size, 0);
+    message.set("再次保存");
+    find(root, "toast").onMounted();
+    root.onUnmounted();
+    assert.equal(timers.size, 0);
+  } finally {
+    root.onUnmounted();
+    context.setTimeout = previous_timeout;
+    context.clearTimeout = previous_clear;
+  }
+});
+
+test("各页说明共用 Toaster，字段说明点击读取最新内容，重复提示可重新展示", () => {
+  const root = ui.Toaster();
+  const explanation = ui.ref("字段说明");
+  const field = ui.Field({ label: "设置", tooltip: explanation, attributes: { n: "toast-field" } });
+  try {
+    assert.equal(find(root, "tooltip-host"), null);
+    const help = find(field, "toast-field-help-button");
+    assert.equal(help.state.attributes["aria-describedby"], undefined);
+    help.events.onClick();
+    const first = find(root, "toast");
+    assert.equal(first.children[0].children[0].state.value, "字段说明");
+    help.events.onClick();
+    assert.notEqual(find(root, "toast"), first);
+    explanation.set("更新后的说明");
+    help.events.onClick();
+    assert.equal(find(root, "toast").children[0].children[0].state.value, "更新后的说明");
+    ui.notify("操作失败", { error: true });
+    assert.equal(find(root, "toast").state.attributes.role, "alert");
+    ui.notify("下一条提示");
+    assert.equal(find(root, "toast").state.attributes.role, "status");
+    find(root, "toast-dismiss").events.onClick();
+    assert.equal(find(root, "toast"), null);
+    ui.notify("离开页面前的提示");
+  } finally { field.onUnmounted(); root.onUnmounted(); }
+  const next = ui.Toaster();
+  try { assert.equal(find(next, "toast"), null); }
+  finally { next.onUnmounted(); }
 });
 
 test("Cookie 两栏随域名选择更新，切换保留输入，重新读取更新当前域名内容", async () => {
@@ -753,6 +1232,7 @@ test("订阅源 JSON 弹窗复用 FilePicker 拖拽区，读取文件后由按�
   const writes = [];
   context.document = { querySelector: () => null, addEventListener() {}, removeEventListener() {} };
   context.FindRSSAdminAuth = { fetch: async (_, options) => {
+    if (!options?.body) return Response.json({ sources: [], total_count: 0 });
     const source = JSON.parse(options.body);
     writes.push(source);
     return Response.json({ source: { ...source, id: "imported" } });
@@ -843,27 +1323,22 @@ test("脚本模型设置使用原厂商/模型页；临时密钥用于连接测�
   } finally { panel.onUnmounted(); agent.destroy(); }
 });
 
-test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相同的厂商模型编辑器", async () => {
-  context.WebhookSettingsModel = options => WebhookSettingsModel({ ...options, request_json: async (url, options) => {
-    const response = await context.window.FindRSSAdminAuth.fetch(url, options || {});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error);
-    return result;
-  } });
-  context.CookiePushSettingsModel = options => CookiePushSettingsModel({ ...options, request_json: async (url, options) => {
-    const response = await context.window.FindRSSAdminAuth.fetch(url, options || {});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error);
-    return result;
-  } });
-  context.SnapshotSettingsModel = options => SnapshotSettingsModel({ ...options, request_json: async (url, request_options) => {
-    const response = await context.window.FindRSSAdminAuth.fetch(url, request_options);
-    const value = await response.json();
-    if (!response.ok) throw new Error(value.error);
-    return value;
-  } });
-  context.AISettingsStore = AISettingsStore;
-  context.FindRSSAdminShell = { Page: (props, children) => ui.View({ attributes: { n: "settings-test-page" } }, children) };
+async function load_settings_pages() {
+  ui.DOM ||= {};
+  context.document = { querySelector: () => null, addEventListener() {}, removeEventListener() {} };
+  const settings_bundle = await build({
+    stdin: {
+      contents: ["settings.js", ...["device-tokens", "cookies", "webhook", "snapshots", "models", "about"].map(name => "settings/" + name + ".js")]
+        .map(name => 'export * from "./' + name + '";').join("\n"),
+      resolveDir: fileURLToPath(new URL("../pages/", import.meta.url)),
+    },
+    bundle: true, format: "iife", globalName: "SettingsPages", write: false,
+  });
+  vm.runInContext(settings_bundle.outputFiles[0].text, context);
+  return context.SettingsPages;
+}
+
+test("设置子页面各自加载配置，保留编辑和重试功能，切换清除密钥且返回重新加载", async () => {
   const requests = [];
   let tokens = [];
   const token = { id: "settings-token", name: "设置页设备", note: "", token_hint: "frd_…1234", status: "active", created_at: 1, expires_at: null, last_used_at: null };
@@ -880,33 +1355,63 @@ test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相
       if (options.method === "POST") { tokens = [token]; return Response.json({ device_token: token }); }
       return Response.json({ device_tokens: tokens });
     }
-    if (url === "/admin/api/settings/webhook" && !fail_read) {
+    if (fail_read) return Response.json({ error: "读取失败" }, { status: 500 });
+    if (url === "/admin/api/settings/webhook") {
       if (options.method === "PUT") {
         const body = JSON.parse(options.body);
         webhook_settings = { url: body.url, template: body.template, token_configured: Boolean(body.token) };
       }
       return Response.json(webhook_settings);
     }
-    if (url === "/admin/api/settings/cookies" && !fail_read) {
+    if (url === "/admin/api/settings/cookies") {
       if (options.method === "PUT") cookie_settings = { uuid: JSON.parse(options.body).uuid, configured: true };
       return Response.json(cookie_settings);
     }
-    return fail_read ? Response.json({ error: "读取失败" }, { status: 500 }) : Response.json({ providers: [provider], configured: true });
+    if (url === "/admin/api/settings/snapshots") return Response.json({ policy: { mode: "interval", every: 3600 } });
+    return Response.json({ providers: [provider], configured: true });
   } };
-  vm.runInContext("(() => {\n" + page_source("dashboard.js") +
-    "\nglobalThis.DeviceTokensModel = DeviceTokensModel; globalThis.DeviceTokensView = DeviceTokensView; })();", context);
-  vm.runInContext("(() => {\n" + page_source("settings.js") + "\nglobalThis.settings_test_page = SettingsPage; })();", context);
-  const route_handlers = {};
-  const root = context.settings_test_page({ view: {
-    onShow(callback) { route_handlers.show = callback; return () => { delete route_handlers.show; }; },
-    onBeforeHide(callback) { route_handlers.hide = callback; return () => { delete route_handlers.hide; }; },
-  } });
-  try {
-    find(root, "settings-content").onMounted();
+  context.FindRSSAdminShell = {};
+  const pages = await load_settings_pages();
+  const definitions = [
+    ["device-tokens", pages.SettingsDeviceTokensPage], ["models", pages.SettingsModelsPage],
+    ["cookies", pages.SettingsCookiesPage], ["webhook", pages.SettingsWebhookPage],
+    ["snapshots", pages.SettingsSnapshotsPage],
+  ];
+  const handlers = {}, views = {}, sections = {}, mounted = new Set(), route_listeners = new Set();
+  const history = { onRouteChange(callback) { route_listeners.add(callback); return () => route_listeners.delete(callback); } };
+  for (const [id, Page] of definitions) {
+    handlers[id] = {};
+    views[id] = { onBeforeHide(callback) { handlers[id].hide = callback; return () => { delete handlers[id].hide; }; } };
+    sections[id] = Page({ view: views[id], history });
+  }
+  const root = ui.View({}, Object.values(sections));
+  let current;
+  async function activate(id) {
+    if (current) handlers[current].hide();
+    current = id;
+    if (!mounted.has(id)) { sections[id].onMounted(); mounted.add(id); }
+    else for (const listener of route_listeners) listener({ view: views[id] });
     await new Promise(setImmediate);
+  }
+  try {
+    assert.equal(requests.length, 0);
+    await activate("models");
+    assert.deepEqual(requests.map(request => request.url), ["/admin/api/scripts/agent/settings"]);
     assert.ok(find(root, "settings-load-error"));
     assert.equal(find(root, "settings-save-button"), null);
-    assert.ok(find(root, "device-token-management"));
+    fail_read = false;
+    await find(root, "settings-retry-button").events.onClick();
+    await new Promise(setImmediate);
+    assert.ok(find(root, "settings-ai-provider-search"));
+    assert.ok(find(root, "settings-ai-nav-custom:custom"));
+    await find(root, "settings-save-button").events.onClick();
+    await new Promise(setImmediate);
+    assert.equal(requests.at(-1).url, "/admin/api/scripts/agent/settings");
+    assert.equal(requests.at(-1).method, "PUT");
+
+    await activate("device-tokens");
+    assert.equal(find(root, "settings-ai-form"), null);
+    assert.equal(requests.at(-1).url, "/admin/api/device-tokens");
     find(root, "device-token-name-input").events.onInput({ target: { value: token.name } });
     await find(root, "create-device-token-button").events.onClick();
     await new Promise(setImmediate);
@@ -914,25 +1419,20 @@ test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相
     assert.equal(find(root, "device-token-created-value").children[0].state.value, "settings-plaintext");
     assert.deepEqual(requests.find(request => request.url === "/admin/api/device-tokens" && request.method === "POST").body,
       { name: token.name, note: "", expires_in_seconds: 2592000 });
-    const token_value = find(root, "device-token-value").children[0];
-    let displayed_token = token_value.state.value;
-    token_value.$elm = { setText(value) { displayed_token = value; } };
+    assert.equal(find(root, "device-token-value"), null);
     await find(root, "preview-device-token-button").events.onClick();
     await new Promise(setImmediate);
-    assert.equal(displayed_token, "settings-plaintext");
+    assert.equal(find(root, "device-token-value").children[0].state.value, "settings-plaintext");
+
+    fail_read = true;
+    await activate("cookies");
+    assert.equal(find(root, "device-token-created-dialog"), null);
+    assert.equal(find(root, "device-token-value"), null);
+    assert.equal(requests.at(-1).url, "/admin/api/settings/cookies");
+    assert.ok(find(root, "settings-cookie-retry"));
     fail_read = false;
-    await find(root, "settings-retry-button").events.onClick();
-    await new Promise(setImmediate);
-    assert.ok(find(root, "settings-ai-provider-search"));
-    assert.ok(find(root, "settings-ai-nav-custom:custom"));
-    assert.ok(find(root, "settings-save-button"));
-    await find(root, "settings-save-button").events.onClick();
-    await new Promise(setImmediate);
-    assert.equal(requests.at(-1).url, "/admin/api/scripts/agent/settings");
-    assert.equal(requests.at(-1).method, "PUT");
     await find(root, "settings-cookie-retry").events.onClick();
     await new Promise(setImmediate);
-    assert.ok(find(root, "settings-cookie-decryption"));
     assert.equal(find(root, "settings-cookie-password").state.attributes.type, "text");
     find(root, "settings-cookie-uuid").events.onInput({ target: { value: "123" } });
     find(root, "settings-cookie-password").events.onInput({ target: { value: "cookie-secret" } });
@@ -940,9 +1440,16 @@ test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相
     await new Promise(setImmediate);
     assert.deepEqual(requests.at(-1).body, { uuid: "123", password: "cookie-secret" });
     assert.equal(find(root, "settings-cookie-password").state.value, "");
+    find(root, "settings-cookie-password").events.onInput({ target: { value: "unsaved-cookie-secret" } });
+
+    fail_read = true;
+    await activate("webhook");
+    assert.equal(find(root, "settings-cookie-fields"), null);
+    assert.equal(requests.at(-1).url, "/admin/api/settings/webhook");
+    assert.ok(find(root, "settings-webhook-retry"));
+    fail_read = false;
     await find(root, "settings-webhook-retry").events.onClick();
     await new Promise(setImmediate);
-    assert.ok(find(root, "settings-webhook"));
     assert.equal(find(root, "settings-webhook-token").state.attributes.type, "password");
     find(root, "settings-webhook-url").events.onInput({ target: { value: "https://notify.example/api" } });
     find(root, "settings-webhook-token").events.onInput({ target: { value: "notify-secret" } });
@@ -951,17 +1458,81 @@ test("设置页读取失败可重试，加载成功后使用与 XiaoxunAgent 相
     await new Promise(setImmediate);
     assert.deepEqual(requests.at(-1).body, { url: "https://notify.example/api", token: "notify-secret", template: '{"text":"{{error_text}}"}' });
     assert.equal(find(root, "settings-webhook-token").state.value, "");
-    route_handlers.hide();
-    assert.equal(find(root, "settings-ai-form"), null);
-    assert.equal(find(root, "device-token-created-dialog"), null);
-    assert.equal(displayed_token, token.token_hint);
+    find(root, "settings-webhook-token").events.onInput({ target: { value: "unsaved-webhook-secret" } });
+
+    await activate("snapshots");
+    assert.equal(find(root, "settings-webhook-fields"), null);
+    assert.equal(requests.at(-1).url, "/admin/api/settings/snapshots");
+    assert.ok(find(root, "settings-snapshot-save"));
+    await find(root, "settings-snapshot-save").events.onClick();
+    await new Promise(setImmediate);
+    assert.equal(requests.at(-1).url, "/admin/api/settings/snapshots");
+    assert.equal(requests.at(-1).method, "PUT");
+
     const token_reads = requests.filter(request => request.url === "/admin/api/device-tokens" && request.method === "GET").length;
-    await route_handlers.show();
-    assert.equal(requests.at(-1).method, "GET");
+    await activate("device-tokens");
     assert.equal(requests.filter(request => request.url === "/admin/api/device-tokens" && request.method === "GET").length, token_reads + 1);
+    await activate("models");
+    assert.equal(requests.at(-1).url, "/admin/api/scripts/agent/settings");
     assert.ok(find(root, "settings-ai-form"));
-  } finally { find(root, "settings-content").onUnmounted(); root.onUnmounted(); }
-  assert.deepEqual(route_handlers, {});
+    await activate("cookies");
+    assert.equal(find(root, "settings-cookie-password").state.value, "");
+    await activate("webhook");
+    assert.equal(find(root, "settings-webhook-token").state.value, "");
+  } finally {
+    for (const id of mounted) sections[id].onUnmounted();
+    root.onUnmounted();
+  }
+  assert.equal(route_listeners.size, 0);
+  for (const value of Object.values(handlers)) assert.deepEqual(value, {});
+});
+
+
+test("设置 layout 提供六个真实路由链接，共用 KeepAlive 内容区域且高亮随路由更新", async () => {
+  context.FindRSSAdminAuth = { fetch: async () => { throw new Error("layout 不应请求配置"); } };
+  context.FindRSSAdminShell = {};
+  const pages = await load_settings_pages();
+  const listeners = new Set(), pushed = [];
+  const root = pages.SettingsPage({
+    view: { curView: { name: "root.admin.settings.models" }, subViews: [] },
+    history: {
+      onRouteChange(callback) { listeners.add(callback); return () => listeners.delete(callback); },
+      push(name) { pushed.push(name); for (const callback of listeners) callback({ name }); },
+    },
+    views: {},
+  });
+  try {
+    assert.equal(root.state.attributes.n, "settings-layout");
+    assert.ok(root.state.styleSet.includes("h-full"));
+    assert.ok(find(root, "settings-subviews").state.styleSet.includes("relative"));
+    assert.equal(find(root, "settings-subviews").children.length, 1);
+    const navigation = find(root, "settings-navigation");
+    assert.equal(navigation.children.length, 6);
+    assert.ok(navigation.state.styleSet.includes("flex-direction-column"));
+    assert.ok(navigation.state.styleSet.includes("border-inline-end-1-pixels-solid-color-border"));
+    const content = find(root, "page-content");
+    assert.equal(content.state.style["grid-template-columns"], "180px minmax(0, 1fr)");
+    assert.equal(content.state.style["grid-template-rows"], "minmax(0, 1fr)");
+    assert.equal(content.children[0], navigation);
+    assert.equal(content.children[1], find(root, "settings-subviews"));
+    const models = find(root, "settings-nav-models");
+    const cookies = find(root, "settings-nav-cookies");
+    assert.equal(models.state.href, "/admin/settings/models");
+    assert.equal(cookies.state.href, "/admin/settings/cookies");
+    assert.equal(models.state.attributes["aria-current"], "page");
+    assert.equal(cookies.state.attributes["aria-current"], undefined);
+    let prevented = 0;
+    cookies.events.onClick({ button: 0, preventDefault() { prevented += 1; } });
+    assert.deepEqual(pushed, ["root.admin.settings.cookies"]);
+    assert.equal(models.state.attributes["aria-current"], undefined);
+    assert.equal(cookies.state.attributes["aria-current"], "page");
+    for (const modifiers of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }, { defaultPrevented: true }]) {
+      models.events.onClick({ button: 0, ...modifiers, preventDefault() { prevented += 1; } });
+    }
+    assert.equal(prevented, 1);
+    assert.equal(pushed.length, 1);
+  } finally { root.onUnmounted(); }
+  assert.equal(listeners.size, 0);
 });
 
 
