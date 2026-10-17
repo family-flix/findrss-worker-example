@@ -437,7 +437,7 @@ function format_count(value) {
   return number + " 订阅";
 }
 
-// 接口加载前使用本地默认值；实际平台列表由接口返回。
+// 接口加载前使用本地默认值；实际来源列表由接口返回。
 const DISCOVERY_PLATFORM_LABELS = {
   douyin: "抖音",
   wxchannels: "视频号",
@@ -993,13 +993,13 @@ export function PlatformNavigationView({ vm$ }) {
       attributes: {
         n: "platform-filters",
         role: "group",
-        "aria-label": "平台单选筛选",
+        "aria-label": "来源单选筛选",
       },
     },
     [
       View(
         { class: "filter-label", attributes: { n: "platform-filter-label" } },
-        ["平台"],
+        ["来源"],
       ),
       View(
         {
@@ -1093,7 +1093,7 @@ export function FeedIndexView({ vm$ }) {
   );
   const empty_note_ = computed(
     vm$.state.error,
-    (error) => error || "换个关键词，或调整平台和标签筛选",
+    (error) => error || "换个关键词，或调整来源和标签筛选",
   );
   const error_visible_ = combine(
     { error: vm$.state.error, feeds: vm$.state.feeds },

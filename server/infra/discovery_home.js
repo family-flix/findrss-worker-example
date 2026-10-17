@@ -14,7 +14,7 @@ const styles = minify(stylesheet.replace('@import url("/base.css");', base_style
 const compact_template = template.trim().replace(/>\s+</g, "><");
 let style_hash = null;
 // 页头等 HTML 结构变更时递增，旧 R2 产物与边缘缓存共用这一版本。
-export const DISCOVERY_ASSETS_VERSION = "7";
+export const DISCOVERY_ASSETS_VERSION = "8";
 
 export function discovery_style_hash() {
   return style_hash ||= crypto.subtle.digest("SHA-256", new TextEncoder().encode(styles))

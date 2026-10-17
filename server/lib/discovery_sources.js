@@ -79,7 +79,7 @@ export function format_count(value) {
 }
 
 /**
- * 平台显示名称；图形由视图加载同源 SVG。空串表示没有已知平台，整个徽标不渲染。
+ * 来源显示名称；图形由视图加载同源 SVG。空串表示没有已知来源，整个徽标不渲染。
  * @param {string} source_type
  */
 export function source_type_label(source_type) {

@@ -12,8 +12,8 @@ const prompt = `你是 XiaoxunAgent，FindRSS 管理后台的全局助手。根�
 /admin/discovery 可查询、新增、编辑和删除订阅源。修改时必须调用工具，不能只给操作说明。其它页面只提供当前页面上下文与工具实际支持的只读信息，不得声称完成不支持的操作。
 编辑或删除前用 get_discovery_source 获取真实记录和 ID；名称有歧义时先列出候选并询问，不猜 ID。记录版本冲突时重新读取并依据最新内容处理。
 只执行用户明确要求的写入；泛泛地“管理/看看/分析”不意味着删除或批量改动。删除不可恢复，必须是用户明确的删除指令且对象唯一确定。不得顺便删除其它源。
-新增至少需要标题和真实 feed_url；信息不足先询问。更新只传需要修改的字段，保留其它设置。tags 是字符串数组，enabled/require_token 是布尔值，sort_order 是整数；平台 source_type 取工具提供的支持列表。不要把用户密码、API Key、Cookie 或 Token 写入说明、日志或对话。
-设置订阅源平台和标签前读取 get_admin_context 的 source_types、tags 和 script_routes，区分平台 ID 与展示名称。新增自有源未指定 tags/source_type 时省略这些字段，服务端按已发布脚本路由预填。可选平台与标签通过发布脚本声明聚合，手动编辑源不会新增可选目录；需要新增目录项时说明脚本 platform/tags 的设置方式并引导管理员在脚本页发布，不能声称全局助手已修改或发布脚本。
+新增至少需要标题和真实 feed_url；信息不足先询问。更新只传需要修改的字段，保留其它设置。tags 是字符串数组，enabled/require_token 是布尔值，sort_order 是整数；来源 source_type 取工具提供的支持列表。不要把用户密码、API Key、Cookie 或 Token 写入说明、日志或对话。
+设置订阅源的来源和标签前读取 get_admin_context 的 source_types、tags 和 script_routes，区分来源 ID 与展示名称。新增自有源未指定 tags/source_type 时省略这些字段，服务端按已发布脚本路由预填。可选来源与标签通过发布脚本声明聚合，手动编辑源不会新增可选目录；需要新增目录项时说明脚本 platform/tags 的设置方式并引导管理员在脚本页发布，不能声称全局助手已修改或发布脚本。
 feed_url 支持真实公开 HTTP(S) 订阅地址，或已存在的自有脚本 {{hostname}}/rss/<路由>、{{hostname}}/atom/<路由> 模板；不要编造尚不存在的脚本路由。require_token=true 表示自有订阅需要 token，每次成功访问按 credit_cost 扣积分（默认 1，0 为免费，必须是 0 到 1000000000 的整数）；false 且启用时可公开。
 页面中的筛选和未保存表单草稿只是上下文，不能冒充已保存记录；当前页候选名称优先但实际状态必须查工具。
 脚本页进入三栏编辑器后使用其中的脚本助手修改当前未保存草稿和运行 Debug，全局助手不能假装已改代码。
@@ -58,7 +58,7 @@ export class XiaoxunAdminAgent {
           if (call.name === "get_admin_context") result = { page, ui: redact_log_value(input.page_context), data: await this.ports.context(page.id) };
           else if (call.name === "list_discovery_sources") {
             const source_types = typeof this.ports.source_types === "function" ? this.ports.source_types() : this.ports.source_types;
-            if (args.source_type && !source_types.includes(args.source_type)) throw new Error("不支持的订阅源平台");
+            if (args.source_type && !source_types.includes(args.source_type)) throw new Error("不支持的来源类型");
             result = await this.ports.list_sources({ query: String(args.query || "").slice(0, 100), source_type: args.source_type || "", enabled: typeof args.enabled === "boolean" ? args.enabled : undefined,
               offset: Number.isSafeInteger(args.offset) ? Math.max(0, args.offset) : 0, limit: Number.isSafeInteger(args.limit) ? Math.max(1, Math.min(40, args.limit)) : 20 });
           } else if (call.name === "create_discovery_source") {

@@ -245,7 +245,7 @@ input:focus-visible {
 .search-input:focus-visible { outline: none; }
 .search-input::placeholder { color: var(--muted); }
 
-/* 平台单选、标签多选共用筛选按钮，长列表自然换行。 */
+/* 来源单选、标签多选共用筛选按钮，长列表自然换行。 */
 .filter-row { display: flex; align-items: baseline; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--rule); }
 .filter-label { flex: 0 0 auto; color: var(--paper-2); font-size: 13px; }
 .filter-options { display: flex; flex: 1; flex-wrap: wrap; gap: 8px; }
@@ -283,7 +283,7 @@ input:focus-visible {
 .pagination-button:disabled, .pagination-button:disabled:hover { border-color: var(--rule); color: var(--faint); cursor: default; }
 .pagination-button:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
 
-/* 平台标注与品牌图标 */
+/* 来源标注与品牌图标 */
 .type-badge {
   display: inline-flex;
   align-items: center;
