@@ -99,8 +99,8 @@ export function StorageModel() {
     close_preview();
     const controller = new AbortController();
     preview_request = controller;
-    const extension = /\.(json|xml|js)$/i.exec(node.key)?.[1].toLowerCase();
-    const mode = extension ? "application/" + (extension === "js" ? "javascript" : extension) : "";
+    const extension = /\.(json|xml|atom|js)$/i.exec(node.key)?.[1].toLowerCase();
+    const mode = { json: "application/json", xml: "application/xml", atom: "application/xml", js: "application/javascript" }[extension] || "";
     const value = { ...node, loading: true, text: "", formatted: "", mode, kind: "", error: "", truncated: false };
     preview.as(value);
     const current = () => !disposed && preview_request === controller;
