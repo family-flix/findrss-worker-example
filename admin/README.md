@@ -13,6 +13,8 @@
 
 ## 请求结构
 
+`/admin/clips` 提供区域剪藏管理：来源网址、CSS 选择器、采集视口、刷新策略、预览与 iframe 嵌入。采集通过 Cloudflare Browser Rendering 执行 `examples/scripts/region_clip.js`，按与订阅源相同的默认策略或单条覆盖规则定时更新；任务出现在「任务」页面。暂停仅停止自动刷新，最近快照仍可访问；删除会让公开链接返回 404。公开 `/clips/<ID>` 只输出无脚本的静态 HTML 和内联 CSS，允许跨站 iframe；后台页面自身仍禁止被嵌入。账号与 API Token 使用 Worker 的 `CF_BROWSER_ACCOUNT_ID`、`CF_BROWSER_API_TOKEN` 配置，不经管理 API 回传。
+
 后台公共 Shell 挂载共享的 `Toaster()` 和 `TooltipHost()`。各页点击说明按钮通过 `FindRSSAdminUI.notify(text)` 展示提示，错误提示可传入 `{ error: true }`。通知支持关闭、自动消失，并在切换页面或卸载时清理。脚本实时调试说明和 Field 的 `tooltip` 参数继续使用点击提示。
 
 `/admin/discovery`「抓取与快照」列中，XML 抓取和广场快照失败时间旁的 `info-circle` 图标，以及「下次抓取」旁的 `circle-help` 图标，均使用 `Tooltip` 组件。实现参考小讯阅读器的共享会话、Portal 和 Popper，悬停或键盘聚焦显示完整错误原因或抓取规则（含继承后的有效规则），点击或 Esc 收起，通过 `aria-describedby` 关联提示内容，不触发 Toaster，也不叠加原生 `title` 提示。浮层沿用 `--frui-color-surface-raised`、`--frui-color-text`、`--frui-radius-sm` 和 `--frui-shadow-card`。

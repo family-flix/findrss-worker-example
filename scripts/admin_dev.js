@@ -22,7 +22,7 @@ export const admin_dev_import_map = JSON.stringify({ imports: {
   ...Object.fromEntries(dependencies.map(name => [name, `/admin/vendor/${dependency_name(name)}.js`])),
 } });
 export const admin_dev_import_map_hash = createHash("sha256").update(admin_dev_import_map).digest("base64");
-const shared_modules = ["server/lib/datetime.js", "server/lib/poll_schedule.js", "server/domain/rss_route.js", "server/lib/admin_agent_context.js", "server/domain/feed_format.js", "server/lib/discovery_platform.js", "server/lib/constants.js", "server/lib/script_config.js", "packages/feed-fetch/src/feed_parser.js"];
+const shared_modules = ["server/lib/datetime.js", "server/lib/poll_schedule.js", "server/lib/snapshot_schedule.js", "server/domain/clip.js", "server/domain/rss_route.js", "server/lib/admin_agent_context.js", "server/domain/feed_format.js", "server/lib/discovery_platform.js", "server/lib/constants.js", "server/lib/script_config.js", "packages/feed-fetch/src/feed_parser.js"];
 const aliases = ["devices.html", "discovery-admin.html", "rss-scripts.html"];
 
 function dev_html(source, entry) {

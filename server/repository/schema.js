@@ -26,6 +26,7 @@ export function migrate_script_tables(sql) {
 /** 本模块 DDL 里恰好这些表。 @type {readonly string[]} */
 export const API_TABLE_NAMES = Object.freeze([
   "overview_snapshot",
+  "clips",
   "snapshot_settings",
   "background_tasks",
   "cookie_push_settings",
@@ -74,6 +75,32 @@ export const API_SCHEMA_SQL = `
     id INTEGER PRIMARY KEY CHECK (id = 1),
     snapshot_json TEXT NOT NULL,
     generated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS clips (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    selector TEXT NOT NULL,
+    viewport_width INTEGER NOT NULL DEFAULT 1440,
+    viewport_height INTEGER NOT NULL DEFAULT 900,
+    wait_ms INTEGER NOT NULL DEFAULT 1000,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    poll_policy_json TEXT NOT NULL DEFAULT '{"mode":"inherit"}',
+    poll_updated_at INTEGER NOT NULL DEFAULT 0,
+    config_version TEXT NOT NULL,
+    node TEXT NOT NULL DEFAULT '',
+    html TEXT NOT NULL DEFAULT '',
+    object_key TEXT NOT NULL DEFAULT '',
+    width INTEGER NOT NULL DEFAULT 0,
+    height INTEGER NOT NULL DEFAULT 0,
+    byte_size INTEGER NOT NULL DEFAULT 0,
+    image_missing INTEGER NOT NULL DEFAULT 0,
+    fingerprint TEXT NOT NULL DEFAULT '',
+    adaptive_interval INTEGER NOT NULL DEFAULT 0,
+    attempted_at INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    saved_at INTEGER NOT NULL DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS snapshot_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),

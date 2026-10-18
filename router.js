@@ -34,6 +34,7 @@ export function create_worker({ api, admin, discovery }) {
         path.startsWith("/discovery/") ||
         path === "/public" ||
         path.startsWith("/public/") ||
+        path.startsWith("/clips/") ||
         path === "/api/cookies/update" ||
         path.startsWith("/rss/") ||
         path.startsWith("/atom/") ||

@@ -38,11 +38,14 @@ import { public_rss_route } from "./server/service/worker/rss.js";
 import { admin_network_test, admin_network_cookie_domains } from "./server/service/worker/network_test.js";
 import { admin_storage_request } from "./server/service/worker/storage.js";
 import { public_asset_request } from "./server/service/worker/public_assets.js";
+import { public_clip_request, admin_clip_request } from "./server/service/worker/clips.js";
 
 /** @type {ExportedHandler<Env>} */
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const clip_match = url.pathname.match(/^\/clips\/([a-f0-9-]{36})$/);
+    if (clip_match) return public_clip_request(request, env, clip_match[1]);
     if (url.pathname === "/public" || url.pathname.startsWith("/public/")) return public_asset_request(request, env, ctx);
     // 兼容已发布的管理客户端；内部与前端统一使用 /scripts。
     url.pathname = url.pathname.replace(
@@ -76,6 +79,9 @@ export default {
     if (is_admin_route) {
       if (!admin_authorized(request, env)) {
         return admin_auth_required();
+      }
+      if (/^\/admin\/api\/clips(?:\/[a-f0-9-]{36}(?:\/snapshot)?)?$/.test(url.pathname)) {
+        return admin_clip_request(request, env);
       }
       if (/^\/admin\/api\/background-tasks(?:\/[A-Za-z0-9-]+\/cancel)?$/.test(url.pathname)) {
         const internal_url = new URL("https://internal" + url.pathname.replace("/admin/api/", "/_admin/"));

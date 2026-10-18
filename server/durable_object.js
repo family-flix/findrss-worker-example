@@ -76,6 +76,10 @@ import { RepositoryWebhookSettings } from "./repository/webhook_settings.js";
 import { ServiceWebhookSettings } from "./service/durable_object/webhook_settings.js";
 import { seed_default_data } from "./service/durable_object/default_data.js";
 import apple_script from "../examples/scripts/rss/apple.js" with { type: "text" };
+import clip_capture_source from "../examples/scripts/region_clip.js" with { type: "text" };
+import { RepositoryClip } from "./repository/clip.js";
+import { ServiceClip } from "./service/durable_object/clips.js";
+import { create_clip_loader } from "./infra/clip_snapshot.js";
 
 /**
  * @typedef {Object} Env
@@ -89,6 +93,8 @@ import apple_script from "../examples/scripts/rss/apple.js" with { type: "text" 
  * @property {string} [COOKIE_PUSH_UUID]
  * @property {string} [COOKIE_PUSH_KEY]
  * @property {string} [FINDRSS_HOSTNAME]
+ * @property {string} [CF_BROWSER_ACCOUNT_ID]
+ * @property {string} [CF_BROWSER_API_TOKEN]
  */
 
 /** @typedef {"queued" | "assigned" | "running" | "completed" | "failed"} TaskStatus */
@@ -379,6 +385,7 @@ export const route = {
       mcp_tokens: new RepositoryMcpToken({ sql: this.ctx.storage.sql }),
       mcp_oauth: new RepositoryMcpOauth({ sql: this.ctx.storage.sql, transaction: action => this.ctx.storage.transactionSync(action) }),
       discovery: new RepositoryDiscoverySource({ sql: this.ctx.storage.sql }),
+      clips: new RepositoryClip({ sql: this.ctx.storage.sql }),
       statistics: new RepositoryStatistics({ sql: this.ctx.storage.sql }),
       redemption: new RepositoryRedemption({ sql: this.ctx.storage.sql }),
       rss_cookie_grants: new RepositoryRssCookieGrant({ sql: this.ctx.storage.sql }),
@@ -424,6 +431,10 @@ export const route = {
     this.app.webhook_settings = new ServiceWebhookSettings({ repo: this.repo.webhook_settings,
       credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || "") });
     this.app.snapshot_settings = new ServiceSnapshotSettings({ repo: this.repo.snapshot_settings, schedule_alarm: ports.schedule_alarm });
+    this.app.clips = new ServiceClip({ repo: this.repo.clips, storage: this.ctx.storage,
+      object_store: ports.object_store, load_snapshot: create_clip_loader(env, clip_capture_source),
+      background_tasks: this.app.background_tasks, snapshot_settings: () => this.app.snapshot_settings.settings(),
+      schedule_alarm: ports.schedule_alarm });
     this.app.cookie_push_settings = new ServiceCookiePushSettings({ repo: this.repo.cookie_push_settings,
       credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || "") });
     this.app.statistics = new ServiceStatistics({ repo: this.repo, app: this.app });
@@ -542,6 +553,8 @@ export const route = {
       for (const [name, run] of [
         ["discovery snapshot", () => this.app.discovery.refresh_due_snapshots()],
         ["RSS snapshot", () => this.app.scripts.refresh_due_snapshots()],
+        ["clip snapshot", () => new URL(request.url).pathname.startsWith("/_public/clips/")
+          ? undefined : this.app.clips.refresh_due_snapshots()],
       ]) {
         this.ctx.waitUntil(Promise.resolve().then(run).catch(error => console.warn(name + " recovery failed", error.message)));
       }
@@ -587,6 +600,7 @@ export const route = {
       for (const [name, run] of [
         ["discovery snapshot", () => this.app.discovery.refresh_due_snapshots()],
         ["RSS snapshot", () => this.app.scripts.refresh_due_snapshots()],
+        ["clip snapshot", () => this.app.clips.refresh_due_snapshots()],
         ["discovery catalog", () => this.app.discovery.ensure_catalog()],
       ]) {
         try { this.ctx.waitUntil(Promise.resolve(run()).catch(error => console.warn(name + " alarm failed", error.message))); }
@@ -657,10 +671,11 @@ export const route = {
     const next_lease = this.repo.calls.min_lease_expires_at();
     const next_snapshot = this.app.discovery.next_snapshot_at();
     const next_feed = this.app.scripts?.next_snapshot_at();
+    const next_clip = this.app.clips?.next_snapshot_at();
     const now = Date.now();
     const next_statistics = Math.max(now, this.app.statistics.next_snapshot_at());
     const next_token_expiry = this.repo.device_tokens.min_expires_at(now);
-    const desired = Math.min(next_lease ?? Infinity, next_snapshot ?? Infinity, next_feed ?? Infinity, next_statistics, next_token_expiry ?? Infinity,
+    const desired = Math.min(next_lease ?? Infinity, next_snapshot ?? Infinity, next_feed ?? Infinity, next_clip ?? Infinity, next_statistics, next_token_expiry ?? Infinity,
       this.app.scripts?.migration_pending ? now + 10000 : Infinity, now + MAINTENANCE_MILLISECONDS);
     const current = await this.ctx.storage.getAlarm();
     // 保留仍有效的更早唤醒；滞留超过一分钟的过期 alarm 重新登记以恢复调度。

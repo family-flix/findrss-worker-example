@@ -20,6 +20,8 @@ import { script_agent_socket } from "./script_agent_socket.js";
 import { handle_mcp } from "./server/lib/mcp.js";
 import { MCP_TOOLS } from "./server/lib/mcp_tools.js";
 import { resolve_discovery_source_feed_urls } from "./server/service/worker/discovery.js";
+import { CLIP_RESPONSE_HEADERS } from "./server/infra/clip_html.js";
+import { read_clip_json } from "./server/service/worker/clips.js";
 
 /**
  * @param {Request} request
@@ -101,6 +103,26 @@ async function mcp_oauth_body(request, json) {
  */
 async function dispatch(request, app) {
   const url = new URL(request.url);
+  if (url.pathname === "/_admin/clips") {
+    if (request.method === "GET") return app.clips.list();
+    if (request.method === "POST") return app.clips.create(await read_clip_json(request, 16384));
+    throw do_error("method not allowed", 405, {}, { Allow: "GET, POST" });
+  }
+  const admin_clip = url.pathname.match(/^\/_admin\/clips\/([a-f0-9-]{36})(\/snapshot)?$/);
+  if (admin_clip) {
+    const [, id, action = ""] = admin_clip;
+    if (!action && request.method === "DELETE") return app.clips.delete(id);
+    if (!action && request.method === "PATCH") return app.clips.update(id, await read_clip_json(request, 16384));
+    if (action === "/snapshot" && request.method === "POST") return app.clips.refresh(id);
+    throw do_error("method not allowed", 405);
+  }
+  const public_clip = url.pathname.match(/^\/_public\/clips\/([a-f0-9-]{36})$/);
+  if (public_clip) {
+    const [, id] = public_clip;
+    if (!["GET", "HEAD"].includes(request.method)) throw do_error("method not allowed", 405);
+    const html = await app.clips.document(id);
+    return new Response(request.method === "HEAD" ? null : html, { headers: CLIP_RESPONSE_HEADERS });
+  }
   if (url.pathname.startsWith("/_mcp-oauth/")) {
     const action = url.pathname.slice("/_mcp-oauth/".length), resource = request.headers.get("X-MCP-Resource");
     const method = action === "authorize" ? "GET" : "POST";

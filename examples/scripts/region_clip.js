@@ -1,0 +1,563 @@
+/*
+MIT License
+
+Copyright (c) 2026 ltaoo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+// 区域剪藏：由 Cloudflare Browser Rendering 在已渲染网页中执行。
+// 独立网页脚本，需要实时 DOM；不在 RSS 的 QuickJS 沙箱中执行。
+// 样式冻结改编自 dm-extension/src/clip/clip.model.js。
+// API：await FindRSSRegionClip.capture(elementOrSelector, options)。
+// 返回 { ok, html, stats }，宿主负责保存快照与按计划刷新。脚本不会自动运行。
+(() => {
+"use strict";
+async function extract_clip(target, options) {
+  const MAX_ELEMENTS = 6000;
+  const MAX_DEPTH = 400;
+  const MAX_IMAGES = 60;
+  const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+  const MAX_TOTAL_BYTES = 6 * 1024 * 1024;
+  const PLACEHOLDER_IMAGE = "repeating-linear-gradient(45deg,#e9ecef 0 6px,#f8f9fa 6px 12px)";
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const XHTML_NS = "http://www.w3.org/1999/xhtml";
+
+  const opts = options && typeof options === "object" ? options : {};
+  const IMPORTANT = opts.important !== false;
+  const INLINE_IMAGES = opts.inline_images !== false;
+  const MATERIALIZE_PSEUDO = opts.materialize_pseudo !== false;
+  const PRIORITY = IMPORTANT ? "important" : "";
+
+  const doc = document;
+  const view = window;
+
+  function fail(message) { return { ok: false, error: message }; }
+
+  // 元素外框文字（仅用于界面）：与 detection.model.js 的 node_label 同一套语汇。
+  function label_of(element) {
+    const tag = element.tagName.toLowerCase();
+    if (element.id) return `${tag}#${element.id}`;
+    const name = typeof element.className === "string" ? element.className.trim().split(/\s+/).filter(Boolean)[0] : "";
+    return name ? `${tag}.${name}` : tag;
+  }
+
+  if (typeof target === "string") target = doc.querySelector(target);
+  if (!target || target.ownerDocument !== doc || !target.isConnected) return fail("未找到页面节点");
+  const target_rect = target.getBoundingClientRect();
+  if (target_rect.width <= 0 || target_rect.height <= 0) return fail("指定节点当前不可见，请选择可见节点或增加等待时间");
+  const uuid = String(opts.id_prefix || view.crypto.randomUUID());
+
+  // —— 1) 探针：一次读出「属性全集 + 每个属性的初始值」——
+  // all:initial 的内联 !important 高于任何作者样式表，所以这份初始值可信。
+  // 探针必须挂在文档上（游离节点读不到计算样式），读完立刻移除，冻结阶段读到的才是未被改动的页面。
+  const probe = doc.createElement("div");
+  probe.setAttribute("style", "all:initial!important");
+  doc.documentElement.appendChild(probe);
+  const NAMES = [];
+  const INITIAL = [];
+  let probe_style = null;
+  try {
+    probe_style = view.getComputedStyle(probe);
+    for (let index = 0; index < probe_style.length; index += 1) {
+      const name = probe_style.item(index);
+      // 自定义属性不冻结（used value 已经是结算后的结果），all 也不改它们。
+      if (!name || name.lastIndexOf("--", 0) === 0) continue;
+      NAMES.push(name);
+      INITIAL.push(probe_style.getPropertyValue(name));
+    }
+  } finally {
+    probe.remove();
+  }
+  if (!NAMES.length) return fail("无法读取初始样式（页面可能已卸载）");
+
+  // all 不改 direction，探针读到的是继承来的值（页面可能整体 RTL）—— 归到继承组并钉成真实初始值。
+  // unicode-bidi 同理不受 all 影响，但探针的值就是浏览器真初始值（"isolate"），不用改。
+  {
+    const index = NAMES.indexOf("direction");
+    if (index >= 0) INITIAL[index] = "ltr";
+    else { NAMES.push("direction"); INITIAL.push("ltr"); }
+  }
+
+  const INDEX = new Map();
+  for (let index = 0; index < NAMES.length; index += 1) INDEX.set(NAMES[index], index);
+
+  function at(values, name) {
+    const index = INDEX.get(name);
+    return index === undefined ? "" : values[index];
+  }
+
+  // 继承属性表。只列「确定继承」的：拿不准的一律不列（按非继承处理 → 多写，安全）。
+  const INHERITED = new Set([
+    "color", "direction", "unicode-bidi", "visibility", "pointer-events",
+    "font", "font-family", "font-size", "font-size-adjust", "font-style", "font-stretch", "font-weight",
+    "font-feature-settings", "font-variation-settings", "font-kerning", "font-optical-sizing", "font-palette",
+    "font-synthesis", "font-variant", "font-variant-alternates", "font-variant-caps", "font-variant-east-asian",
+    "font-variant-emoji", "font-variant-ligatures", "font-variant-numeric", "font-variant-position",
+    "letter-spacing", "line-height", "line-break", "hyphens", "word-break", "word-spacing", "overflow-wrap",
+    "tab-size", "text-align", "text-align-last", "text-indent", "text-justify", "text-transform", "text-shadow",
+    "text-orientation", "text-rendering", "text-combine-upright", "text-emphasis", "text-emphasis-color",
+    "text-emphasis-position", "text-emphasis-style", "text-underline-offset", "text-underline-position",
+    "text-decoration-skip-ink", "white-space", "writing-mode", "quotes", "orphans", "widows", "caret-color",
+    "list-style", "list-style-image", "list-style-position", "list-style-type",
+    "caption-side", "border-collapse", "border-spacing", "empty-cells",
+    "color-scheme", "accent-color", "forced-color-adjust", "print-color-adjust", "image-rendering",
+    "ruby-align", "ruby-position", "math-style", "math-depth",
+    "-webkit-font-smoothing", "-webkit-text-size-adjust", "-webkit-text-fill-color", "-webkit-text-stroke-color",
+    "-webkit-text-stroke-width",
+    // SVG 的继承属性（图标/图形都靠它们）
+    "fill", "fill-opacity", "fill-rule", "stroke", "stroke-opacity", "stroke-width", "stroke-dasharray",
+    "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "paint-order", "clip-rule",
+    "marker", "marker-start", "marker-mid", "marker-end", "shape-rendering", "text-anchor", "dominant-baseline",
+  ]);
+  const INHERITED_INDEX = new Set();
+  for (let index = 0; index < NAMES.length; index += 1) {
+    if (INHERITED.has(NAMES[index])) INHERITED_INDEX.add(index);
+  }
+
+  function read_all(style) {
+    const out = new Array(NAMES.length);
+    for (let index = 0; index < NAMES.length; index += 1) {
+      let value = "";
+      try { value = style.getPropertyValue(NAMES[index]) || ""; } catch (error) { value = ""; }
+      out[index] = value;
+    }
+    return out;
+  }
+
+  // 不写的属性：content 对普通元素无效（只走伪元素实体化）；transition/animation 一律清空；
+  // cursor 是交互暗示；其余是噪声。
+  function skip_property(name) {
+    if (name === "content" || name === "cursor" || name === "will-change" || name === "all" || name === "-webkit-locale") return true;
+    if (name.lastIndexOf("transition", 0) === 0 || name.lastIndexOf("animation", 0) === 0) return true;
+    if (name.lastIndexOf("-webkit-transition", 0) === 0 || name.lastIndexOf("-webkit-animation", 0) === 0) return true;
+    return false;
+  }
+
+  // 「门没开，属性就是惰性的」：写了也没有视觉效果，而它们的计算值往往已被解析成像素 / currentColor，
+  // 与初始值不同 → 会白白写进每个元素（边框色、轮廓色、背景位置、变换原点都是这一类）。
+  function is_inert(name, values) {
+    if (name.length > 6 && name.slice(-6) === "-color") {
+      if (name === "text-decoration-color") return at(values, "text-decoration-line") === "none";
+      const style_name = `${name.slice(0, -6)}-style`;
+      // -webkit-text-fill-color 之类没有同名 -style 的属性不受影响。
+      return INDEX.has(style_name) && at(values, style_name) === "none";
+    }
+    if (name.lastIndexOf("border-image-", 0) === 0) return at(values, "border-image-source") === "none";
+    if (name.lastIndexOf("transform-origin", 0) === 0) return at(values, "transform") === "none";
+    if (name.lastIndexOf("perspective-origin", 0) === 0) return at(values, "perspective") === "none";
+    if (name.lastIndexOf("background-position", 0) === 0 || name.lastIndexOf("background-repeat", 0) === 0) return at(values, "background-image") === "none";
+    if (name === "background-size" || name === "background-origin") return at(values, "background-image") === "none";
+    return false;
+  }
+
+  const GENERIC_FAMILIES = new Set(["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "emoji", "math", "fangsong"]);
+
+  // 字体不复制样式表也不会加载，自定义字体会落到后面的兜底族名上；末尾不是通用族名就补一个。
+  function with_fallback(value) {
+    const text = String(value).trim();
+    if (!text) return text;
+    const parts = text.split(",");
+    const last = parts[parts.length - 1].trim().replace(/^["']|["']$/g, "").toLowerCase();
+    return GENERIC_FAMILIES.has(last) ? text : `${text}, sans-serif`;
+  }
+
+  function url_re() { return /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi; }
+  function has_url(value) { return /url\(/i.test(value); }
+  function is_fetchable(url) { return /^(?:https?:)?\/\//i.test(url); }
+
+  // —— 2) 冻结：把 live 子树按「计算样式差分」写进新建的游离节点 ——
+  const declarations = [];   // 含 url() 的声明，等资源解析完再落地；解析失败就整条丢弃
+  const images = [];         // <img>：解析成功写回 src，失败退化为占位块
+  const urls = new Set();
+  let element_count = 0;
+  let image_missing = 0;
+
+  function set_declaration(node, name, value) {
+    if (!has_url(value)) {
+      try { node.style.setProperty(name, value, PRIORITY); } catch (error) { /* 浏览器拒绝的非法值直接忽略 */ }
+      return;
+    }
+    const found = [];
+    const pattern = url_re();
+    let match = pattern.exec(value);
+    while (match) {
+      if (is_fetchable(match[2])) { found.push(match[2]); urls.add(match[2]); }
+      match = pattern.exec(value);
+    }
+    declarations.push({ node, name, value, urls: found });
+  }
+
+  function force_declaration(node, name, value) {
+    try { node.style.setProperty(name, value, "important"); } catch (error) { /* 忽略 */ }
+  }
+
+  function apply_diff(node, values, parent_values, is_root) {
+    for (let index = 0; index < NAMES.length; index += 1) {
+      const name = NAMES[index];
+      if (skip_property(name) || is_inert(name, values)) continue;
+      // iframe 展示采集时的静态布局，保留根节点的结算宽高。
+      let value = values[index];
+      if (!value) continue;
+      // 非继承属性一律对着初始值比；继承属性对着父的计算值比（根节点的父 = all:initial 的包裹层）。
+      const reference = INHERITED_INDEX.has(index) ? (is_root ? INITIAL[index] : parent_values[index]) : INITIAL[index];
+      if (value === reference) continue;
+      if (name === "font-family") value = with_fallback(value);
+      set_declaration(node, name, value);
+    }
+    // fixed/sticky 在宿主里会以宿主视口为参照，必须降级掉。
+    const position = at(values, "position");
+    if (position === "fixed") force_declaration(node, "position", is_root ? "relative" : "absolute");
+    else if (position === "sticky" && is_root) force_declaration(node, "position", "relative");
+    if (is_root) {
+      force_declaration(node, "margin", "0");
+      for (const side of ["top", "right", "bottom", "left"]) force_declaration(node, side, "auto");
+    }
+    if (at(values, "background-attachment") === "fixed") force_declaration(node, "background-attachment", "scroll");
+    if (at(values, "transition-duration").split(",").some((part) => parseFloat(part) > 0)) force_declaration(node, "transition", "none");
+    // 只写 animation-name：写 animation 简写时 CSSOM 会把它展开成一长串默认值序列化回来。
+    const animation = at(values, "animation-name");
+    if (animation && animation !== "none") force_declaration(node, "animation-name", "none");
+  }
+
+  // 不进入产出物的标签：脚本 / 样式表 / 嵌入式内容 / 只引资源的元素。
+  const IGNORE_TAGS = new Set(["SCRIPT", "NOSCRIPT", "TEMPLATE", "LINK", "STYLE", "IFRAME", "FRAME", "FRAMESET", "OBJECT", "EMBED", "APPLET", "BASE", "META", "PARAM", "SOURCE", "TRACK", "VIDEO", "AUDIO", "PORTAL", "HEAD"]);
+  if (IGNORE_TAGS.has(target.tagName)) return fail("该节点不支持静态剪藏，请选择包含可见内容的容器");
+  // 不拷的属性：交互入口（href/tabindex/事件）、可能触发加载的（srcset/poster）、我们自己重建的（class/style）。
+  const DROP_ATTRS = new Set(["class", "style", "src", "srcset", "sizes", "target", "tabindex", "contenteditable", "draggable", "spellcheck", "autocapitalize", "autofocus", "ping", "rel", "download", "nonce", "integrity", "crossorigin", "referrerpolicy", "loading", "decoding", "poster", "media", "action", "method", "enctype", "formaction", "formmethod", "srcdoc"]);
+  const FORM_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT", "BUTTON", "OPTION", "OPTGROUP", "FIELDSET"]);
+  // 语境标签：单独成根会丢布局（td 离开 table 就没有表格布局、li 离开列表就丢标记）→ 补上祖先链。
+  const CONTEXT_CHAIN = {
+    TD: ["TABLE", "TBODY", "THEAD", "TFOOT", "TR"],
+    TH: ["TABLE", "TBODY", "THEAD", "TFOOT", "TR"],
+    TR: ["TABLE", "TBODY", "THEAD", "TFOOT"],
+    THEAD: ["TABLE"], TBODY: ["TABLE"], TFOOT: ["TABLE"], CAPTION: ["TABLE"], COLGROUP: ["TABLE"], COL: ["TABLE", "COLGROUP"],
+    LI: ["UL", "OL", "MENU"], DT: ["DL"], DD: ["DL"],
+    OPTION: ["SELECT", "OPTGROUP"], OPTGROUP: ["SELECT"],
+  };
+  const only_map = new Map();
+  const chain = [];
+  if (CONTEXT_CHAIN[target.tagName]) {
+    const family = CONTEXT_CHAIN[target.tagName];
+    let node = target.parentElement;
+    while (node && chain.length < 4 && family.indexOf(node.tagName) !== -1) {
+      chain.unshift(node);
+      node = node.parentElement;
+    }
+    for (let index = 0; index < chain.length; index += 1) {
+      only_map.set(chain[index], index + 1 < chain.length ? chain[index + 1] : target);
+    }
+  }
+
+  // 包裹层的样式最后统一写（见 harden）：这里先不碰，免得 CSSOM 把 all 展开。
+  const wrapper = doc.createElement("div");
+
+  function copy_attributes(node, live) {
+    const is_svg = live.namespaceURI === SVG_NS;
+    const attrs = live.attributes;
+    for (let index = 0; index < attrs.length; index += 1) {
+      const name = attrs[index].name;
+      const value = attrs[index].value;
+      // SVG 的 href/xlink:href 是 url(#id) 引用（use / textPath），留下并重写；HTML 的 href 是交互入口，丢掉。
+      if (name === "href" || name === "xlink:href") {
+        if (is_svg) { try { node.setAttribute(name, value); } catch (error) { /* 忽略 */ } }
+        continue;
+      }
+      if (DROP_ATTRS.has(name.toLowerCase()) || name.lastIndexOf("on", 0) === 0) continue;
+      if (name === "id") continue;   // id 单独前缀化，避免与宿主撞名
+      try { node.setAttribute(name, value); } catch (error) { /* 非法属性名忽略 */ }
+    }
+    if (live.id) node.setAttribute("id", live.id);
+  }
+
+  // 表单控件不像脚本那样能带内容，冻结成「禁用 + 当前值」的静态控件；文件/密码框不落值。
+  function extra_attributes(node, live) {
+    const tag = live.tagName.toUpperCase();
+    if (tag === "IMG") {
+      const source = live.currentSrc || live.src || "";
+      if (source && INLINE_IMAGES && is_fetchable(source) && images.length < MAX_IMAGES) {
+        images.push({ node, url: source });
+        urls.add(source);
+      } else if (source && /^data:/i.test(source)) {
+        node.setAttribute("src", source);
+      } else {
+        image_missing += 1;
+        placeholder_style(node, live.getAttribute("alt") || "");
+      }
+      return;
+    }
+    if (tag === "INPUT") {
+      const type = String(live.type || "text").toLowerCase();
+      if (type !== "file" && type !== "password") node.setAttribute("value", String(live.value ?? ""));
+      if (live.checked) node.setAttribute("checked", "");
+      node.setAttribute("disabled", "");
+      return;
+    }
+    if (tag === "TEXTAREA") {
+      node.textContent = String(live.value ?? "");
+      node.setAttribute("disabled", "");
+      return;
+    }
+    if (tag === "SELECT") {
+      const options = node.querySelectorAll("option");
+      const live_options = live.options || [];
+      for (let index = 0; index < options.length && index < live_options.length; index += 1) {
+        if (live_options[index].selected) options[index].setAttribute("selected", "");
+      }
+      node.setAttribute("disabled", "");
+      return;
+    }
+    if (FORM_TAGS.has(tag)) node.setAttribute("disabled", "");
+  }
+
+  function placeholder_style(node, alt) {
+    force_declaration(node, "background-image", PLACEHOLDER_IMAGE);
+    force_declaration(node, "background-color", "#f1f3f5");
+    if (alt) node.setAttribute("title", alt);
+  }
+
+  // canvas 的画布内容不是 DOM，只能转 data URL；被污染（跨域）时退化为占位块。
+  function build_canvas(live, parent_values) {
+    element_count += 1;
+    let data = "";
+    try { data = live.toDataURL(); } catch (error) { data = ""; }
+    const node = doc.createElement("img");
+    const values = read_all(view.getComputedStyle(live));
+    apply_diff(node, values, parent_values, false);
+    copy_attributes(node, live);
+    if (data && data !== "data:,") node.setAttribute("src", data);
+    else { image_missing += 1; placeholder_style(node, live.getAttribute("aria-label") || "canvas"); }
+    return node;
+  }
+
+  // 伪元素实体化成真实子元素，带自己的差分样式（基线 = 起源元素的计算值）。
+  function build_pseudo(live, pseudo, parent_values) {
+    let style = null;
+    try { style = view.getComputedStyle(live, pseudo); } catch (error) { return null; }
+    if (!style) return null;
+    const content = String(style.getPropertyValue("content") || "").trim();
+    if (!content || content === "none" || content === "normal") return null;
+    // 只接受「纯字符串」的 content：counter()/attr()/url() 都还原不了。
+    const strings = content.match(/"[^"]*"/g);
+    if (!strings || content.replace(/"[^"]*"/g, "").trim() !== "") return null;
+    const text = strings.map((part) => part.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\")).join("");
+    const node = doc.createElement("span");
+    apply_diff(node, read_all(style), parent_values, false);
+    node.textContent = text;
+    return node;
+  }
+
+  function append_children(node, live, values, depth, only) {
+    if (depth > MAX_DEPTH) throw new Error("选区嵌套过深，请缩小范围");
+    if (MATERIALIZE_PSEUDO) {
+      const before = build_pseudo(live, "::before", values);
+      if (before) node.appendChild(before);
+    }
+    const children = live.localName === "slot" && live.assignedNodes ? live.assignedNodes({ flatten: true }) : null;
+    const kids = only ? [only] : Array.from(children?.length ? children : (live.shadowRoot || live).childNodes);
+    for (const kid of kids) {
+      if (kid.nodeType === 3) { node.appendChild(doc.createTextNode(kid.nodeValue)); continue; }
+      if (kid.nodeType !== 1) continue;
+      const chained = only_map.get(kid);
+      if (!chained && (IGNORE_TAGS.has(kid.tagName) || kid.tagName === "HEAD")) continue;
+      if (kid.tagName === "CANVAS") { node.appendChild(build_canvas(kid, values)); continue; }
+      node.appendChild(build_node(kid, values, depth + 1, chained || null, false));
+    }
+    if (MATERIALIZE_PSEUDO) {
+      const after = build_pseudo(live, "::after", values);
+      if (after) node.appendChild(after);
+    }
+  }
+
+  function build_node(live, parent_values, depth, only, is_root) {
+    element_count += 1;
+    if (element_count > MAX_ELEMENTS) throw new Error(`选区元素过多（超过 ${MAX_ELEMENTS} 个），请缩小范围`);
+    const node = live.namespaceURI && live.namespaceURI !== XHTML_NS
+      ? doc.createElementNS(live.namespaceURI, live.tagName)
+      : doc.createElement(live.tagName.includes("-") ? "div" : live.localName === "slot" ? "span" : live.tagName.toLowerCase());
+    const values = read_all(view.getComputedStyle(live));
+    apply_diff(node, values, parent_values, is_root);
+    copy_attributes(node, live);
+    append_children(node, live, values, depth + 1, only);
+    extra_attributes(node, live);   // 必须在子节点之后：select 的 selected / textarea 的当前值要按已建好的子树对齐
+    return node;
+  }
+
+  let frozen = null;
+  // html / body 单独成根会被宿主文档解析器拆掉（<html> 不能出现在 div 里），
+  // 而且整页背景会被提升到 canvas 上：把它们的样式与子节点折叠进包裹层。
+  const collapse = target.tagName === "HTML" || target.tagName === "BODY";
+  try {
+    if (collapse) {
+      const scope = target.tagName === "HTML" ? (doc.body || target) : target;
+      // 整页背景常挂在 html 上（浏览器会把它提升到 canvas，body 自己是透明的）→ 先借过来，
+      // 再叠 body 自己的差分：同一属性后写者胜，所以 body 的背景不会被抢走。
+      const root_style = view.getComputedStyle(doc.documentElement);
+      if (root_style.backgroundColor !== "rgba(0, 0, 0, 0)") set_declaration(wrapper, "background-color", root_style.backgroundColor);
+      if (root_style.backgroundImage !== "none") set_declaration(wrapper, "background-image", root_style.backgroundImage);
+      const values = read_all(view.getComputedStyle(scope));
+      for (let index = 0; index < NAMES.length; index += 1) {
+        const name = NAMES[index];
+        // 页面级边距不属于片段；包裹层本身就是 all:initial + block。
+        // 宽高同理不冻结：折叠后包裹层就是片段的最外层，它得能跟着结果页的尺寸走。
+        if (skip_property(name) || name.lastIndexOf("margin", 0) === 0 || name === "width" || name === "height") continue;
+        const value = values[index];
+        if (!value || value === INITIAL[index]) continue;
+        set_declaration(wrapper, name, name === "font-family" ? with_fallback(value) : value);
+      }
+      const position = at(values, "position");
+      if (position === "fixed" || position === "sticky") force_declaration(wrapper, "position", "relative");
+      append_children(wrapper, scope, values, 1, null);
+      frozen = wrapper;
+    } else {
+      const root_live = chain.length ? chain[0] : target;
+      frozen = root_live.tagName === "CANVAS" ? build_canvas(root_live, INITIAL)
+        : build_node(root_live, INITIAL, 0, only_map.get(root_live) || null, true);
+      wrapper.appendChild(frozen);
+    }
+  } catch (error) {
+    return fail(error && error.message ? error.message : String(error));
+  }
+
+  // —— 3) id 前缀化：同一份片段可能被放进已有同名 id 的宿主里 ——
+  const ID_URL_ATTRS = new Set(["href", "xlink:href", "clip-path", "mask", "filter", "fill", "stroke", "marker-start", "marker-mid", "marker-end"]);
+  const ID_REF_ATTRS = new Set(["for", "headers", "list", "form", "aria-labelledby", "aria-describedby", "aria-controls", "aria-owns", "aria-activedescendant", "aria-flowto", "aria-details", "aria-errormessage"]);
+  const short_id = String(uuid || "").replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || String(Date.now());
+  const PREFIX = `dmc-${short_id}-`;
+  const id_map = new Map();
+  const id_nodes = [];
+  (function collect_ids(node) {
+    if (node.getAttribute && node.getAttribute("id")) {
+      id_map.set(node.getAttribute("id"), PREFIX + node.getAttribute("id"));
+      id_nodes.push(node);
+    }
+    const children = node.children || [];
+    for (let index = 0; index < children.length; index += 1) collect_ids(children[index]);
+  })(frozen);
+  if (id_map.size) {
+    const rewrite_url_value = (value) => value.replace(/#([^\s)'"]+)/g, (whole, name) => (id_map.has(name) ? `#${id_map.get(name)}` : whole));
+    const rewrite_style_value = (value) => value.replace(/url\(\s*(['"]?)#([^'")]+)\1\s*\)/gi, (whole, quote, name) => (id_map.has(name) ? `url(${quote}#${id_map.get(name)}${quote})` : whole));
+    const rewrite_ref_value = (value) => value.split(/\s+/).map((token) => (id_map.has(token) ? id_map.get(token) : token)).join(" ");
+    for (const node of id_nodes) node.setAttribute("id", id_map.get(node.getAttribute("id")));
+    (function rewrite(node) {
+      const attrs = node.attributes || [];
+      for (let index = 0; index < attrs.length; index += 1) {
+        const name = attrs[index].name.toLowerCase();
+        if (name === "id") continue;
+        if (name === "style") node.setAttribute("style", rewrite_style_value(attrs[index].value));
+        else if (ID_URL_ATTRS.has(name)) node.setAttribute(attrs[index].name, rewrite_url_value(attrs[index].value));
+        else if (ID_REF_ATTRS.has(name)) node.setAttribute(attrs[index].name, rewrite_ref_value(attrs[index].value));
+      }
+      const children = node.children || [];
+      for (let index = 0; index < children.length; index += 1) rewrite(children[index]);
+    })(frozen);
+  }
+
+  // —— 4) 资源内联：fetch → blob → FileReader 的 data URL；取不到就退占位 / 丢声明 ——
+  function to_data_url(url) {
+    return fetch(new URL(url, doc.baseURI).href, { signal: AbortSignal.timeout(8000) }).then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.blob();
+    }).then((blob) => {
+      if (blob.size > MAX_IMAGE_BYTES) throw new Error("资源过大");
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("读取资源失败"));
+        reader.readAsDataURL(blob);
+      });
+    });
+  }
+
+  const resolved = new Map();
+  if (urls.size) {
+    const list = Array.from(urls);
+    let total = 0;
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < list.length) {
+        const url = list[cursor];
+        cursor += 1;
+        try {
+          const data = await to_data_url(url);
+          if (total + data.length > MAX_TOTAL_BYTES) throw new Error("内联总体积超限");
+          total += data.length;
+          resolved.set(url, data);
+        } catch (error) {
+          resolved.set(url, null);
+        }
+      }
+    };
+    const runners = [];
+    for (let index = 0; index < Math.min(6, list.length); index += 1) runners.push(worker());
+    await Promise.all(runners);
+  }
+
+  for (const item of declarations) {
+    let ok = true;
+    const value = item.value.replace(url_re(), (whole, quote, url) => {
+      if (!is_fetchable(url)) return whole;
+      const data = resolved.get(url);
+      if (!data) { ok = false; return whole; }
+      return `url("${data}")`;
+    });
+    if (!ok) continue;   // 有取不到的 url → 整条声明丢弃（宁可少一条样式，也不留外链）
+    try { item.node.style.setProperty(item.name, value, PRIORITY); } catch (error) { /* 忽略 */ }
+  }
+  for (const item of images) {
+    const data = resolved.get(item.url);
+    if (data) item.node.setAttribute("src", data);
+    else { image_missing += 1; placeholder_style(item.node, item.node.getAttribute("alt") || ""); }
+  }
+
+  // —— 5) 逐元素在最前面塞 `all:unset`（根是 all:initial）——
+  // 宿主 `*{box-sizing:border-box}`、`img{max-width:100%}`、`*{...!important}` 这类规则
+  //（Tailwind preflight 就是）否则会命中我们「没写」的属性：差分的省写前提正是「没写 = 初始值」。
+  // 与差分基线同源：非继承属性回落到初始值，继承属性照常从冻结后的父节点继承
+  //（根节点上面是 all:initial 的包裹层，等于初始值）。
+  // 必须走「字符串写 style 属性」：用 CSSOM 的 setProperty 写 all、再写第二条声明时，
+  // Chrome 会把 all 展开成几百条 longhand 序列化回来（每个元素凭空多出 6KB）。
+  const RESET = IMPORTANT ? "all:unset!important;" : "all:unset;";
+  (function harden(node, is_root) {
+    const declarations = node.style.cssText;
+    node.setAttribute("style", is_root ? `all:initial!important;display:block!important;${declarations}` : `${RESET}${declarations}`);
+    const children = node.children || [];
+    for (let index = 0; index < children.length; index += 1) harden(children[index], false);
+  })(wrapper, true);
+
+  const html = wrapper.outerHTML;
+  if (new TextEncoder().encode(html).length > 8 * 1024 * 1024) return fail("片段超过 8MB，请缩小选区");
+  const rect = target.getBoundingClientRect();
+  return {
+    ok: true,
+    html,
+    stats: {
+      node: label_of(target),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      elements: element_count,
+      images: images.length,
+      image_missing,
+      bytes: new TextEncoder().encode(html).length,
+    },
+  };
+}
+
+
+globalThis.FindRSSRegionClip = Object.freeze({ capture: extract_clip });
+})();

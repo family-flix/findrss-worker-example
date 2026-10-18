@@ -15,6 +15,7 @@
       "/discovery/*",
       "/public",
       "/public/*",
+      "/clips/*",
       "/health",
       "/mcp",
       "/oauth/*",

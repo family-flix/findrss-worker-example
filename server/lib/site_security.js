@@ -1,5 +1,5 @@
 export const SITE_CSP = Object.freeze({
-  "admin": "default-src 'none'; connect-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data: https: http:; media-src 'self' blob: https: http:; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+  "admin": "default-src 'none'; connect-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data: https: http:; media-src 'self' blob: https: http:; frame-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   "discovery": "default-src 'none'; img-src 'self' https: data:; style-src 'self'; script-src 'self'; connect-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 });
 

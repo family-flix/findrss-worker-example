@@ -199,6 +199,8 @@ R2 桶只需创建一次，已有同名桶可跳过。`secret put` 命令会提�
 | 配置 | 要求 | 用途 |
 | --- | --- | --- |
 | `ADMIN_PASSWORD` | 必需 secret | 后台登录与管理 API 认证 |
+| `CF_BROWSER_ACCOUNT_ID` | 剪藏可选变量 | Cloudflare 账号 ID，用于 Browser Rendering REST API |
+| `CF_BROWSER_API_TOKEN` | 剪藏可选 secret | 仅授予该账号 Browser Rendering / Browser Run Edit 权限的 API Token |
 | `DEVICE_TOKEN` | 可选旧配置 | 自动导入后台 Device Token 列表，保留原设备接入能力 |
 | `READER_SESSION_SECRET` | 可选 secret | 中央账号会话签名；未配置时依次回退旧 `DEVICE_TOKEN`、`ADMIN_PASSWORD` |
 | `FINDRSS_HOSTNAME` | 可选变量 | 展开 `{{hostname}}`；留空按请求 origin 展开，可指定公开域名 |

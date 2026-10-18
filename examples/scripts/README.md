@@ -1,5 +1,19 @@
 # 脚本示例
 
+## 区域剪藏
+
+[region_clip.js](region_clip.js) 是在已渲染网页中执行的 DOM 采集脚本，与下方的 QuickJS RSS 示例运行环境不同。后台「剪藏」通过 Cloudflare Browser Rendering 自动执行它，无需手动安装或发布为 RSS 路由。
+
+在「剪藏」创建记录，填写来源网址、CSS 选择器、采集视口和刷新规则。选择器取第一个匹配节点，连同子树、计算样式、可读取的图片与背景图一起冻结；`::before` / `::after` 的字符串内容会还原，Canvas 尽量转图片。返回 `{ ok, html, stats }`，由宿主清理并保存快照，公开链接为 `/clips/<记录 ID>`。
+
+配置 `CF_BROWSER_ACCOUNT_ID` 与 secret `CF_BROWSER_API_TOKEN` 后，记录按后台默认抓取策略或单条规则定时更新；也可立即采集、暂停定时。刷新失败保留旧快照，编辑后迟到的结果不会覆盖新规则。嵌入代码从后台「预览与嵌入」复制，iframe 只读取最近一次成功快照，不触发浏览器采集，也不执行 JavaScript。
+
+产出仅保留静态 HTML 与内联 CSS，图片使用 data URL；外部脚本、样式表、内联事件、音视频、iframe 与交互入口被移除。无法读取的图片占位，自定义字体退回系统字体，部分伪元素和封闭 Shadow DOM 无法完整还原。每条最多 6000 个元素、60 张图片和 8MB HTML；最多保存 100 条记录。iframe 无 JavaScript，不会自动调整高度，可按需要修改嵌入代码的 `height`。
+
+非浏览器检查：`node --test test/clips.test.js admin/__tests__/clips.test.mjs`。测试模拟 Browser Rendering 回包，不实际启动或调用浏览器；真实站点的选择器和样式由用户手动验证。
+
+## RSS 与热榜
+
 本目录的 RSS 脚本使用全局 `RSSScript` 和 `import { utils } from '@findrss/util'`，接口请求、JSON 解析和校验返回 `Result`。
 
 每个脚本通过 `export const platform = { name, icon }` 声明来源，`icon` 已直接内嵌对应的 SVG 源码；多路由共用此对象，也可用 `route.platform` 覆盖。正式版本发布成功后才收集来源到数据库，供订阅广场与后台来源筛选 Select 使用，保存草稿和 Debug 不注册来源。
