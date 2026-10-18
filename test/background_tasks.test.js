@@ -20,6 +20,19 @@ function fixture(t) {
 }
 const descriptor = { kind: "snapshot", title: "刷新快照：测试", target: "https://example.com/feed" };
 
+test("后台任务开始、终止、结束与清理通知实时订阅，结束通知发生在释放运行状态之后", async t => {
+  const f = fixture(t), events = [];
+  f.tasks.notify = task => events.push({ task, active: task ? f.tasks.is_source_running(task.source_id) : false });
+  const work = f.tasks.start("notify", { ...descriptor, source_id: "source" }, signal =>
+    new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })));
+  await new Promise(setImmediate);
+  assert.equal(events.length, 1); assert.equal(events[0].active, true);
+  f.tasks.cancel(work.task.id); assert.equal(events.length, 2);
+  await assert.rejects(work.promise);
+  assert.equal(events.length, 3); assert.equal(events[2].active, false);
+  f.tasks.cleanup(); assert.equal(events.length, 4); assert.equal(events[3].task, null);
+});
+
 test("后台任务合并并发，记录成功与失败，已完成任务重复终止不改变结果", async t => {
   const f = fixture(t);
   let resolve;

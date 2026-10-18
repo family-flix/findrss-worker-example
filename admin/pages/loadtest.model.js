@@ -1,4 +1,4 @@
-export function LoadTestModel({ on_change, create_socket = url => new WebSocket(url), location = window.location,
+export function LoadTestModel({ on_change, create_socket = url => window.FindRSSAdminRealtime?.socket(url) || new WebSocket(url), location = window.location,
   clock = Date.now, save = (value) => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a');
@@ -6,7 +6,7 @@ export function LoadTestModel({ on_change, create_socket = url => new WebSocket(
   } }) {
   const state = { connection: '未连接', sources: [], rows: [], summary: {}, scope: 'all', concurrency: '338',
     timeout: '180', cold: true, run_state: 'idle', selected: '', filter: 'all', error: '', run_id: '', now: clock(), events: [] };
-  let socket, timer, reconnect, ticks = 0, disposed = false;
+  let socket, timer, reconnect, stop_realtime, disposed = false;
   const notify = () => {
     state.now = clock();
     state.elapsed_ms = Number(state.summary.elapsed_ms || 0) +
@@ -67,18 +67,18 @@ export function LoadTestModel({ on_change, create_socket = url => new WebSocket(
           notify();
         } catch { state.error = 'WS 消息解析失败'; notify(); }
       };
-      socket.onclose = () => {
+      socket.onclose = event => {
         state.connection = '已断开'; log('WS 已断开，尝试重新连接'); notify();
-        if (!disposed) reconnect = setTimeout(methods.connect, 2000);
+        if (!disposed && event?.code !== 1008) reconnect = setTimeout(methods.connect, 2000);
       };
       socket.onerror = () => { state.error = 'WS 连接失败，请检查登录状态和服务是否在线'; notify(); };
-      if (!timer) timer = setInterval(() => {
-        notify();
-        // Keep device state live after HTTP waiters finish; their tasks may still run.
-        if (++ticks % 4 === 0 && socket?.readyState === 1 && state.run_state !== 'running') {
+      if (!timer) timer = setInterval(notify, 250);
+      stop_realtime?.();
+      stop_realtime = window.FindRSSAdminRealtime?.subscribe(['devices.changed', 'tasks.changed'], event => {
+        if ((event.type === 'devices.changed' || event.type === 'tasks.changed') && socket?.readyState === 1 && state.run_state !== 'running') {
           socket.send(JSON.stringify({ type: 'metrics' }));
         }
-      }, 250);
+      });
     },
     set(key, value) {
       if (['scope', 'concurrency', 'timeout', 'cold', 'filter', 'selected'].includes(key)) state[key] = value;
@@ -96,7 +96,7 @@ export function LoadTestModel({ on_change, create_socket = url => new WebSocket(
     },
     stop() { if (socket?.readyState === 1) socket.send(JSON.stringify({ type: 'stop' })); },
     export() { if (state.run_id) save({ run_id: state.run_id, rows: state.rows, summary: state.summary }); },
-    dispose() { disposed = true; clearInterval(timer); clearTimeout(reconnect); socket?.close(); },
+    dispose() { disposed = true; clearInterval(timer); clearTimeout(reconnect); stop_realtime?.(); socket?.close(); },
   };
   return { state, methods };
 }

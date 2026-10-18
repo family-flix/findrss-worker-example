@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { TasksModel } from "../pages/tasks.model.js";
+import { realtime_fixture } from "./realtime_fixture.mjs";
 
 const ui = {
   ref: value => ({ value, as(next) { this.value = next; } }),
@@ -9,6 +10,21 @@ const ui = {
   } }),
 };
 const task = { id: "one", title: "刷新快照", status: "running", started_at: Date.now() - 2000, finished_at: 0 };
+
+test("后台任务通过共享推送更新，首次连接不重复读取，断线恢复补同步，隐藏后停止读取", async () => {
+  const realtime = realtime_fixture(); let calls = 0, status = "running";
+  const model = TasksModel({ ui, realtime, fetch_impl: async () => {
+    calls++; return Response.json({ tasks: [{ ...task, status }] });
+  } });
+  model.methods.start(); await new Promise(setImmediate);
+  await realtime.emit({ type: "realtime.connected", reconnected: false }); assert.equal(calls, 1);
+  status = "completed";
+  await realtime.emit({ type: "background-tasks.changed" });
+  assert.equal(calls, 2); assert.equal(model.state.tasks.value[0].status, "completed");
+  await realtime.emit({ type: "realtime.connected", reconnected: true }); assert.equal(calls, 3);
+  model.methods.stop(); assert.equal(realtime.listeners.size, 0);
+  await realtime.emit({ type: "background-tasks.changed" }); assert.equal(calls, 3);
+});
 
 test("任务状态、耗时和取消操作由 Model 维护，取消重复点击只提交一次", async () => {
   let resolve, calls = 0;

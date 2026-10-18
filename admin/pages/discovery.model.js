@@ -149,7 +149,8 @@ function DiscoveryAdminViewModel() {
   const local_refreshing = new Set();
   let background_refreshing = new Set();
   let task_generation = 0;
-  let task_timer = null;
+  let stop_realtime = null;
+  let active = true, sync_pending = false, sync_sources = false, syncing = null;
   let task_error = "";
   let disposed = false;
   const snapshot_errors_ = ref(new Map());
@@ -271,21 +272,18 @@ function DiscoveryAdminViewModel() {
 
   function invalidate_tasks() {
     task_generation++;
-    if (task_timer !== null) window.clearTimeout(task_timer);
-    task_timer = null;
   }
 
   async function load_background_tasks({ reload_completed = false } = {}) {
     invalidate_tasks();
     const generation = task_generation;
     const source_ids = sources_.value.map(source => source.id);
-    if (disposed) return;
+    if (disposed || !active) return;
     if (!source_ids.length) {
       background_refreshing.clear();
       sync_refreshing();
       return;
     }
-    let retry = false;
     try {
       const payload = await request_json("/admin/api/background-tasks?source_ids=" + encodeURIComponent(source_ids.join(",")));
       if (disposed || generation !== task_generation) return;
@@ -306,15 +304,23 @@ function DiscoveryAdminViewModel() {
       if (disposed || generation !== task_generation) return;
       task_error = "后台任务加载失败：" + (error.message || String(error));
       list_error_.set(task_error);
-      retry = true;
-    } finally {
-      if (!disposed && generation === task_generation && (retry || background_refreshing.size)) {
-        task_timer = window.setTimeout(() => {
-          task_timer = null;
-          void load_background_tasks({ reload_completed: true });
-        }, 2000);
-      }
     }
+  }
+
+  function receive_change(event) {
+    if (disposed || !active || event.type === "realtime.disconnected" || (event.type === "realtime.connected" && !event.reconnected)) return;
+    if (event.ids?.length && sources_.value.length && !sources_.value.some(source => event.ids.includes(source.id))) return;
+    sync_sources ||= event.type === "discovery.changed" || event.type === "realtime.connected";
+    sync_pending = true;
+    if (syncing) return;
+    syncing = Promise.resolve().then(async () => {
+      while (sync_pending && active && !disposed) {
+        sync_pending = false;
+        const reload = sync_sources; sync_sources = false;
+        if (reload) await pagination.load(pagination.page.value, { background: true });
+        else await load_background_tasks({ reload_completed: true });
+      }
+    }).finally(() => { syncing = null; });
   }
 
   async function load_scripts() {
@@ -909,11 +915,18 @@ function DiscoveryAdminViewModel() {
       }
     },
     start() {
+      active = true;
+      if (!stop_realtime) stop_realtime = window.FindRSSAdminRealtime?.subscribe(["discovery.changed", "background-tasks.changed"], receive_change);
       return load();
+    },
+    stop() {
+      active = false; sync_pending = false; sync_sources = false;
+      stop_realtime?.(); stop_realtime = null;
+      invalidate_tasks();
     },
     destroy() {
       disposed = true;
-      invalidate_tasks();
+      methods.stop();
       pagination.destroy();
     },
     set_filter(name, value) {

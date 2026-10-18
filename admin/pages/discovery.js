@@ -935,14 +935,16 @@ function SourceImportView({ store: vm$ }) {
   ]);
 }
 
-function DiscoveryApplicationView(embedded = false) {
+function DiscoveryApplicationView(embedded = false, route_view) {
   const vm$ = DiscoveryAdminViewModel();
-  let detach_agent;
+  let detach_agent, stop_show, stop_hide;
   const content = View(
     {
       class: "box-border min-w-0",
       attributes: { n: "discovery-admin-content" },
       onMounted() {
+        stop_show = route_view?.onShow?.(vm$.methods.start);
+        stop_hide = route_view?.onBeforeHide(vm$.methods.stop);
         vm$.methods.start();
         detach_agent = window.FindRSSAdminAgent?.register_page("/admin/discovery", {
           read_context: () => ({ filters: { query: vm$.state.query.value, source_type: vm$.state.filter_platform.value, status: vm$.state.filter_status.value, visibility: vm$.state.filter_visibility.value },
@@ -954,7 +956,7 @@ function DiscoveryApplicationView(embedded = false) {
           },
         });
       },
-      onUnmounted() { detach_agent?.(); vm$.methods.destroy(); },
+      onUnmounted() { stop_show?.(); stop_hide?.(); detach_agent?.(); vm$.methods.destroy(); },
     },
     [SourceListView({ store: vm$ }), Show({ when: vm$.state.form_open,
       ok() { return SourceFormView({ store: vm$ }); },
@@ -978,6 +980,6 @@ function DiscoveryApplicationView(embedded = false) {
     : window.FindRSSAdminShell.View(page_options, [content]);
 }
 
-function DiscoveryPage() { return DiscoveryApplicationView(true); }
+function DiscoveryPage({ view } = {}) { return DiscoveryApplicationView(true, view); }
 
 export { DiscoveryPage, SourceFormView };

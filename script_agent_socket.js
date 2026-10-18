@@ -14,12 +14,23 @@ export function script_agent_socket(
   }
   const [client, server] = Object.values(new WebSocketPair());
   server.accept();
+  const session = create_script_agent_session(service, value => server.send(JSON.stringify(value)), { request_model, run });
+  server.addEventListener("close", session.close);
+  server.addEventListener("error", session.close);
+  server.addEventListener("message", event => session.receive(event.data));
+  return new Response(null, { status: 101, webSocket: client });
+}
+
+export function create_script_agent_session(service, emit, {
+  request_model = ScriptAgentRunRequestModel,
+  run = (input, send, signal) => service.run(input, send, signal),
+} = {}) {
   let active = null,
     closed = false;
   const send = (value) => {
     if (!closed) {
       try {
-        server.send(JSON.stringify(value));
+        emit(value);
       } catch {
         close();
       }
@@ -29,19 +40,18 @@ export function script_agent_socket(
     closed = true;
     active?.controller.abort(new Error("对话连接已关闭"));
   };
-  server.addEventListener("close", close);
-  server.addEventListener("error", close);
-  server.addEventListener("message", (event) => {
+  const receive = data => {
+    if (closed) return;
     let run_id = "";
     try {
       if (
-        typeof event.data !== "string" ||
-        new TextEncoder().encode(event.data).length >
+        typeof data !== "string" ||
+        new TextEncoder().encode(data).length >
           request_model.MAX_MESSAGE_BYTES
       ) {
         throw new Error("对话请求过大或格式无效");
       }
-      const command = JSON.parse(event.data);
+      const command = JSON.parse(data);
       run_id = String(command.run_id || "");
       if (command.type === "cancel") {
         if (active?.run_id === run_id) {
@@ -96,7 +106,7 @@ export function script_agent_socket(
     } catch (error) {
       send({ type: "error", run_id, error: error.message || "对话请求失败" });
     }
-  });
+  };
   send({ type: "ready", settings: service.settings() });
-  return new Response(null, { status: 101, webSocket: client });
+  return { receive, close };
 }

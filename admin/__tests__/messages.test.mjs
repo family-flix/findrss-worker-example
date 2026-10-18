@@ -1,3 +1,4 @@
+import { create_admin_realtime } from "../realtime.js";
 import { page_source } from "./page_source.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -15,8 +16,9 @@ test("消息模型接收实时通知、标记已读、删除已读并在断线�
     localStorage: { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) },
     setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
     WebSocket: class {
-      constructor(url) { this.url = url; sockets.push(this); }
-      close() { this.onclose?.(); }
+      constructor(url) { this.url = new URL(url); this.readyState = 0; sockets.push(this); }
+      close() { this.readyState = 3; this.onclose?.(); }
+      send() {}
     },
     FindRSSAdminAuth: { async fetch(url, options) {
       if (options?.method === "DELETE") {
@@ -40,6 +42,7 @@ test("消息模型接收实时通知、标记已读、删除已读并在断线�
     },
   };
   window.FindRSSAdminUI = window.Timeless;
+  window.FindRSSAdminRealtime = create_admin_realtime({ location: () => window.location.href, create_socket: url => new window.WebSocket(url), timers: window, random: () => 0 });
   const context = { window, URL, URLSearchParams,
     ScriptViewModel: () => ({ state: { saving: ref(false), form_open: ref(false) }, methods: { destroy() {} } }),
     ScriptEditorView: () => element({ attributes: { n: "script-editor" } }),
@@ -49,6 +52,8 @@ test("消息模型接收实时通知、标记已读、删除已读并在断线�
   model.methods.start();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(sockets[0].url.protocol, "ws:");
+  assert.equal(sockets[0].url.pathname, "/admin/api/events/ws");
+  sockets[0].readyState = 1; sockets[0].onopen();
   assert.equal(model.state.badge.value, "1");
   assert.equal(model.state.rows.value[0].time, "2026-01-02 03:04");
   assert.match(model.state.rows.value[0].location, /第 3 行/);
@@ -64,7 +69,7 @@ test("消息模型接收实时通知、标记已读、删除已读并在断线�
   assert.equal(model.state.has_more.value, true);
   assert.equal(stored.get("findrss_admin_messages_read"), "1");
   messages = [{ ...messages[0], id: 2 }, messages[0]];
-  sockets[0].onmessage({ data: JSON.stringify({ type: "messages.changed" }) });
+  sockets[0].onmessage({ data: JSON.stringify({ type: "admin.changed", events: [{ type: "messages.changed", ids: [] }] }) });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(model.state.rows.value[0].id, 2);
   assert.equal(model.state.badge.value, "1");
@@ -110,7 +115,7 @@ test("消息模型接收实时通知、标记已读、删除已读并在断线�
   assert.equal(model.state.badge.value, "1");
   assert.equal(model.state.deleting.value, false);
   sockets[0].onclose();
-  timers[0]();
+  timers.at(-1)();
   assert.equal(sockets.length, 2);
   request_error = true;
   await model.methods.load();

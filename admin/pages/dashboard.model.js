@@ -97,11 +97,14 @@ function DashboardViewModel(page_id = "overview") {
   const device_actions_ = refobj({});
   const device_sources = new Map();
   const access_token_sources = new Map();
-  const test_poll_timers = new Map();
-  const download_poll_timers = new Map();
+  const task_refreshes = new Map();
+  const task_read_versions = new Map();
   let refresh_promise = null;
-  let refresh_timer = null;
-  let device_log_refresh_timer = null;
+  let stop_realtime = null;
+  let stop_log_realtime = null;
+  let refresh_pending = false;
+  let device_log_pending = false;
+  let lifecycle_generation = 0;
   let started = false;
 
   function normalize_access_token(access_token) {
@@ -232,26 +235,26 @@ function DashboardViewModel(page_id = "overview") {
   }
 
   function stop_device_log_refresh() {
-    if (device_log_refresh_timer !== null) {
-      clearInterval(device_log_refresh_timer);
-      device_log_refresh_timer = null;
-    }
+    stop_log_realtime?.(); stop_log_realtime = null;
+    device_log_pending = false;
   }
 
   function start_device_log_refresh() {
     stop_device_log_refresh();
-    device_log_refresh_timer = setInterval(
-      () => refresh_device_logs(true),
-      5000,
-    );
+    stop_log_realtime = window.FindRSSAdminRealtime?.subscribe("device.logs", event => {
+      if ((event.type === "realtime.connected" && event.reconnected)
+        || (event.type === "device.logs" && (!event.ids?.length || event.ids.includes(device_log_state_.value.device_id)))) {
+        void refresh_device_logs(true);
+      }
+    });
   }
 
   async function refresh_device_logs(merge = false) {
     const current_state = device_log_state_.value;
     const device_id = current_state.device_id;
     const category = current_state.category;
-    if (device_id === "" || current_state.loading || current_state.loading_more)
-      return;
+    if (device_id === "") return;
+    if (current_state.loading || current_state.loading_more) { device_log_pending = true; return; }
     set_device_log_state({ loading: true, error: "" });
     const query = new URLSearchParams({ limit: "100" });
     if (category !== "") query.set("category", category);
@@ -312,6 +315,11 @@ function DashboardViewModel(page_id = "overview") {
           loading: false,
           error: error instanceof Error ? error.message : String(error),
         });
+      }
+    } finally {
+      if (device_log_pending && stop_log_realtime) {
+        device_log_pending = false;
+        void refresh_device_logs(true);
       }
     }
   }
@@ -384,6 +392,11 @@ function DashboardViewModel(page_id = "overview") {
           loading_more: false,
           error: error instanceof Error ? error.message : String(error),
         });
+      }
+    } finally {
+      if (device_log_pending && stop_log_realtime) {
+        device_log_pending = false;
+        void refresh_device_logs(true);
       }
     }
   }
@@ -1063,8 +1076,6 @@ function DashboardViewModel(page_id = "overview") {
       });
       return;
     }
-    const old_timer = test_poll_timers.get(device_id);
-    if (old_timer !== undefined) clearTimeout(old_timer);
     set_device_test(device_id, {
       submitting: true,
       task: null,
@@ -1095,7 +1106,7 @@ function DashboardViewModel(page_id = "overview") {
         task: value.task,
         error: "",
       });
-      schedule_test_poll(device_id, value.task.id);
+      void refresh_test(device_id, value.task.id);
     } catch (error) {
       set_device_test(device_id, {
         submitting: false,
@@ -1105,20 +1116,14 @@ function DashboardViewModel(page_id = "overview") {
     }
   }
 
-  function schedule_test_poll(device_id, task_id) {
-    const current = tests_.value[device_id];
-    if (!current || !current.task || current.task.id !== task_id) return;
-    if (current.task.status === "completed" || current.task.status === "failed")
-      return;
-    const old_timer = test_poll_timers.get(device_id);
-    if (old_timer !== undefined) clearTimeout(old_timer);
-    const timer = setTimeout(() => refresh_test(device_id, task_id), 1500);
-    test_poll_timers.set(device_id, timer);
-  }
-
   async function refresh_test(device_id, task_id) {
     const current = tests_.value[device_id];
     if (!current || !current.task || current.task.id !== task_id) return;
+    if (["completed", "failed"].includes(current.task.status)) return;
+    const generation = lifecycle_generation;
+    const read_key = "test:" + device_id;
+    const version = (task_read_versions.get(read_key) || 0) + 1;
+    task_read_versions.set(read_key, version);
     try {
       const response = await fetch(
         "/admin/api/tasks/" + encodeURIComponent(task_id),
@@ -1131,17 +1136,18 @@ function DashboardViewModel(page_id = "overview") {
         );
       if (!value.task || value.task.id !== task_id)
         throw new Error("测试调用查询返回格式不正确");
+      if (generation !== lifecycle_generation || task_read_versions.get(read_key) !== version || tests_.value[device_id]?.task?.id !== task_id) return;
       set_device_test(device_id, {
         submitting: false,
         task: value.task,
         error: "",
       });
     } catch (error) {
+      if (generation !== lifecycle_generation || task_read_versions.get(read_key) !== version || tests_.value[device_id]?.task?.id !== task_id) return;
       set_device_test(device_id, {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    schedule_test_poll(device_id, task_id);
   }
 
   function set_download_test(device_id, next_download) {
@@ -1176,8 +1182,6 @@ function DashboardViewModel(page_id = "overview") {
       });
       return;
     }
-    const old_timer = download_poll_timers.get(device_id);
-    if (old_timer !== undefined) clearTimeout(old_timer);
     set_download_test(device_id, { submitting: true, task: null, error: "" });
     try {
       const response = await fetch("/admin/api/call", {
@@ -1213,7 +1217,7 @@ function DashboardViewModel(page_id = "overview") {
         task: value.task,
         error: "",
       });
-      schedule_download_poll(device_id, value.task.id);
+      void refresh_download_test(device_id, value.task.id);
     } catch (error) {
       set_download_test(device_id, {
         submitting: false,
@@ -1223,28 +1227,15 @@ function DashboardViewModel(page_id = "overview") {
     }
   }
 
-  function schedule_download_poll(device_id, task_id) {
-    const current = tests_.value[device_id];
-    const download = current && current.download;
-    if (!download || !download.task || download.task.id !== task_id) return;
-    if (
-      download.task.status === "completed" ||
-      download.task.status === "failed"
-    )
-      return;
-    const old_timer = download_poll_timers.get(device_id);
-    if (old_timer !== undefined) clearTimeout(old_timer);
-    const timer = setTimeout(
-      () => refresh_download_test(device_id, task_id),
-      1500,
-    );
-    download_poll_timers.set(device_id, timer);
-  }
-
   async function refresh_download_test(device_id, task_id) {
     const current = tests_.value[device_id];
     const download = current && current.download;
     if (!download || !download.task || download.task.id !== task_id) return;
+    if (["completed", "failed"].includes(download.task.status)) return;
+    const generation = lifecycle_generation;
+    const read_key = "download:" + device_id;
+    const version = (task_read_versions.get(read_key) || 0) + 1;
+    task_read_versions.set(read_key, version);
     try {
       const response = await fetch(
         "/admin/api/tasks/" + encodeURIComponent(task_id),
@@ -1257,23 +1248,25 @@ function DashboardViewModel(page_id = "overview") {
         );
       if (!value.task || value.task.id !== task_id)
         throw new Error("下载任务查询返回格式不正确");
+      if (generation !== lifecycle_generation || task_read_versions.get(read_key) !== version || tests_.value[device_id]?.download?.task?.id !== task_id) return;
       set_download_test(device_id, {
         submitting: false,
         task: value.task,
         error: "",
       });
     } catch (error) {
+      if (generation !== lifecycle_generation || task_read_versions.get(read_key) !== version || tests_.value[device_id]?.download?.task?.id !== task_id) return;
       set_download_test(device_id, {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    schedule_download_poll(device_id, task_id);
   }
 
   async function refresh(show_loading = true) {
     if (is_token_page) return token_pagination.load();
-    if (refresh_promise !== null) return refresh_promise;
+    if (refresh_promise !== null) { refresh_pending = true; return refresh_promise; }
     if (show_loading) loading_.as(true);
+    const generation = lifecycle_generation;
     error_.as("");
     refresh_promise = fetch(is_overview ? "/admin/api/overview" : "/admin/api/management-overview", {
       credentials: "same-origin",
@@ -1281,6 +1274,7 @@ function DashboardViewModel(page_id = "overview") {
     })
       .then(async (response) => {
         const overview = await response.json();
+        if (generation !== lifecycle_generation) return;
         if (!response.ok) throw new Error(overview?.error || "加载失败：HTTP " + response.status);
         if (!overview || (is_overview ? !overview.statistics : !Array.isArray(overview.devices)))
           throw new Error("管理接口返回格式不正确");
@@ -1317,6 +1311,7 @@ function DashboardViewModel(page_id = "overview") {
       .finally(() => {
         if (show_loading) loading_.as(false);
         refresh_promise = null;
+        if (refresh_pending && started) { refresh_pending = false; void refresh(false); }
       });
     return refresh_promise;
   }
@@ -1325,19 +1320,50 @@ function DashboardViewModel(page_id = "overview") {
     if (started) return;
     started = true;
     refresh();
-    if (!is_overview) refresh_timer = setInterval(() => refresh(false), 5000);
+    stop_realtime = window.FindRSSAdminRealtime?.subscribe(
+      is_overview ? ["overview.changed"] : is_token_page ? ["tokens.changed"] : ["devices.changed", "tasks.changed"],
+      event => {
+        if (!started || event.type === "realtime.disconnected" || (event.type === "realtime.connected" && !event.reconnected)) return;
+        if (event.type !== "tasks.changed") void refresh(false);
+        if (event.type === "tasks.changed" || event.type === "realtime.connected") {
+          for (const [device_id, test] of Object.entries(tests_.value)) {
+            for (const [kind, task] of [["test", test.task], ["download", test.download?.task]]) {
+              if (!task || ["completed", "failed"].includes(task.status) || (event.ids?.length && !event.ids.includes(task.id))) continue;
+              const key = kind + ":" + device_id;
+              if (task_refreshes.has(key)) { task_refreshes.get(key).pending = true; continue; }
+              const state = { pending: false }; task_refreshes.set(key, state);
+              const run = async () => {
+                do {
+                  state.pending = false;
+                  await (kind === "test" ? refresh_test(device_id, task.id) : refresh_download_test(device_id, task.id));
+                } while (state.pending && started);
+                task_refreshes.delete(key);
+              };
+              void run();
+            }
+          }
+        }
+      });
+  }
+
+  function pause() {
+    lifecycle_generation++;
+    started = false;
+    device_log_drawer$.hide();
+    stop_realtime?.(); stop_realtime = null;
+    stop_device_log_refresh();
+    close_access_token_logs();
   }
 
   function dispose() {
+    lifecycle_generation++;
     close_access_token_logs();
     token_pagination?.destroy();
     started = false;
-    if (refresh_timer !== null) clearInterval(refresh_timer);
-    refresh_timer = null;
-    for (const timer of test_poll_timers.values()) clearTimeout(timer);
-    for (const timer of download_poll_timers.values()) clearTimeout(timer);
-    test_poll_timers.clear();
-    download_poll_timers.clear();
+    stop_realtime?.(); stop_realtime = null;
+    refresh_pending = false;
+    task_refreshes.clear();
+    task_read_versions.clear();
     stop_device_log_refresh();
     if (typeof device_log_drawer_unlisten === "function") {
       device_log_drawer_unlisten();
@@ -1390,6 +1416,7 @@ function DashboardViewModel(page_id = "overview") {
   const methods = {
     ready,
     dispose,
+    pause,
     refresh,
     confirm: request_confirm,
     acceptConfirm() {

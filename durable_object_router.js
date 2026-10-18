@@ -103,6 +103,7 @@ async function mcp_oauth_body(request, json) {
  */
 async function dispatch(request, app) {
   const url = new URL(request.url);
+  if (url.pathname === "/_admin/events/ws" && request.method === "GET") return app.events.connect(request);
   if (url.pathname === "/_admin/clips") {
     if (request.method === "GET") return app.clips.list();
     if (request.method === "POST") return app.clips.create(await read_clip_json(request, 16384));

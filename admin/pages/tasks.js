@@ -18,9 +18,9 @@ export function TasksPage({ view } = {}) {
     Button({ disabled: busy, attributes: { n: "tasks-refresh" }, onClick: methods.load }, ["刷新"]),
   ] }, [
     View({ class: "grid min-w-0 gap-space-3", attributes: { n: "tasks-page", "aria-busy": computed(busy, String) },
-      onMounted() { stop_show = view?.onShow(methods.load); stop_hide = view?.onBeforeHide(methods.stop); void methods.load(); },
+      onMounted() { stop_show = view?.onShow(methods.start); stop_hide = view?.onBeforeHide(methods.stop); methods.start(); },
       onUnmounted() { stop_show?.(); stop_hide?.(); methods.stop(); } }, [
-      View({ class: "text-muted text-sm", attributes: { n: "tasks-description" } }, ["展示最近 100 条后台任务，点击刷新更新任务状态。清理会从数据库移除全部已完成和失败任务。终止刷新会保留上次成功保存的快照；下次定时刷新仍按原计划执行。"]),
+      View({ class: "text-muted text-sm", attributes: { n: "tasks-description" } }, ["展示最近 100 条后台任务，任务状态实时更新。清理会从数据库移除全部已完成和失败任务。终止刷新会保留上次成功保存的快照；下次定时刷新仍按原计划执行。"]),
       View({ class: "flex flex-wrap items-center gap-space-2", attributes: { n: "tasks-filters" } }, [
         View({ class: "text-muted text-sm", attributes: { n: "tasks-status-label", id: "tasks-status-label" } }, ["状态"]),
         Select({ value: state.status, options: task_status_options, style: { width: "10rem" },

@@ -4,7 +4,7 @@ const tool_labels = { get_admin_context: "读取当前页面", list_discovery_so
 
 export function ScriptAgentModel({ ui, request_json, get_context, apply_script, apply_debug,
   on_finish = () => {}, on_event = () => {}, socket_path = "/admin/api/scripts/agent/ws",
-  create_socket = url => new window.WebSocket(url), location = () => window.location.href,
+  create_socket = url => window.FindRSSAdminRealtime?.socket(url) || new window.WebSocket(url), location = () => window.location.href,
   new_id = () => crypto.randomUUID() }) {
   const { ref, refarr, refobj } = ui;
   const settings = refobj({ providers: [], base_url: "", model: "", has_api_key: false, configured: false });

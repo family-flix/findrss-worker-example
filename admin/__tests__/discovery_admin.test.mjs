@@ -1,3 +1,4 @@
+import { realtime_fixture } from "./realtime_fixture.mjs";
 import { list_runtime, paged_fixture } from "./list_fixture.mjs";
 import { PollPolicyView, poll_policy_label } from "../components/poll_policy.js";
 import { page_source } from "./page_source.mjs";
@@ -15,7 +16,7 @@ function modal_model(fetch, { confirm = () => true, notify = () => {}, document 
   const ref = value => ({ value, set(next) { this.value = next; }, as(next) { this.value = next; } });
   const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, ListPaginationModel, PaginationModel, PaginationView, URL, File, Blob, document, window: {
     FindRSSAdminUI: { ...list_runtime, DOM: {}, notify, ref, refarr: ref, computed: (source, map) => ({ get value() { return map(source.value); } }), combine: (sources, map) => ({ get value() { return map(Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.value]))); } }) },
-    confirm, ...timers, FindRSSAdminShell: {}, FindRSSAdminPages: {}, FindRSSAdminAuth: { fetch: async (url, options) =>
+    FindRSSAdminRealtime: timers.realtime, confirm, ...timers, FindRSSAdminShell: {}, FindRSSAdminPages: {}, FindRSSAdminAuth: { fetch: async (url, options) =>
       url.startsWith("/admin/api/background-tasks?") ? background_tasks(url, options || {}) : paged_fixture(await fetch(url, options || {}), url) },
   } });
   vm.runInContext(page_source("discovery.js") + "\nglobalThis.model = DiscoveryAdminViewModel();", context);
@@ -129,17 +130,10 @@ test("多主页 JSON 导出后重新导入保留全部地址和顺序", async ()
 });
 
 function task_timers() {
-  const pending = new Map();
-  let next_id = 0;
-  return { pending,
-    setTimeout(handler) { const id = ++next_id; pending.set(id, handler); return id; },
-    clearTimeout(id) { pending.delete(id); },
-    async tick() {
-      const [id, handler] = pending.entries().next().value;
-      pending.delete(id);
-      handler();
-      await new Promise(setImmediate);
-    },
+  const pending = new Map(), realtime = realtime_fixture();
+  return { pending, realtime,
+    setTimeout() { assert.fail("任务状态不能启动轮询"); }, clearTimeout() {},
+    tick() { return realtime.emit({ type: "background-tasks.changed", ids: [] }); },
   };
 }
 
@@ -159,11 +153,11 @@ test("重新进入、翻页、修改条数和搜索后批量恢复当前页的�
   assert.deepEqual(calls[0], sources.slice(0, 20).map(source => source.id));
   assert.deepEqual(Array.from(model.state.snapshot_refreshing.value), ["source-1"]);
   assert.equal(await model.methods.refresh_snapshot("source-1"), false);
-  assert.equal(timers.pending.size, 1);
+  assert.equal(timers.pending.size, 0);
   await model.pagination.set_page(1);
   assert.deepEqual(calls[1], sources.slice(20).map(source => source.id));
   assert.deepEqual(Array.from(model.state.snapshot_refreshing.value), ["source-21"]);
-  assert.equal(timers.pending.size, 1);
+  assert.equal(timers.pending.size, 0);
   await model.pagination.set_page_size(10);
   assert.deepEqual(calls[2], sources.slice(0, 10).map(source => source.id));
   await model.methods.set_filter("query", "源 21");
@@ -175,7 +169,7 @@ test("重新进入、翻页、修改条数和搜索后批量恢复当前页的�
   assert.equal(timers.pending.size, 0);
 });
 
-test("恢复的任务轮询至所有任务结束，随后更新快照且保持页码、筛选和勾选", async t => {
+test("任务变化推送更新快照且保持页码、筛选和勾选", async t => {
   const timers = task_timers();
   let active = 2, saved_at = 10, list_calls = 0;
   const model = modal_model(async () => {
@@ -208,7 +202,7 @@ test("恢复的任务轮询至所有任务结束，随后更新快照且保持�
   assert.equal(timers.pending.size, 0);
 });
 
-test("查询任务不会清除本页未完成的刷新请求，失败保留 loading 并重试", async t => {
+test("任务推送不会清除本页未完成的刷新请求，失败后下次推送可重试", async t => {
   const timers = task_timers();
   let finish, offline = false, active = true;
   const model = modal_model(async url => url.endsWith("/snapshot") ? new Promise(resolve => { finish = resolve; })
@@ -224,7 +218,7 @@ test("查询任务不会清除本页未完成的刷新请求，失败保留 load
   await timers.tick();
   assert.deepEqual(Array.from(model.state.snapshot_refreshing.value).sort(), ["one", "two"]);
   assert.match(model.state.list_error.value, /后台任务加载失败：离线/);
-  assert.equal(timers.pending.size, 1);
+  assert.equal(timers.pending.size, 0);
   offline = false;
   active = false;
   await timers.tick();
@@ -234,7 +228,7 @@ test("查询任务不会清除本页未完成的刷新请求，失败保留 load
   assert.equal(model.state.snapshot_refreshing.value.length, 0);
 });
 
-test("搜索和卸载时忽略迟到的任务响应，卸载清理轮询", async () => {
+test("搜索和卸载时忽略迟到的任务响应，卸载取消订阅", async () => {
   const timers = task_timers(), pending = [];
   const model = modal_model(async () => Response.json({ sources: [
     { id: "one", title: "第一源" }, { id: "two", title: "第二源" },
@@ -249,7 +243,7 @@ test("搜索和卸载时忽略迟到的任务响应，卸载清理轮询", async
   pending[1](Response.json({ tasks: [{ source_id: "two", status: "running" }] }));
   await latest;
   assert.deepEqual(Array.from(model.state.snapshot_refreshing.value), ["two"]);
-  assert.equal(timers.pending.size, 1);
+  assert.equal(timers.pending.size, 0);
   await timers.tick();
   model.methods.destroy();
   pending[2](Response.json({ tasks: [{ source_id: "one", status: "running" }] }));

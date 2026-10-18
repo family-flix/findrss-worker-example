@@ -41,8 +41,7 @@ function AdminMessagesModel() {
     const count = state.rows.filter(row => message_value(row).id > state.read_id).length;
     return count >= 50 ? "50+" : count ? String(count) : "";
   });
-  let socket = null;
-  let retry_timer = null;
+  let stop_realtime = null;
   let started = false;
   let refresh_pending = false;
 
@@ -69,21 +68,6 @@ function AdminMessagesModel() {
     }
   }
 
-  function connect() {
-    if (!started) return;
-    const url = new URL("/admin/api/messages/ws", window.location.href);
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    socket = new window.WebSocket(url);
-    socket.onopen = () => { connected.set(true); void load(); };
-    socket.onmessage = event => {
-      try { if (JSON.parse(event.data).type === "messages.changed") void load(); } catch {}
-    };
-    socket.onclose = () => {
-      connected.set(false);
-      if (started) retry_timer = window.setTimeout(connect, 3000);
-    };
-    socket.onerror = () => socket?.close();
-  }
 
   const methods = {
     load,
@@ -120,13 +104,19 @@ function AdminMessagesModel() {
       if (started) return;
       started = true;
       void load();
-      connect();
+      stop_realtime = window.FindRSSAdminRealtime?.subscribe("messages.changed", event => {
+        if (event.type === "realtime.connected") {
+          connected.set(true);
+          if (event.reconnected) void load();
+        } else if (event.type === "realtime.disconnected") connected.set(false);
+        else void load();
+      });
     },
     stop() {
       started = false;
-      window.clearTimeout(retry_timer);
-      socket?.close();
-      socket = null;
+      refresh_pending = false;
+      stop_realtime?.();
+      stop_realtime = null;
       connected.set(false);
       editor.methods.destroy();
     },

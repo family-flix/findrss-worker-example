@@ -80,6 +80,10 @@ export default {
       if (!admin_authorized(request, env)) {
         return admin_auth_required();
       }
+      if (url.pathname === "/admin/api/events/ws" && request.method === "GET") {
+        if (request.headers.has("Origin") && request.headers.get("Origin") !== url.origin) return error_response("origin rejected", 403);
+        return env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal/_admin/events/ws", request));
+      }
       if (/^\/admin\/api\/clips(?:\/[a-f0-9-]{36}(?:\/snapshot)?)?$/.test(url.pathname)) {
         return admin_clip_request(request, env);
       }

@@ -14,7 +14,7 @@ export class DeviceSocketHub {
 
   /** @returns {WebSocket[]} */
   get_all() {
-    return this.ctx.getWebSockets();
+    return this.ctx.getWebSockets().filter(socket => socket.deserializeAttachment?.()?.kind !== "admin");
   }
 
   /** @param {string} device_id @returns {WebSocket[]} */

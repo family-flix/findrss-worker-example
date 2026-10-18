@@ -8,11 +8,11 @@ export const task_status_options = [
   { value: "cancelled", label: "已终止" },
 ];
 
-export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) => window.FindRSSAdminAuth.fetch(...args) } = {}) {
+export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) => window.FindRSSAdminAuth.fetch(...args), realtime = globalThis.window?.FindRSSAdminRealtime } = {}) {
   const state = { tasks: ui.ref([]), status: ui.ref(""), loading: ui.ref(false), cleaning: ui.ref(false), error: ui.ref(""), cancelling: ui.ref([]) };
   state.visible_tasks = ui.combine({ tasks: state.tasks, status: state.status }, ({ tasks, status }) =>
     status ? tasks.filter(task => task.status === status) : tasks);
-  let controller = null;
+  let controller = null, stop_realtime = null, visible = false, load_pending = false;
   const status_labels = { running: "进行中", completed: "已完成", failed: "失败", cancelled: "已终止" };
   function task_value(task) {
     return { ...task, status_label: status_labels[task.status] || task.status,
@@ -22,7 +22,7 @@ export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
       cancellable: task.status === "running" };
   }
   async function load() {
-    if (controller || state.cleaning.value) return;
+    if (controller || state.cleaning.value) { load_pending = true; return; }
     const active = new AbortController();
     controller = active;
     state.loading.as(true);
@@ -37,11 +37,21 @@ export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
     } catch (error) {
       if (!active.signal.aborted) state.error.as(error.message || "任务加载失败");
     } finally {
-      if (controller === active) { controller = null; state.loading.as(false); }
+      if (controller === active) { controller = null; state.loading.as(false);
+        if (load_pending && visible) { load_pending = false; void load(); }
+      }
     }
   }
   const methods = {
     load,
+    start() {
+      if (visible) return;
+      visible = true;
+      stop_realtime = realtime?.subscribe("background-tasks.changed", event => {
+        if (event.type === "background-tasks.changed" || (event.type === "realtime.connected" && event.reconnected)) void load();
+      });
+      void load();
+    },
     set_status(status) {
       if (task_status_options.some(option => option.value === status)) state.status.as(status);
     },
@@ -57,7 +67,10 @@ export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
         if (!Array.isArray(payload.tasks)) throw new Error("任务接口返回格式不正确");
         state.tasks.as(payload.tasks.map(task_value));
       } catch (error) { state.error.as(error.message || "清理任务失败"); }
-      finally { state.cleaning.as(false); }
+      finally {
+        state.cleaning.as(false);
+        if (load_pending && visible) { load_pending = false; void load(); }
+      }
     },
     async cancel(id) {
       if (state.cleaning.value || state.cancelling.value.includes(id) || !state.tasks.value.some(task => task.id === id && task.cancellable)) return;
@@ -71,9 +84,13 @@ export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
         controller?.abort(); controller = null; state.loading.as(false);
         state.tasks.as(state.tasks.value.map(task => task.id === id ? task_value(payload.task) : task));
       } catch (error) { state.error.as(error.message || "终止任务失败"); }
-      finally { state.cancelling.as(state.cancelling.value.filter(value => value !== id)); }
+      finally {
+        state.cancelling.as(state.cancelling.value.filter(value => value !== id));
+        if (load_pending && visible && !controller) { load_pending = false; void load(); }
+      }
     },
     stop() {
+      visible = false; load_pending = false; stop_realtime?.(); stop_realtime = null;
       controller?.abort(); controller = null; state.loading.as(false);
     },
   };

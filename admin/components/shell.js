@@ -298,3 +298,4 @@ const FindRSSAdminShell = (function create_admin_shell() {
 
 window.FindRSSAdminShell = FindRSSAdminShell;
 window.addEventListener?.("pagehide", () => window.FindRSSAdminMessages?.methods.stop());
+window.addEventListener?.("pageshow", event => { if (event.persisted) window.FindRSSAdminMessages?.methods.start(); });

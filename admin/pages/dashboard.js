@@ -3393,7 +3393,7 @@ function DashboardApplicationView(page_id = "overview", embedded = false, route_
   const is_device_page = page_id === "devices";
   const is_token_page = page_id === "tokens";
   const vm$ = DashboardViewModel(page_id);
-  let stop_hide;
+  let stop_hide, stop_show;
   const device_tokens = is_device_page
     ? DeviceTokensModel()
     : null;
@@ -3465,11 +3465,12 @@ function DashboardApplicationView(page_id = "overview", embedded = false, route_
         n: is_device_page ? "device-management-view" : is_token_page ? "token-management-view" : "dashboard-view",
       },
       onMounted() {
-        stop_hide = route_view?.onBeforeHide(vm$.methods.closeAccessTokenLogs);
+        stop_show = route_view?.onShow?.(vm$.methods.ready);
+        stop_hide = route_view?.onBeforeHide(vm$.methods.pause);
         vm$.methods.ready();
       },
       onUnmounted() {
-        stop_hide?.();
+        stop_hide?.(); stop_show?.();
         device_tokens?.dispose();
         vm$.methods.dispose();
       },
@@ -3538,7 +3539,7 @@ function DashboardApplicationView(page_id = "overview", embedded = false, route_
                     },
                     attributes: { n: "dashboard-footer" },
                   },
-                  ["统计快照每 5 分钟生成一次，点击刷新读取最新快照"],
+                  ["统计快照每 5 分钟生成一次，生成后自动更新，也可手动刷新"],
                 ),
               ]),
         ],
@@ -3558,12 +3559,12 @@ function DashboardApplicationView(page_id = "overview", embedded = false, route_
     : window.FindRSSAdminShell.View(page_options, [content]);
 }
 
-function OverviewPage() {
-  return DashboardApplicationView("overview", true);
+function OverviewPage({ view } = {}) {
+  return DashboardApplicationView("overview", true, view);
 }
 
-function DevicesPage() {
-  return DashboardApplicationView("devices", true);
+function DevicesPage({ view } = {}) {
+  return DashboardApplicationView("devices", true, view);
 }
 
 function TokensPage({ view } = {}) {

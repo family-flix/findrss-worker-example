@@ -11,6 +11,8 @@ import { feed_hostname_origin } from "./service/worker/discovery.js";
 // DurableObjectError，绝不造 Response）；HTTP 组装与唯一的错误翻译点是
 // `../durable_object_router.js`。
 import { DurableObject } from "cloudflare:workers";
+import { AdminSocketHub } from "../admin_socket.js";
+import { observe_admin_changes } from "./service/durable_object/admin_events.js";
 import { route } from "../durable_object_router.js";
 import { DeviceSocketHub } from "../socket_hub.js";
 import { CallModel } from "./domain/call.js";
@@ -439,9 +441,16 @@ export class APIDurableObject extends DurableObject {
     };
     /** 应用服务注册表：兄弟服务经 `this.app.<svc>.<method>` 互相调用。 */
     this.app = {};
+    this.app.events = new AdminSocketHub(ctx);
+    observe_admin_changes(this.repo, this.app.events);
     this.app.mcp_tokens = new ServiceMcpToken({ repo: this.repo.mcp_tokens, app: this.app });
     this.app.mcp_oauth = new ServiceMcpOauth({ repo: this.repo.mcp_oauth, tokens: this.repo.mcp_tokens });
-    this.app.background_tasks = new ServiceBackgroundTasks({ repo: this.repo.background_tasks, wait_until: ports.wait_until });
+    this.app.background_tasks = new ServiceBackgroundTasks({ repo: this.repo.background_tasks, wait_until: ports.wait_until,
+      notify: task => {
+        this.app.events.invalidate("background-tasks.changed", task?.source_id || task?.id || null);
+        if (task?.kind === "clip") this.app.events.invalidate("clips.changed");
+        else if (task?.source_id) this.app.events.invalidate("discovery.changed", task.source_id);
+      } });
     this.app.webhook_settings = new ServiceWebhookSettings({ repo: this.repo.webhook_settings,
       credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || "") });
     this.app.snapshot_settings = new ServiceSnapshotSettings({ repo: this.repo.snapshot_settings, schedule_alarm: ports.schedule_alarm });
@@ -589,6 +598,7 @@ export class APIDurableObject extends DurableObject {
    * @returns {Promise<void>}
    */
   async webSocketMessage(socket, message) {
+    if (this.app.events?.owns(socket)) return this.app.events.receive(socket, message, this.app);
     return this.app.devices.webSocketMessage(socket, message);
   }
 
@@ -600,6 +610,7 @@ export class APIDurableObject extends DurableObject {
    * @returns {Promise<void>}
    */
   async webSocketClose(socket, code, reason, was_clean) {
+    if (this.app.events?.owns(socket)) { this.app.events.close(socket); socket.close(1000, "closed"); return; }
     return this.app.devices.webSocketClose(socket, code, reason, was_clean);
   }
 
@@ -608,6 +619,7 @@ export class APIDurableObject extends DurableObject {
    * @returns {Promise<void>}
    */
   async webSocketError(socket) {
+    if (this.app.events?.owns(socket)) { this.app.events.close(socket); socket.close(1011, "websocket error"); return; }
     return this.app.devices.webSocketError(socket);
   }
 

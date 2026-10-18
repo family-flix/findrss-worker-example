@@ -27,6 +27,7 @@ const audited_files = [
   "admin.js",
   "discover.js",
   "messages_socket.js",
+  "admin_socket.js",
   "script_agent_socket.js",
   "api.js",
   "durable_object_router.js",

@@ -1,3 +1,5 @@
+import { create_admin_realtime } from "./realtime.js";
+
 // Node 测试也直接导入路由配置，此时尚未加载浏览器运行时。
 if (globalThis.Timeless) {
   const { vm, kit, ui } = Timeless;
@@ -180,6 +182,9 @@ export function create_admin_routing(kit, components) {
 }
 
 export async function create_admin_store() {
+  window.FindRSSAdminRealtime ||= create_admin_realtime();
+  window.addEventListener("pagehide", () => window.FindRSSAdminRealtime.suspend());
+  window.addEventListener("pageshow", () => window.FindRSSAdminRealtime.resume());
   await import("./components/shell.js");
   await import("./components/admin_agent.js");
   const dashboard = await import("./pages/dashboard.js");

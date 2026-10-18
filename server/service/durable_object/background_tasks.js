@@ -2,9 +2,10 @@ import { do_error, DurableObjectError } from "./error.js";
 import { valid_identifier } from "../../lib/identifiers.js";
 
 export class ServiceBackgroundTasks {
-  constructor({ repo, wait_until }) {
+  constructor({ repo, wait_until, notify = () => {} }) {
     this.repo = repo;
     this.wait_until = wait_until;
+    this.notify = notify;
     this.active = new Map();
     this.repo.interrupt(Date.now());
   }
@@ -26,8 +27,9 @@ export class ServiceBackgroundTasks {
     }, error => {
       this.repo.finish(task.id, controller.signal.aborted ? "cancelled" : "failed", String(error.message || error).slice(0, 240), Date.now());
       throw error;
-    }).finally(() => this.active.delete(key));
+    }).finally(() => { this.active.delete(key); this.notify(task); });
     this.active.set(key, entry);
+    this.notify(task);
     this.wait_until?.(entry.promise.catch(() => {}));
     return { task: this.repo.find(task.id), promise: entry.promise };
   }
@@ -45,6 +47,7 @@ export class ServiceBackgroundTasks {
   }
   cleanup() {
     this.repo.cleanup();
+    this.notify(null);
     return this.list();
   }
   cancel(id) {
@@ -55,6 +58,7 @@ export class ServiceBackgroundTasks {
     if (!entry) throw do_error("任务已中断，请刷新列表", 409);
     this.repo.finish(id, "cancelled", "已由管理员终止", Date.now());
     entry.controller.abort(new DurableObjectError("快照刷新已终止", 409));
+    this.notify(task);
     return { task: this.repo.find(id) };
   }
 }

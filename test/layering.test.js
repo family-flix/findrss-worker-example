@@ -28,7 +28,7 @@ const ALLOWED = Object.freeze({
 const LAYERS = Object.freeze(Object.keys(ALLOWED).filter(layer => layer !== "api"));
 const API_FILES = Object.freeze([
   "router.js", "api.js", "admin.js", "discover.js", "durable_object_router.js",
-  "messages_socket.js", "script_agent_socket.js", "socket_hub.js",
+  "messages_socket.js", "script_agent_socket.js", "socket_hub.js", "admin_socket.js",
 ]);
 
 /** 组合根：不适用层次规则。 */
