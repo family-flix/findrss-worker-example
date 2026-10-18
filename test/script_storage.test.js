@@ -374,3 +374,15 @@ test("发布强制刷新关联订阅源，旧的广场文章任务迟到也不�
   assert.equal(snapshot.error, "");
   assert.equal(JSON.parse(snapshot.articles_json)[0].title, "新版文章");
 });
+
+test("源码清理复用引用集合，在删除等待期间产生的新引用会重新检查", async () => {
+  let checks = 0;
+  const refs = new Set(["scripts/test/retained.js"]), deleted = [];
+  const store = new ScriptSourceStore({ available: true,
+    async list() { return { truncated: false, objects: ["retained.js", "orphan.js", "new.js", "retained.js"].map(name => ({ key: "scripts/test/" + name, uploaded: "2000-01-01" })) }; },
+    async delete(key) { deleted.push(key); refs.add("scripts/test/new.js"); },
+  });
+  await store.prune("test", () => { checks++; return new Set(refs); });
+  assert.deepEqual(deleted, ["scripts/test/orphan.js"]);
+  assert.equal(checks, 2);
+});

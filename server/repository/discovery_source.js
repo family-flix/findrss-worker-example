@@ -6,10 +6,14 @@
 import { DISCOVERY_CATEGORY_TAGS, MAX_DISCOVERY_SOURCES } from "../lib/constants.js";
 import { escape_like } from "./sql_like.js";
 
+const snapshot_schedule_states = new WeakMap();
+
 export class RepositoryDiscoverySource {
   /** @param {{ sql: SqlStorage }} deps */
   constructor({ sql }) {
     this.sql = sql;
+    if (!snapshot_schedule_states.has(sql)) snapshot_schedule_states.set(sql, { rows: null, loaded_at: 0 });
+    this.snapshot_schedule_state = snapshot_schedule_states.get(sql);
   }
 
   query_conditions({ include_disabled, category = "", query = "", tags = [], source_type = "", status = "all", visibility = "all" }) {
@@ -91,13 +95,24 @@ export class RepositoryDiscoverySource {
   }
 
   snapshot_schedule() {
-    return this.sql.exec(`SELECT d.*, s.attempted_at AS snapshot_attempted_at, s.adaptive_interval
-      FROM discovery_sources d LEFT JOIN discovery_source_snapshots s ON s.source_id = d.id AND s.feed_url = d.feed_url
-      WHERE d.enabled = 1`).toArray();
+    const now = Date.now();
+    // 调度会在设备响应、抓取完成和 alarm 中反复调用，避免每次扫描全部源。
+    // 写入时同步更新 / 失效；定期重读也能接收数据库外部维护的变更。
+    const state = this.snapshot_schedule_state;
+    if (!state.rows || now - state.loaded_at >= 300000 || now < state.loaded_at) {
+      const rows = this.sql.exec(`SELECT d.*, s.attempted_at AS snapshot_attempted_at, s.adaptive_interval
+        FROM discovery_sources d LEFT JOIN discovery_source_snapshots s ON s.source_id = d.id AND s.feed_url = d.feed_url
+        WHERE d.enabled = 1`).toArray();
+      state.rows = new Map(rows.map(row => [row.id, row]));
+      state.loaded_at = now;
+    }
+    return [...state.rows.values()].map(row => ({ ...row }));
   }
 
   snapshot_adaptive(id, interval) {
     this.sql.exec("UPDATE discovery_source_snapshots SET adaptive_interval = ? WHERE source_id = ?", interval, id);
+    const row = this.snapshot_schedule_state.rows?.get(id);
+    if (row?.snapshot_attempted_at != null) row.adaptive_interval = interval;
   }
 
   snapshot_due(before, limit) {
@@ -116,6 +131,16 @@ export class RepositoryDiscoverySource {
       ON CONFLICT(source_id) DO UPDATE SET attempted_at = excluded.attempted_at,
       articles_json = CASE WHEN feed_url = excluded.feed_url THEN articles_json ELSE '[]' END,
       saved_at = CASE WHEN feed_url = excluded.feed_url THEN saved_at ELSE 0 END, feed_url = excluded.feed_url`, id, feed_url, now);
+    const row = this.snapshot_schedule_state.rows?.get(id);
+    if (row) {
+      if (row.feed_url !== feed_url) this.snapshot_schedule_state.rows = null;
+      else {
+        row.snapshot_attempted_at = now;
+        // 地址曾不匹配时 JOIN 没带出旧行的学习间隔，upsert 却会保留它。
+        row.adaptive_interval ??= this.sql.exec("SELECT adaptive_interval FROM discovery_source_snapshots WHERE source_id = ?", id)
+          .toArray()[0]?.adaptive_interval ?? 0;
+      }
+    }
   }
 
   snapshot_save(id, feed_url, articles, now, error = "", fingerprint = "") {
@@ -125,6 +150,7 @@ export class RepositoryDiscoverySource {
   }
 
   snapshot_delete(id) {
+    this.snapshot_schedule_state.rows = null;
     this.sql.exec("DELETE FROM discovery_source_snapshots WHERE source_id = ?", id);
   }
 
@@ -194,20 +220,19 @@ export class RepositoryDiscoverySource {
 
   /** @returns {Record<string, unknown>[]} 启用且免 token 的源（公开性判定用）。 */
   list_public_routes() {
-    return this.sql
-      .exec(
-        `SELECT id, feed_url, enabled, require_token FROM discovery_sources
-         WHERE enabled = 1 AND require_token = 0 LIMIT 500`)
-      .toArray();
+    return this.snapshot_schedule().filter(row => Number(row.require_token) === 0).slice(0, 500)
+      .map(({ id, feed_url, enabled, require_token }) => ({ id, feed_url, enabled, require_token }));
   }
 
   list_private_routes() {
-    return this.sql.exec("SELECT id, title, feed_url, credit_cost FROM discovery_sources WHERE enabled = 1 AND require_token = 1 ORDER BY id LIMIT ?", MAX_DISCOVERY_SOURCES).toArray();
+    return this.snapshot_schedule().filter(row => Number(row.require_token) === 1).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+      .slice(0, MAX_DISCOVERY_SOURCES).map(({ id, title, feed_url, credit_cost }) => ({ id, title, feed_url, credit_cost }));
   }
 
   /** XML 构建时按完整路由地址匹配社媒主页，公开与私密源共用。 */
   list_social_routes() {
-    return this.sql.exec("SELECT feed_url, social_url FROM discovery_sources WHERE enabled = 1 AND social_url != '' ORDER BY id LIMIT ?", MAX_DISCOVERY_SOURCES).toArray();
+    return this.snapshot_schedule().filter(row => row.social_url !== "").sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+      .slice(0, MAX_DISCOVERY_SOURCES).map(({ feed_url, social_url }) => ({ feed_url, social_url }));
   }
 
   /**
@@ -219,6 +244,7 @@ export class RepositoryDiscoverySource {
    * @returns {void}
    */
   insert(fields) {
+    this.snapshot_schedule_state.rows = null;
     this.sql.exec(
       `INSERT INTO discovery_sources (
         id, title, description, website, social_url, social_urls_json, feed_url, category, tags_json,
@@ -253,6 +279,7 @@ export class RepositoryDiscoverySource {
    * @returns {void}
    */
   update(fields) {
+    this.snapshot_schedule_state.rows = null;
     this.sql.exec(
       `UPDATE discovery_sources
        SET title = ?, description = ?, website = ?, social_url = ?, social_urls_json = ?, feed_url = ?, category = ?,

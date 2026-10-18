@@ -110,7 +110,8 @@ test("旧库补齐并发设置列且不修改已有抓取规则与更新时间�
   store.db.exec("DROP TABLE snapshot_settings; CREATE TABLE snapshot_settings(id INTEGER PRIMARY KEY, policy_json TEXT NOT NULL, updated_at INTEGER NOT NULL)");
   store.sql.exec("INSERT INTO snapshot_settings VALUES (1, ?, ?)", JSON.stringify(interval(30)), 1234);
   const source = readFileSync(new URL("../server/durable_object.js", import.meta.url), "utf8");
-  const migration = source.match(/    const snapshot_settings_columns = [^\n]+\n    if \(!snapshot_settings_columns[^\n]+/)[0];
+  const migration = source.match(/^[ \t]+const snapshot_settings_columns = [^\n]+\n[ \t]+if \(!snapshot_settings_columns[^\n]+/m)?.[0];
+  assert.ok(migration, "找不到抓取设置迁移");
   for (let repeat = 0; repeat < 2; repeat++) vm.runInNewContext("(function() {" + migration + "}).call(object)", { object: { ctx: { storage: { sql: store.sql } } } });
   const settings = new ServiceSnapshotSettings({ repo: new RepositorySnapshotSettings(store) }).settings();
   assert.equal(settings.max_concurrency, 4);
@@ -301,7 +302,7 @@ test("补抓排队期间修改为仅手动的源不再启动，无匹配及不�
   f.service.load_snapshot = async source => { f.calls.push(source.id); return new Promise(resolve => { finish = resolve; }); };
   assert.equal(f.service.recover_overdue_snapshots().queued_count, 2);
   await new Promise(setImmediate);
-  f.sql.exec("UPDATE discovery_sources SET poll_policy_json = ? WHERE id = 'b'", '{"mode":"manual"}');
+  f.repo.discovery.update({ ...f.repo.discovery.find("b"), poll_policy_json: '{"mode":"manual"}' });
   finish([]); await f.service.snapshot_refreshing;
   assert.deepEqual(f.calls, ["a"]);
   assert.equal(f.service.snapshot_recovery.size, 0);

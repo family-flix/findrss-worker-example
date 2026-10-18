@@ -60,14 +60,14 @@ export class RepositoryCall {
   /** @returns {number} 排队中的调用数（背压判定）。 */
   count_queued() {
     return Number(
-      this.sql.exec("SELECT COUNT(*) AS count FROM calls WHERE status = 'queued'")
+      this.sql.exec("SELECT count FROM call_status_counts WHERE status = 'queued'")
         .toArray()[0]?.count ?? 0);
   }
 
   /** @returns {Array<{ status: string, count: number }>} 按状态分组计数。 */
   count_by_status() {
     return this.sql
-      .exec("SELECT status, COUNT(*) AS count FROM calls GROUP BY status ORDER BY status")
+      .exec("SELECT status, count FROM call_status_counts WHERE count > 0 ORDER BY status")
       .toArray();
   }
 

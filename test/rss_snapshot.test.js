@@ -194,7 +194,7 @@ for (const public_source of [true, false]) test(`${public_source ? "公开" : "�
   assert.equal(f.jobs.length, 1);
   let scheduled = Promise.resolve();
   if (public_source) {
-    f.sql.exec("UPDATE rss_public_feeds SET attempted_at = 0");
+    for (const source of f.repo.public_schedule()) f.repo.public_attempt(source.key, 0);
     scheduled = f.service.refresh_due_snapshots();
   }
   release(); await Promise.all([f.wait_for_xml(), scheduled]);
@@ -227,7 +227,7 @@ test("旧版 XML 的过期字段不影响读取，后台失败保留 XML；新�
   await f.serve("rss", {}, true);
   const key = "public-snapshot:" + rss_route_cache_key("/snapshot/1", []);
   f.sql.exec("UPDATE rss_route_cache SET expires_at = 1");
-  f.sql.exec("UPDATE rss_public_feeds SET attempted_at = 0");
+  for (const source of f.repo.public_schedule()) f.repo.public_attempt(source.key, 0);
   f.repo.delete_expired(Date.now());
   f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo, object_store: f.object_store });
   assert.equal(f.repo.read(key).expires_at, 1);
@@ -237,7 +237,8 @@ test("旧版 XML 的过期字段不影响读取，后台失败保留 XML；新�
   await f.service.refresh_due_snapshots();
   assert.match((await f.serve("rss", { query: "?page=2" })).body, /版本/);
   const body = (await f.serve()).body;
-  f.fail(); f.sql.exec("UPDATE rss_public_feeds SET attempted_at = 0");
+  f.fail();
+  for (const source of f.repo.public_schedule()) f.repo.public_attempt(source.key, 0);
   await f.service.refresh_due_snapshots();
   assert.equal((await f.serve()).body, body);
   f.db.close();
@@ -288,7 +289,7 @@ test("public 声明不绕过目录私密设置；转私密后后台任务撤下�
   f.row.metadata_json = JSON.stringify({ path: "/snapshot/:id", public: true });
   f.service.enabled_routes = null;
   await assert.rejects(f.serve(), { status: 401 });
-  f.sql.exec("UPDATE rss_public_feeds SET attempted_at = 0");
+  for (const source of f.repo.public_schedule()) f.repo.public_attempt(source.key, 0);
   await f.service.refresh_due_snapshots();
   assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM rss_public_feeds").get().count, 0);
   assert.ok(f.repo.read("public-snapshot:" + rss_route_cache_key("/snapshot/1", [])));

@@ -55,7 +55,9 @@ export class ServiceDiscovery {
     this.load_snapshot = load_snapshot;
     this.schedule_alarm = schedule_alarm;
     this.render_catalog = render_catalog;
-    this.catalog_publish = Promise.resolve();
+    this.catalog_publish = null;
+    this.catalog_revision = 0;
+    this.catalog_defer = null;
     this.catalog_checked = false;
     this.catalog_retry_at = null;
     this.snapshot_pending = new Map();
@@ -166,47 +168,82 @@ export class ServiceDiscovery {
 
   async ensure_catalog() {
     if (!this.object_store || !this.render_catalog || this.catalog_checked && this.catalog_retry_at === null) return;
+    if (this.catalog_retry_at !== null && this.catalog_retry_at > Date.now()) return;
     let needed;
     try {
-      needed = await this.storage.get("discovery_catalog_dirty") || !await this.object_store.head(DISCOVERY_CATALOG_KEY) || !await this.storage.get("discovery_catalog_lazy_avatars_v1") || !await this.storage.get("discovery_catalog_platforms_v1") || !await this.storage.get("discovery_catalog_script_tags_v1") || !await this.storage.get("discovery_catalog_public_sources_v1") || !await this.storage.get("discovery_catalog_public_avatars_v1");
+      const dirty = await this.storage.get("discovery_catalog_dirty");
+      const due = Number(await this.storage.get("discovery_catalog_due_at") || 0);
+      if (dirty && due > Date.now()) {
+        this.catalog_retry_at = due;
+        await this.schedule_alarm?.();
+        return;
+      }
+      needed = dirty || !await this.object_store.head(DISCOVERY_CATALOG_KEY) || !await this.storage.get("discovery_catalog_lazy_avatars_v1") || !await this.storage.get("discovery_catalog_platforms_v1") || !await this.storage.get("discovery_catalog_script_tags_v1") || !await this.storage.get("discovery_catalog_public_sources_v1") || !await this.storage.get("discovery_catalog_public_avatars_v1");
     } catch (error) {
       this.catalog_retry_at = Date.now() + 60000;
       await this.schedule_alarm?.();
       throw error;
     }
-    if (needed) {
-      await this.publish_catalog();
-    }
+    if (needed) await this.publish_catalog();
     this.catalog_checked = true;
+  }
+
+  async defer_catalog() {
+    if (!this.object_store || !this.render_catalog) return;
+    this.catalog_revision++;
+    // 同一个窗口只持久化一次；alarm 和冷启动都能恢复尚未发布的快照。
+    if (this.catalog_defer) return this.catalog_defer;
+    this.catalog_retry_at ??= Date.now() + 60000;
+    this.catalog_defer = (async () => {
+      await this.storage.put("discovery_catalog_dirty", true);
+      await this.storage.put("discovery_catalog_due_at", this.catalog_retry_at);
+      await this.schedule_alarm?.();
+    })();
+    try { await this.catalog_defer; }
+    catch (error) { this.catalog_defer = null; throw error; }
   }
 
   publish_catalog() {
     if (!this.object_store || !this.render_catalog) return Promise.resolve();
-    // 串行写入，后来的发布重新读 SQL；并发编辑/刷新不会让旧产物覆盖新目录。
-    this.catalog_publish = this.catalog_publish.catch(() => {}).then(async () => {
+    this.catalog_revision++;
+    if (this.catalog_publish) return this.catalog_publish;
+    // 合并正在等待的发布，写 R2 期间发生编辑则再发布最新状态。
+    this.catalog_publish = (async () => {
       try {
-        await this.storage.put("discovery_catalog_dirty", true);
-        const html = await this.render_catalog(this.public_catalog());
-        await this.object_store.put(DISCOVERY_CATALOG_KEY, await gzip_html(html),
-          { httpMetadata: { contentType: "text/html; charset=utf-8", contentEncoding: "gzip" } });
-        await this.storage.delete("discovery_catalog_dirty");
-        await this.storage.put("discovery_catalog_lazy_avatars_v1", true);
-        await this.storage.put("discovery_catalog_platforms_v1", true);
-        await this.storage.put("discovery_catalog_script_tags_v1", true);
-        await this.storage.put("discovery_catalog_public_sources_v1", true);
-        await this.storage.put("discovery_catalog_public_avatars_v1", true);
+        let revision;
+        do {
+          revision = this.catalog_revision;
+          await this.storage.put("discovery_catalog_dirty", true);
+          const html = await this.render_catalog(this.public_catalog());
+          await this.object_store.put(DISCOVERY_CATALOG_KEY, await gzip_html(html),
+            { httpMetadata: { contentType: "text/html; charset=utf-8", contentEncoding: "gzip" } });
+          if (revision !== this.catalog_revision) continue;
+          await this.storage.delete("discovery_catalog_dirty");
+          await this.storage.delete("discovery_catalog_due_at");
+          await this.storage.put("discovery_catalog_lazy_avatars_v1", true);
+          await this.storage.put("discovery_catalog_platforms_v1", true);
+          await this.storage.put("discovery_catalog_script_tags_v1", true);
+          await this.storage.put("discovery_catalog_public_sources_v1", true);
+          await this.storage.put("discovery_catalog_public_avatars_v1", true);
+        } while (revision !== this.catalog_revision);
         this.catalog_checked = true;
         this.catalog_retry_at = null;
+        this.catalog_defer = null;
       } catch (error) {
+        this.catalog_defer = null;
         this.catalog_retry_at = Date.now() + 60000;
-        // 发布失败时移除旧产物，权限变化后不继续从 R2 展示旧的公开文章。
+        try {
+          await this.storage.put("discovery_catalog_dirty", true);
+          await this.storage.put("discovery_catalog_due_at", this.catalog_retry_at);
+        } catch (storage_error) { console.warn("discovery catalog retry persistence failed", storage_error); }
+        // 权限收紧后发布失败，移除旧产物，避免继续展示已撤回内容。
         try { await this.object_store.delete(DISCOVERY_CATALOG_KEY); }
         catch (delete_error) { console.warn("discovery catalog cleanup failed", delete_error); }
         await this.schedule_alarm?.();
         console.warn("discovery catalog publish failed", error.message);
         throw do_error("目录已保存，静态发布失败，稍后自动重试", 503);
       }
-    });
+    })().finally(() => { this.catalog_publish = null; });
     return this.catalog_publish;
   }
 
@@ -396,7 +433,10 @@ export class ServiceDiscovery {
         await this.schedule_alarm?.();
       }
       signal?.throwIfAborted();
-      if (!source.require_token || avatar_changed) await this.publish_catalog();
+      if (!source.require_token || avatar_changed) {
+        if (automatic) await this.defer_catalog();
+        else await this.publish_catalog();
+      }
       const latest = this.repo.discovery.snapshot_get(source_id) || {};
       const value = this.source_value({ ...(this.repo.discovery.find(source_id) || source), ...latest, snapshot_attempted_at: latest.attempted_at }, true);
       return { snapshot: source.require_token ? { saved_at: 0, articles: [], error: String(latest.error || "") }

@@ -135,7 +135,9 @@ test("旧静态目录升级时重新发布一次并移除其中的非公开源",
   assert.equal(f.bucket.calls.put, writes + 1);
 });
 
-test("串行发布避免慢写覆盖后续编辑，失败清理旧产物且重启后可重试", async () => {
+test("合并发布避免慢写覆盖后续编辑，失败清理旧产物且重启后按间隔重试", async t => {
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
   const f = fixture(); f.sources.set("a", { ...row("a") });
   const put = f.dependencies.object_store.put.bind(f.dependencies.object_store);
   let finish, started;
@@ -149,8 +151,8 @@ test("串行发布避免慢写覆盖后续编辑，失败清理旧产物且重�
   f.sources.get("a").title = "更新";
   const second = f.service.publish_catalog();
   const second_entered = new Promise(resolve => { started = resolve; });
-  finish(); await first;
-  await second_entered; finish(); await second;
+  finish();
+  await second_entered; finish(); await Promise.all([first, second]);
   assert.equal((await f.published()).sources[0].title, "更新");
   f.dependencies.object_store.put = put;
   f.bucket.fail_next({ op: "put" });
@@ -160,6 +162,9 @@ test("串行发布避免慢写覆盖后续编辑，失败清理旧产物且重�
   assert.ok(f.service.next_snapshot_at() >= Date.now());
   assert.ok(f.alarms > 0);
   const restarted = new ServiceDiscovery(f.dependencies);
+  await restarted.ensure_catalog();
+  assert.equal(await f.dependencies.object_store.get(DISCOVERY_CATALOG_KEY), null);
+  now += 60000;
   await restarted.ensure_catalog();
   assert.equal((await f.published()).sources[0].title, "更新");
   assert.equal(f.metadata.has("discovery_catalog_dirty"), false);
@@ -173,12 +178,68 @@ test("没有 R2 时保持可读目录，写入不依赖静态发布", async () =
   assert.equal(f.bucket.calls.put, 0);
 });
 
-test("首次 R2 检查失败安排重试，空目录也能补建", async () => {
+test("首次 R2 检查失败按间隔重试，空目录也能补建", async t => {
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
   const f = fixture();
   f.bucket.fail_next({ op: "head" });
   await assert.rejects(f.service.ensure_catalog(), /head failed/);
   assert.ok(f.alarms > 0);
   assert.ok(f.service.next_snapshot_at() >= Date.now());
   await f.service.ensure_catalog();
+  assert.equal(await f.dependencies.object_store.get(DISCOVERY_CATALOG_KEY), null);
+  now += 60000;
+  await f.service.ensure_catalog();
+  assert.deepEqual((await f.published()).sources, []);
+});
+
+test("自动刷新在一分钟内合并目录发布，重启恢复截止时间，人工权限变更立即生效", async t => {
+  let now = 2_000_000;
+  t.mock.method(Date, "now", () => now);
+  const f = fixture();
+  for (let index = 0; index < 100; index++) f.sources.set(String(index), row(index));
+  await f.service.ensure_catalog();
+  const writes = f.bucket.calls.put;
+  for (let index = 0; index < 100; index++) await f.service.refresh_discovery_snapshot(String(index), "", { automatic: true });
+  assert.equal(f.bucket.calls.put, writes);
+  assert.equal(f.metadata.get("discovery_catalog_due_at"), now + 60000);
+  await f.service.ensure_catalog();
+  assert.equal(f.bucket.calls.put, writes);
+  const restarted = new ServiceDiscovery(f.dependencies);
+  await restarted.ensure_catalog();
+  assert.equal(restarted.next_snapshot_at(), now + 60000);
+  now += 60000;
+  await restarted.ensure_catalog();
+  assert.equal(f.bucket.calls.put, writes + 1);
+  assert.equal((await f.published()).sources[0].snapshot.articles[0].title, "新文章");
+  assert.equal(f.metadata.has("discovery_catalog_dirty"), false);
+  f.service = restarted;
+  await f.service.refresh_discovery_snapshot("0", "", { automatic: true });
+  const before_permission = f.bucket.calls.put;
+  await f.service.update_discovery_source(request({ require_token: true }), "0");
+  assert.equal(f.bucket.calls.put, before_permission + 1);
+  assert.equal((await f.published()).sources.some(source => source.id === "0"), false);
+  assert.equal(f.metadata.has("discovery_catalog_due_at"), false);
+  await f.service.refresh_discovery_snapshot("1", "", { automatic: true });
+  assert.equal(f.metadata.get("discovery_catalog_due_at"), now + 60000);
+});
+
+test("一次并发发布合并后续请求，发布期间收紧权限最终撤回旧内容", async () => {
+  const f = fixture(); f.sources.set("a", row("a"));
+  const render = f.service.render_catalog;
+  let resume, entered;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  let first = true;
+  f.service.render_catalog = async value => {
+    if (first) { first = false; entered(); await new Promise(resolve => { resume = resolve; }); }
+    return render(value);
+  };
+  const pending = f.service.publish_catalog();
+  await waiting;
+  f.sources.get("a").require_token = 1;
+  const requests = Array.from({ length: 100 }, () => f.service.publish_catalog());
+  resume();
+  await Promise.all([pending, ...requests]);
+  assert.equal(f.bucket.calls.put, 2);
   assert.deepEqual((await f.published()).sources, []);
 });

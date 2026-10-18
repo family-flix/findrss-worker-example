@@ -23,8 +23,12 @@ export function migrate_script_tables(sql) {
   }
 }
 
+// 修改 schema 或启动迁移时递增；已完成的迁移不在每次 DO 唤醒时重跑。
+export const API_SCHEMA_VERSION = 1;
+
 /** 本模块 DDL 里恰好这些表。 @type {readonly string[]} */
 export const API_TABLE_NAMES = Object.freeze([
+  "api_schema_version",
   "overview_snapshot",
   "clips",
   "snapshot_settings",
@@ -43,6 +47,7 @@ export const API_TABLE_NAMES = Object.freeze([
   "mcp_oauth_credentials",
   "script_agent_settings",
   "calls",
+  "call_status_counts",
   "devices",
   "device_logs",
   "users",
@@ -71,6 +76,10 @@ export const API_TABLE_NAMES = Object.freeze([
 ]);
 
 export const API_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS api_schema_version (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS overview_snapshot (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     snapshot_json TEXT NOT NULL,
@@ -114,6 +123,9 @@ export const API_SCHEMA_SQL = `
     status TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER NOT NULL DEFAULT 0,
     error TEXT NOT NULL DEFAULT ''
   );
+  CREATE INDEX IF NOT EXISTS background_tasks_recent ON background_tasks(started_at);
+  CREATE INDEX IF NOT EXISTS background_tasks_status_time ON background_tasks(status, started_at);
+  CREATE INDEX IF NOT EXISTS background_tasks_finished_time ON background_tasks(started_at) WHERE status != 'running';
   CREATE TABLE IF NOT EXISTS cookie_push_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     uuid TEXT NOT NULL,
@@ -206,6 +218,23 @@ export const API_SCHEMA_SQL = `
     updated_at INTEGER NOT NULL,
     completed_at INTEGER
   );
+  CREATE TABLE IF NOT EXISTS call_status_counts (
+    status TEXT PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TRIGGER IF NOT EXISTS calls_count_insert AFTER INSERT ON calls BEGIN
+    INSERT INTO call_status_counts(status, count) VALUES (NEW.status, 1)
+      ON CONFLICT(status) DO UPDATE SET count = count + 1;
+  END;
+  CREATE TRIGGER IF NOT EXISTS calls_count_delete AFTER DELETE ON calls BEGIN
+    UPDATE call_status_counts SET count = count - 1 WHERE status = OLD.status;
+  END;
+  CREATE TRIGGER IF NOT EXISTS calls_count_update AFTER UPDATE OF status ON calls
+    WHEN OLD.status <> NEW.status BEGIN
+    UPDATE call_status_counts SET count = count - 1 WHERE status = OLD.status;
+    INSERT INTO call_status_counts(status, count) VALUES (NEW.status, 1)
+      ON CONFLICT(status) DO UPDATE SET count = count + 1;
+  END;
   CREATE UNIQUE INDEX IF NOT EXISTS calls_idempotency
     ON calls(publisher_device_id, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
@@ -213,6 +242,8 @@ export const API_SCHEMA_SQL = `
     ON calls(status, created_at);
   CREATE INDEX IF NOT EXISTS calls_lease
     ON calls(status, lease_expires_at);
+  CREATE INDEX IF NOT EXISTS calls_retention
+    ON calls(status, completed_at) WHERE status IN ('completed', 'failed');
   CREATE INDEX IF NOT EXISTS calls_device_load
     ON calls(assigned_device_id, status);
   CREATE TABLE IF NOT EXISTS devices (
@@ -470,10 +501,19 @@ export const API_SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS rss_route_cache_expiry
     ON rss_route_cache(expires_at);
+  CREATE INDEX IF NOT EXISTS rss_route_cache_temporary_expiry
+    ON rss_route_cache(expires_at, key)
+    WHERE key NOT LIKE 'public-snapshot:%' AND key NOT LIKE 'private-snapshot:%';
+  CREATE INDEX IF NOT EXISTS rss_route_cache_temporary_created
+    ON rss_route_cache(created_at DESC)
+    WHERE key NOT LIKE 'public-snapshot:%' AND key NOT LIKE 'private-snapshot:%';
   CREATE TABLE IF NOT EXISTS rss_route_cache_chunks (
     key TEXT NOT NULL, chunk_index INTEGER NOT NULL, body TEXT NOT NULL,
     PRIMARY KEY (key, chunk_index)
   );
+  CREATE TRIGGER IF NOT EXISTS rss_route_cache_delete_chunks AFTER DELETE ON rss_route_cache BEGIN
+    DELETE FROM rss_route_cache_chunks WHERE key = OLD.key;
+  END;
   CREATE TABLE IF NOT EXISTS rss_public_feeds (
     key TEXT PRIMARY KEY, pathname TEXT NOT NULL, query_json TEXT NOT NULL,
     self_url TEXT NOT NULL, attempted_at INTEGER NOT NULL DEFAULT 0

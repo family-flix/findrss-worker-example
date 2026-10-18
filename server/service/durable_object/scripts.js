@@ -407,7 +407,7 @@ export class ServiceScript {
       };
       const current = this.repo.scripts.find(script_id);
       if (current) add(JSON.parse(current.metadata_json));
-      for (const release of this.repo.script_releases.list(script_id)) add(JSON.parse(this.repo.script_releases.find(script_id, release.id).metadata_json));
+      for (const release of this.repo.script_releases.references(script_id)) add(JSON.parse(release.metadata_json));
       return keys;
     };
     await this.source_store.prune(script_id, referenced);

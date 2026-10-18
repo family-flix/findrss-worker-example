@@ -1,7 +1,11 @@
 export class RepositoryBackgroundTasks {
   constructor({ sql }) { this.sql = sql; }
   list() {
-    return this.sql.exec("SELECT * FROM background_tasks ORDER BY (status = 'running') DESC, started_at DESC, rowid DESC LIMIT 100").toArray();
+    // 两次索引范围查询，进行中任务优先，避免对全部记录排序。
+    const running = this.sql.exec("SELECT * FROM background_tasks WHERE status = 'running' ORDER BY started_at DESC, rowid DESC LIMIT 100").toArray();
+    if (running.length === 100) return running;
+    const finished = this.sql.exec("SELECT * FROM background_tasks WHERE status != 'running' ORDER BY started_at DESC, rowid DESC LIMIT ?", 100 - running.length).toArray();
+    return [...running, ...finished];
   }
   running_for_sources(source_ids) {
     if (!source_ids.length) return [];
@@ -15,8 +19,9 @@ export class RepositoryBackgroundTasks {
   insert(task) {
     this.sql.exec("INSERT INTO background_tasks (id, kind, title, target, source_id, status, started_at) VALUES (?, ?, ?, ?, ?, 'running', ?)",
       task.id, task.kind, task.title, task.target, task.source_id || "", task.started_at);
-    this.sql.exec(`DELETE FROM background_tasks WHERE status != 'running' AND id NOT IN
-      (SELECT id FROM background_tasks ORDER BY started_at DESC, rowid DESC LIMIT 100)`);
+    this.sql.exec(`DELETE FROM background_tasks WHERE status != 'running'
+      AND (started_at, rowid) < (SELECT started_at, rowid FROM background_tasks
+        ORDER BY started_at DESC, rowid DESC LIMIT 1 OFFSET 99)`);
   }
   finish(id, status, error, now) {
     this.sql.exec("UPDATE background_tasks SET status = ?, error = ?, finished_at = ? WHERE id = ? AND status = 'running'", status, error, now, id);

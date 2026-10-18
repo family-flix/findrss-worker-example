@@ -3,6 +3,9 @@ export class RepositoryScriptRelease {
   list(script_id) {
     return this.sql.exec("SELECT id, script_id, version, script_hash, bytes, created_at FROM script_releases WHERE script_id = ? ORDER BY created_at DESC, id DESC", script_id).toArray();
   }
+  references(script_id) {
+    return this.sql.exec("SELECT metadata_json FROM script_releases WHERE script_id = ?", script_id).toArray();
+  }
   find(script_id, id) {
     return this.sql.exec("SELECT * FROM script_releases WHERE script_id = ? AND id = ?", script_id, id).toArray()[0];
   }

@@ -11,12 +11,15 @@ const snapshot_prefix = "findrss-snapshot-v1:";
 const chunk_marker = "findrss-snapshot-chunks-v1";
 const chunk_size = 64 * 1024;
 const temporary_entries = "key NOT LIKE 'public-snapshot:%' AND key NOT LIKE 'private-snapshot:%'";
+const public_schedule_states = new WeakMap();
 
 export class RepositoryRssRouteCache {
   /** @param {{ sql: SqlStorage, storage?: DurableObjectStorage }} deps */
   constructor({ sql, storage }) {
     this.sql = sql;
     this.transaction = storage ? task => storage.transactionSync(task) : task => task();
+    if (!public_schedule_states.has(sql)) public_schedule_states.set(sql, { rows: null, loaded_at: 0 });
+    this.public_schedule_state = public_schedule_states.get(sql);
   }
 
   /**
@@ -99,14 +102,12 @@ export class RepositoryRssRouteCache {
   /** @param {number} now @returns {void} */
   delete_expired(now) {
     this.sql.exec("DELETE FROM rss_route_cache WHERE expires_at <= ? AND " + temporary_entries, now);
-    this.delete_orphan_chunks();
   }
 
   /** 配置变更只清理普通缓存，XML 仅在成功刷新时覆盖。 @returns {void} */
   clear() {
     this.transaction(() => {
       this.sql.exec("DELETE FROM rss_route_cache WHERE " + temporary_entries);
-      this.delete_orphan_chunks();
     });
   }
 
@@ -126,7 +127,6 @@ export class RepositoryRssRouteCache {
   delete_oldest(keep) {
     if (keep <= 0) {
       this.sql.exec("DELETE FROM rss_route_cache WHERE " + temporary_entries);
-      this.delete_orphan_chunks();
       return;
     }
     this.sql.exec(
@@ -134,14 +134,10 @@ export class RepositoryRssRouteCache {
          SELECT key FROM rss_route_cache WHERE ${temporary_entries} ORDER BY created_at DESC LIMIT -1 OFFSET ?
        )`,
       keep);
-    this.delete_orphan_chunks();
-  }
-
-  delete_orphan_chunks() {
-    this.sql.exec("DELETE FROM rss_route_cache_chunks WHERE key NOT IN (SELECT key FROM rss_route_cache)");
   }
 
   register_public(key, pathname, query, self_url, max_entries) {
+    this.public_schedule_state.rows = null;
     this.sql.exec(`INSERT INTO rss_public_feeds (key, pathname, query_json, self_url)
       SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM rss_public_feeds) < ? ON CONFLICT(key) DO NOTHING`,
       key, pathname, JSON.stringify([...query]), self_url, max_entries);
@@ -153,7 +149,15 @@ export class RepositoryRssRouteCache {
   }
 
   public_schedule() {
-    return this.sql.exec("SELECT * FROM rss_public_feeds ORDER BY attempted_at, key").toArray();
+    const now = Date.now();
+    const state = this.public_schedule_state;
+    if (!state.rows || now - state.loaded_at >= 300000 || now < state.loaded_at) {
+      state.rows = new Map(this.sql.exec("SELECT * FROM rss_public_feeds ORDER BY attempted_at, key").toArray()
+        .map(row => [row.key, row]));
+      state.loaded_at = now;
+    }
+    return [...state.rows.values()].map(row => ({ ...row }))
+      .sort((a, b) => a.attempted_at - b.attempted_at || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   }
 
   public_due(before, limit) {
@@ -162,9 +166,12 @@ export class RepositoryRssRouteCache {
 
   public_attempt(key, now) {
     this.sql.exec("UPDATE rss_public_feeds SET attempted_at = ? WHERE key = ?", now, key);
+    const row = this.public_schedule_state.rows?.get(key);
+    if (row) row.attempted_at = now;
   }
 
   delete_public(key) {
+    this.public_schedule_state.rows = null;
     this.sql.exec("DELETE FROM rss_public_feeds WHERE key = ?", key);
   }
 }

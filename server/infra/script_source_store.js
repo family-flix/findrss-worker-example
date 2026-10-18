@@ -112,13 +112,16 @@ export class ScriptSourceStore {
     let cursor;
     do {
       const page = await this.object_store.list({ prefix: `scripts/${script_id}/`, cursor, limit: 100 });
+      let references;
       for (const object of page.objects) {
-        if (new Date(object.uploaded).getTime() >= before || (this.touched.get(object.key) || 0) >= before || referenced().has(object.key)) continue;
+        if (new Date(object.uploaded).getTime() >= before || (this.touched.get(object.key) || 0) >= before || (references ??= referenced()).has(object.key)) continue;
         const cached = this.cache.get(object.key);
         if (cached !== undefined) { this.bytes -= cached.source.length * 2; this.cache.delete(object.key); }
         const pending = this.object_store.delete(object.key).finally(() => this.deleting.delete(object.key));
         this.deleting.set(object.key, pending);
         await pending;
+        // await 期间可能发布新版本；再次检查引用，避免删除新产生的引用。
+        references = undefined;
         this.touched.delete(object.key);
       }
       cursor = page.truncated ? page.cursor : null;

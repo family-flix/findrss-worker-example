@@ -1,7 +1,7 @@
 // 定时清理：保留期裁剪 + 用户事件流的限流裁剪。
 //
-// 由 DO 的 alarm() 驱动。`activity_pruned_at` 是**实例字段**（内存时间戳，最多每小时
-// 真跑一次），不落库——所以它必须留在服务实例上，不能做成无状态函数。
+// 由 DO 的 alarm() 驱动。历史记录和用户事件的清理时间戳保留在实例内存中，
+// 最多每小时执行一次；普通缓存仍按每次 alarm 检查过期。
 import { ActivityEventModel } from "../../domain/activity_log.js";
 import { RETENTION_MILLISECONDS } from "../../lib/constants.js";
 
@@ -13,6 +13,7 @@ export class ServiceMaintenance {
     this.repo = repo;
     /** user_events 清理的内存限流时间戳（最多每小时一次）。 */
     this.activity_pruned_at = 0;
+    this.retention_pruned_at = null;
   }
 
   /**
@@ -21,9 +22,13 @@ export class ServiceMaintenance {
    * @returns {void}
    */
   prune_retention(now) {
-    this.repo.calls.delete_completed_before(now - RETENTION_MILLISECONDS);
-    this.repo.devices.delete_logs_before(now - RETENTION_MILLISECONDS);
-    this.repo.script_logs.delete_before(now - RETENTION_MILLISECONDS);
+    // 租约和快照会频繁唤醒 alarm，历史记录无需跟着每次扫描。
+    if (this.retention_pruned_at === null || now - this.retention_pruned_at >= 3600000) {
+      this.repo.calls.delete_completed_before(now - RETENTION_MILLISECONDS);
+      this.repo.devices.delete_logs_before(now - RETENTION_MILLISECONDS);
+      this.repo.script_logs.delete_before(now - RETENTION_MILLISECONDS);
+      this.retention_pruned_at = now;
+    }
     // route 缓存的 L2 是按绝对过期时间判定的（TTL 只有分钟级，不是保留期），
     // 所以这里直接按 now 删，而不是 `now - RETENTION_MILLISECONDS`。
     this.repo.rss_route_cache.delete_expired(now);

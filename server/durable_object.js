@@ -54,7 +54,7 @@ import { RepositoryUser } from "./repository/user.js";
 import { RepositoryScriptAgent } from "./repository/script_agent.js";
 import { ServiceScriptAgent } from "./service/durable_object/script_agent.js";
 import { create_script_agent_credentials } from "./infra/script_agent_credentials.js";
-import { API_SCHEMA_SQL, migrate_script_tables } from "./repository/schema.js";
+import { API_SCHEMA_SQL, API_SCHEMA_VERSION, migrate_script_tables } from "./repository/schema.js";
 import { ServiceAccessToken } from "./service/durable_object/access_tokens.js";
 import { ServiceActivity } from "./service/durable_object/activity.js";
 import { ServiceAuth } from "./service/durable_object/auth.js";
@@ -149,226 +149,245 @@ export class APIDurableObject extends DurableObject {
     const device_token = env.DEVICE_TOKEN || reader_session_secret(env);
     const cookie_push_uuid = String(env.COOKIE_PUSH_UUID || "").trim();
     const cookie_push_key = String(env.COOKIE_PUSH_KEY || "").trim();
-    this.ctx.storage.transactionSync(() => migrate_script_tables(this.ctx.storage.sql));
-    this.ctx.storage.sql.exec(API_SCHEMA_SQL);
-    const background_task_columns = this.ctx.storage.sql.exec("PRAGMA table_info(background_tasks)").toArray();
-    if (!background_task_columns.some(column => column.name === "source_id")) {
-      this.ctx.storage.sql.exec("ALTER TABLE background_tasks ADD COLUMN source_id TEXT NOT NULL DEFAULT ''");
-    }
-    const agent_columns = this.ctx.storage.sql.exec("PRAGMA table_info(script_agent_settings)").toArray();
-    if (!agent_columns.some(column => column.name === "config_json")) this.ctx.storage.sql.exec("ALTER TABLE script_agent_settings ADD COLUMN config_json TEXT NOT NULL DEFAULT ''");
-    if (!agent_columns.some(column => column.name === "encrypted_keys_json")) this.ctx.storage.sql.exec("ALTER TABLE script_agent_settings ADD COLUMN encrypted_keys_json TEXT NOT NULL DEFAULT '{}'");
-    const credential_columns = this.ctx.storage.sql
-      .exec("PRAGMA table_info(user_credentials)")
-      .toArray();
-    if (!credential_columns.some((column) => column.name === "email_verified_at")) {
-      this.ctx.storage.sql.exec(
-        "ALTER TABLE user_credentials ADD COLUMN email_verified_at INTEGER");
-      // Accounts that predate self-registration were issued by an administrator.
-      this.ctx.storage.sql.exec(
-        "UPDATE user_credentials SET email_verified_at = created_at WHERE email_verified_at IS NULL");
-    }
-    const device_columns = this.ctx.storage.sql.exec("PRAGMA table_info(devices)").toArray();
-    if (!device_columns.some((column) => column.name === "disabled")) {
-      this.ctx.storage.sql.exec(
-        "ALTER TABLE devices ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0");
-    }
-    if (!device_columns.some((column) => column.name === "max_concurrency")) {
-      this.ctx.storage.sql.exec(
-        "ALTER TABLE devices ADD COLUMN max_concurrency INTEGER NOT NULL DEFAULT 1");
-    }
-    const call_columns = this.ctx.storage.sql.exec("PRAGMA table_info(calls)").toArray();
-    if (!call_columns.some((column) => column.name === "access_token_id")) {
-      this.ctx.storage.sql.exec("ALTER TABLE calls ADD COLUMN access_token_id TEXT");
-    }
-    if (!call_columns.some((column) => column.name === "credit_cost")) {
-      this.ctx.storage.sql.exec(
-        "ALTER TABLE calls ADD COLUMN credit_cost INTEGER NOT NULL DEFAULT 0");
-    }
-    if (!call_columns.some((column) => column.name === "coalesce_key")) {
-      this.ctx.storage.sql.exec("ALTER TABLE calls ADD COLUMN coalesce_key TEXT");
-    }
-    const access_token_columns = this.ctx.storage.sql
-      .exec("PRAGMA table_info(access_tokens)")
-      .toArray();
-    if (!access_token_columns.some((column) => column.name === "user_id")) {
-      this.ctx.storage.sql.exec("ALTER TABLE access_tokens ADD COLUMN user_id TEXT");
-    }
-    if (!access_token_columns.some((column) => column.name === "revoked_at")) {
-      this.ctx.storage.sql.exec("ALTER TABLE access_tokens ADD COLUMN revoked_at INTEGER");
-    }
-    if (!access_token_columns.some((column) => column.name === "credit_balance")) {
-      this.ctx.storage.sql.exec(
-        "ALTER TABLE access_tokens ADD COLUMN credit_balance INTEGER NOT NULL DEFAULT 0");
-    }
-    if (!access_token_columns.some((column) => column.name === "total_credits_granted")) {
-      this.ctx.storage.sql.exec(
-        "ALTER TABLE access_tokens ADD COLUMN total_credits_granted INTEGER NOT NULL DEFAULT 0");
-    }
-    if (!access_token_columns.some((column) => column.name === "total_credits_used")) {
-      this.ctx.storage.sql.exec(
-        "ALTER TABLE access_tokens ADD COLUMN total_credits_used INTEGER NOT NULL DEFAULT 0");
-    }
-    this.ctx.storage.sql.exec(`
-      INSERT OR IGNORE INTO users (id, name, created_at, updated_at)
-        SELECT id, CASE WHEN name = '' THEN 'Reader' ELSE name END, created_at, created_at
-        FROM access_tokens;
-      UPDATE access_tokens SET user_id = id WHERE user_id IS NULL OR user_id = '';
-      CREATE INDEX IF NOT EXISTS access_tokens_user
-        ON access_tokens(user_id, created_at DESC);
-    `);
-    // calls_access_token 依赖 calls.access_token_id（上面 ALTER 补的列）：老库上
-    // CREATE TABLE 是 no-op，这个索引必须排在 ALTER 之后，所以不能进 API_SCHEMA_SQL。
-    this.ctx.storage.sql.exec(
-      "CREATE INDEX IF NOT EXISTS calls_access_token ON calls(access_token_id, created_at)");
-    // 同上：calls_coalesce 依赖 calls.coalesce_key（上面 ALTER 补的列），必须排在 ALTER 之后。
-    // 部分索引——绝大多数行的 coalesce_key 是 NULL，不该进索引。
-    this.ctx.storage.sql.exec(
-      "CREATE INDEX IF NOT EXISTS calls_coalesce ON calls(coalesce_key) WHERE coalesce_key IS NOT NULL");
-    // 账本的「行为」标签。历史行留空串，读取端按 method/note 兜底，四个写入点无需改动。
-    const credit_transaction_columns = this.ctx.storage.sql
-      .exec("PRAGMA table_info(credit_transactions)")
-      .toArray();
-    if (!credit_transaction_columns.some((column) => column.name === "subject")) {
-      this.ctx.storage.sql.exec(
-        "ALTER TABLE credit_transactions ADD COLUMN subject TEXT NOT NULL DEFAULT ''");
-    }
-    // 每卡可选积分（NULL 继承活动默认）。
-    const redemption_card_columns = this.ctx.storage.sql
-      .exec("PRAGMA table_info(redemption_cards)")
-      .toArray();
-    if (!redemption_card_columns.some((column) => column.name === "credits")) {
-      this.ctx.storage.sql.exec(
-        "ALTER TABLE redemption_cards ADD COLUMN credits INTEGER");
-    }
-    const discovery_source_columns = this.ctx.storage.sql
-      .exec("PRAGMA table_info(discovery_sources)")
-      .toArray();
-    if (!discovery_source_columns.some(column => column.name === "social_url")) {
-      this.ctx.storage.sql.exec("ALTER TABLE discovery_sources ADD COLUMN social_url TEXT NOT NULL DEFAULT ''");
-    }
-    if (!discovery_source_columns.some(column => column.name === "social_urls_json")) {
-      this.ctx.storage.sql.exec("ALTER TABLE discovery_sources ADD COLUMN social_urls_json TEXT NOT NULL DEFAULT '[]'");
-    }
-    if (!discovery_source_columns.some((column) => column.name === "require_token")) {
-      this.ctx.storage.sql.exec(
-        "ALTER TABLE discovery_sources ADD COLUMN require_token INTEGER NOT NULL DEFAULT 0");
-    }
-    if (!discovery_source_columns.some((column) => column.name === "credit_cost")) {
-      this.ctx.storage.sql.exec("ALTER TABLE discovery_sources ADD COLUMN credit_cost INTEGER NOT NULL DEFAULT 1");
-    }
-    if (!discovery_source_columns.some((column) => column.name === "source_type")) {
-      this.ctx.storage.sql.exec(
-        "ALTER TABLE discovery_sources ADD COLUMN source_type TEXT NOT NULL DEFAULT 'website'");
-    }
-    if (!discovery_source_columns.some((column) => column.name === "avatar_updated_at")) {
-      this.ctx.storage.sql.exec(
-        "ALTER TABLE discovery_sources ADD COLUMN avatar_updated_at INTEGER NOT NULL DEFAULT 0");
-    }
-    const avatar_columns = this.ctx.storage.sql.exec("PRAGMA table_info(discovery_source_avatars)").toArray();
-    for (const [name, definition] of [["poll_policy_json", "TEXT NOT NULL DEFAULT '{\"mode\":\"inherit\"}'"], ["poll_updated_at", "INTEGER NOT NULL DEFAULT 0"]]) {
-      if (!discovery_source_columns.some(column => column.name === name)) this.ctx.storage.sql.exec(`ALTER TABLE discovery_sources ADD COLUMN ${name} ${definition}`);
-    }
-    const snapshot_columns = this.ctx.storage.sql.exec("PRAGMA table_info(discovery_source_snapshots)").toArray();
-    const snapshot_settings_columns = this.ctx.storage.sql.exec("PRAGMA table_info(snapshot_settings)").toArray();
-    if (!snapshot_settings_columns.some(column => column.name === "max_concurrency")) this.ctx.storage.sql.exec("ALTER TABLE snapshot_settings ADD COLUMN max_concurrency INTEGER NOT NULL DEFAULT 4");
-    if (!snapshot_columns.some(column => column.name === "adaptive_interval")) this.ctx.storage.sql.exec("ALTER TABLE discovery_source_snapshots ADD COLUMN adaptive_interval INTEGER NOT NULL DEFAULT 0");
-    if (!snapshot_columns.some(column => column.name === "poll_fingerprint")) this.ctx.storage.sql.exec("ALTER TABLE discovery_source_snapshots ADD COLUMN poll_fingerprint TEXT NOT NULL DEFAULT ''");
-    if (!avatar_columns.some((column) => column.name === "object_key")) {
-      this.ctx.storage.sql.exec("ALTER TABLE discovery_source_avatars ADD COLUMN object_key TEXT NOT NULL DEFAULT ''");
-    }
-    const script_columns = this.ctx.storage.sql
-      .exec("PRAGMA table_info(scripts)")
-      .toArray();
-    if (!script_columns.some((column) => column.name === "path")) {
-      this.ctx.storage.sql.exec("ALTER TABLE scripts ADD COLUMN path TEXT NOT NULL DEFAULT ''");
-    }
-    if (!script_columns.some((column) => column.name === "metadata_json")) {
-      this.ctx.storage.sql.exec(
-        "ALTER TABLE scripts ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
-    }
-    const legacy_scripts = this.ctx.storage.sql
-      .exec(
-        `SELECT route, title, script, metadata_json FROM scripts
-         WHERE path = '' ORDER BY created_at LIMIT 500`)
-      .toArray();
-    for (const legacy_script of legacy_scripts) {
-      if (ScriptModel.fromRow(legacy_script).status === "draft") continue;
-      const path = "/" + String(legacy_script.route).replace(/^\/+/, "");
-      const metadata = {
-        path,
-        name: String(legacy_script.title || legacy_script.route),
-        url: "",
-        maintainers: [],
-        example: path,
-        parameters: {},
-        description: "由旧版函数脚本自动迁移。",
-      };
-      const legacy_handler = String(legacy_script.script).trim();
-      const module_script = `const handler = ${legacy_handler}
-
-export const route = {
-  path: ${JSON.stringify(metadata.path)},
-  name: ${JSON.stringify(metadata.name)},
-  url: "",
-  maintainers: [],
-  handler,
-  example: ${JSON.stringify(metadata.example)},
-  parameters: {},
-  description: ${JSON.stringify(metadata.description)},
-};
-`;
-      this.ctx.storage.sql.exec(
-        `UPDATE scripts
-         SET path = ?, metadata_json = ?, script = ?, updated_at = ?
-         WHERE route = ?`,
-        path,
-        JSON.stringify(metadata),
-        module_script,
-        Date.now(),
-        legacy_script.route);
-    }
-    this.ctx.storage.sql.exec(
-      "CREATE UNIQUE INDEX IF NOT EXISTS scripts_path ON scripts(path) WHERE path <> ''");
-    const legacy_tables = new Set(
-      this.ctx.storage.sql
-        .exec("SELECT name FROM sqlite_master WHERE type = 'table'")
-        .toArray()
-        .map((row) => row.name));
-    if (legacy_tables.has("tasks")) {
-      this.ctx.storage.sql.exec(`
-        INSERT OR IGNORE INTO calls (
-          id, method, publisher_device_id, target_device_id, idempotency_key,
-          args_json, status, assigned_device_id, lease_token, lease_expires_at,
-          attempt_count, result_json, error_message, created_at, updated_at, completed_at
-        )
-        SELECT id, kind, publisher_id, target_client_id, idempotency_key,
-          payload_json, status, assigned_client_id, lease_token, lease_expires_at,
-          attempt_count, result_json, error_message, created_at, updated_at, completed_at
-        FROM tasks
-      `);
-    }
-    if (legacy_tables.has("client_registry")) {
-      const registry_columns = this.ctx.storage.sql
-        .exec("PRAGMA table_info(client_registry)")
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS api_schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)");
+    const schema_version = Number(this.ctx.storage.sql.exec("SELECT version FROM api_schema_version WHERE id = 1").toArray()[0]?.version || 0);
+    if (schema_version < API_SCHEMA_VERSION) {
+      this.ctx.storage.transactionSync(() => migrate_script_tables(this.ctx.storage.sql));
+      this.ctx.storage.sql.exec(API_SCHEMA_SQL);
+      const background_task_columns = this.ctx.storage.sql.exec("PRAGMA table_info(background_tasks)").toArray();
+      if (!background_task_columns.some(column => column.name === "source_id")) {
+        this.ctx.storage.sql.exec("ALTER TABLE background_tasks ADD COLUMN source_id TEXT NOT NULL DEFAULT ''");
+      }
+      const agent_columns = this.ctx.storage.sql.exec("PRAGMA table_info(script_agent_settings)").toArray();
+      if (!agent_columns.some(column => column.name === "config_json")) this.ctx.storage.sql.exec("ALTER TABLE script_agent_settings ADD COLUMN config_json TEXT NOT NULL DEFAULT ''");
+      if (!agent_columns.some(column => column.name === "encrypted_keys_json")) this.ctx.storage.sql.exec("ALTER TABLE script_agent_settings ADD COLUMN encrypted_keys_json TEXT NOT NULL DEFAULT '{}'");
+      const credential_columns = this.ctx.storage.sql
+        .exec("PRAGMA table_info(user_credentials)")
         .toArray();
-      if (!registry_columns.some((column) => column.name === "device_name")) {
+      if (!credential_columns.some((column) => column.name === "email_verified_at")) {
         this.ctx.storage.sql.exec(
-          "ALTER TABLE client_registry ADD COLUMN device_name TEXT NOT NULL DEFAULT ''");
+          "ALTER TABLE user_credentials ADD COLUMN email_verified_at INTEGER");
+        // Accounts that predate self-registration were issued by an administrator.
+        this.ctx.storage.sql.exec(
+          "UPDATE user_credentials SET email_verified_at = created_at WHERE email_verified_at IS NULL");
       }
-      if (!registry_columns.some((column) => column.name === "device_os")) {
+      const device_columns = this.ctx.storage.sql.exec("PRAGMA table_info(devices)").toArray();
+      if (!device_columns.some((column) => column.name === "disabled")) {
         this.ctx.storage.sql.exec(
-          "ALTER TABLE client_registry ADD COLUMN device_os TEXT NOT NULL DEFAULT ''");
+          "ALTER TABLE devices ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!device_columns.some((column) => column.name === "max_concurrency")) {
+        this.ctx.storage.sql.exec(
+          "ALTER TABLE devices ADD COLUMN max_concurrency INTEGER NOT NULL DEFAULT 1");
+      }
+      const call_columns = this.ctx.storage.sql.exec("PRAGMA table_info(calls)").toArray();
+      if (!call_columns.some((column) => column.name === "access_token_id")) {
+        this.ctx.storage.sql.exec("ALTER TABLE calls ADD COLUMN access_token_id TEXT");
+      }
+      if (!call_columns.some((column) => column.name === "credit_cost")) {
+        this.ctx.storage.sql.exec(
+          "ALTER TABLE calls ADD COLUMN credit_cost INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!call_columns.some((column) => column.name === "coalesce_key")) {
+        this.ctx.storage.sql.exec("ALTER TABLE calls ADD COLUMN coalesce_key TEXT");
+      }
+      const access_token_columns = this.ctx.storage.sql
+        .exec("PRAGMA table_info(access_tokens)")
+        .toArray();
+      if (!access_token_columns.some((column) => column.name === "user_id")) {
+        this.ctx.storage.sql.exec("ALTER TABLE access_tokens ADD COLUMN user_id TEXT");
+      }
+      if (!access_token_columns.some((column) => column.name === "revoked_at")) {
+        this.ctx.storage.sql.exec("ALTER TABLE access_tokens ADD COLUMN revoked_at INTEGER");
+      }
+      if (!access_token_columns.some((column) => column.name === "credit_balance")) {
+        this.ctx.storage.sql.exec(
+          "ALTER TABLE access_tokens ADD COLUMN credit_balance INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!access_token_columns.some((column) => column.name === "total_credits_granted")) {
+        this.ctx.storage.sql.exec(
+          "ALTER TABLE access_tokens ADD COLUMN total_credits_granted INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!access_token_columns.some((column) => column.name === "total_credits_used")) {
+        this.ctx.storage.sql.exec(
+          "ALTER TABLE access_tokens ADD COLUMN total_credits_used INTEGER NOT NULL DEFAULT 0");
       }
       this.ctx.storage.sql.exec(`
-        INSERT OR IGNORE INTO devices (
-          device_id, connection_id, methods_json, device_name, device_os,
-          connected_at, last_seen_at, disconnected_at, status
-        )
-        SELECT client_id, connection_id, capabilities_json, device_name, device_os,
-          connected_at, last_seen_at, disconnected_at, status
-        FROM client_registry
+        INSERT OR IGNORE INTO users (id, name, created_at, updated_at)
+          SELECT id, CASE WHEN name = '' THEN 'Reader' ELSE name END, created_at, created_at
+          FROM access_tokens;
+        UPDATE access_tokens SET user_id = id WHERE user_id IS NULL OR user_id = '';
+        CREATE INDEX IF NOT EXISTS access_tokens_user
+          ON access_tokens(user_id, created_at DESC);
       `);
+      // calls_access_token 依赖 calls.access_token_id（上面 ALTER 补的列）：老库上
+      // CREATE TABLE 是 no-op，这个索引必须排在 ALTER 之后，所以不能进 API_SCHEMA_SQL。
+      this.ctx.storage.sql.exec(
+        "CREATE INDEX IF NOT EXISTS calls_access_token ON calls(access_token_id, created_at)");
+      // 同上：calls_coalesce 依赖 calls.coalesce_key（上面 ALTER 补的列），必须排在 ALTER 之后。
+      // 部分索引——绝大多数行的 coalesce_key 是 NULL，不该进索引。
+      this.ctx.storage.sql.exec(
+        "CREATE INDEX IF NOT EXISTS calls_coalesce ON calls(coalesce_key) WHERE coalesce_key IS NOT NULL");
+      // 账本的「行为」标签。历史行留空串，读取端按 method/note 兜底，四个写入点无需改动。
+      const credit_transaction_columns = this.ctx.storage.sql
+        .exec("PRAGMA table_info(credit_transactions)")
+        .toArray();
+      if (!credit_transaction_columns.some((column) => column.name === "subject")) {
+        this.ctx.storage.sql.exec(
+          "ALTER TABLE credit_transactions ADD COLUMN subject TEXT NOT NULL DEFAULT ''");
+      }
+      // 每卡可选积分（NULL 继承活动默认）。
+      const redemption_card_columns = this.ctx.storage.sql
+        .exec("PRAGMA table_info(redemption_cards)")
+        .toArray();
+      if (!redemption_card_columns.some((column) => column.name === "credits")) {
+        this.ctx.storage.sql.exec(
+          "ALTER TABLE redemption_cards ADD COLUMN credits INTEGER");
+      }
+      const discovery_source_columns = this.ctx.storage.sql
+        .exec("PRAGMA table_info(discovery_sources)")
+        .toArray();
+      if (!discovery_source_columns.some(column => column.name === "social_url")) {
+        this.ctx.storage.sql.exec("ALTER TABLE discovery_sources ADD COLUMN social_url TEXT NOT NULL DEFAULT ''");
+      }
+      if (!discovery_source_columns.some(column => column.name === "social_urls_json")) {
+        this.ctx.storage.sql.exec("ALTER TABLE discovery_sources ADD COLUMN social_urls_json TEXT NOT NULL DEFAULT '[]'");
+      }
+      if (!discovery_source_columns.some((column) => column.name === "require_token")) {
+        this.ctx.storage.sql.exec(
+          "ALTER TABLE discovery_sources ADD COLUMN require_token INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!discovery_source_columns.some((column) => column.name === "credit_cost")) {
+        this.ctx.storage.sql.exec("ALTER TABLE discovery_sources ADD COLUMN credit_cost INTEGER NOT NULL DEFAULT 1");
+      }
+      if (!discovery_source_columns.some((column) => column.name === "source_type")) {
+        this.ctx.storage.sql.exec(
+          "ALTER TABLE discovery_sources ADD COLUMN source_type TEXT NOT NULL DEFAULT 'website'");
+      }
+      if (!discovery_source_columns.some((column) => column.name === "avatar_updated_at")) {
+        this.ctx.storage.sql.exec(
+          "ALTER TABLE discovery_sources ADD COLUMN avatar_updated_at INTEGER NOT NULL DEFAULT 0");
+      }
+      const avatar_columns = this.ctx.storage.sql.exec("PRAGMA table_info(discovery_source_avatars)").toArray();
+      for (const [name, definition] of [["poll_policy_json", "TEXT NOT NULL DEFAULT '{\"mode\":\"inherit\"}'"], ["poll_updated_at", "INTEGER NOT NULL DEFAULT 0"]]) {
+        if (!discovery_source_columns.some(column => column.name === name)) this.ctx.storage.sql.exec(`ALTER TABLE discovery_sources ADD COLUMN ${name} ${definition}`);
+      }
+      const snapshot_columns = this.ctx.storage.sql.exec("PRAGMA table_info(discovery_source_snapshots)").toArray();
+      const snapshot_settings_columns = this.ctx.storage.sql.exec("PRAGMA table_info(snapshot_settings)").toArray();
+      if (!snapshot_settings_columns.some(column => column.name === "max_concurrency")) this.ctx.storage.sql.exec("ALTER TABLE snapshot_settings ADD COLUMN max_concurrency INTEGER NOT NULL DEFAULT 4");
+      if (!snapshot_columns.some(column => column.name === "adaptive_interval")) this.ctx.storage.sql.exec("ALTER TABLE discovery_source_snapshots ADD COLUMN adaptive_interval INTEGER NOT NULL DEFAULT 0");
+      if (!snapshot_columns.some(column => column.name === "poll_fingerprint")) this.ctx.storage.sql.exec("ALTER TABLE discovery_source_snapshots ADD COLUMN poll_fingerprint TEXT NOT NULL DEFAULT ''");
+      if (!avatar_columns.some((column) => column.name === "object_key")) {
+        this.ctx.storage.sql.exec("ALTER TABLE discovery_source_avatars ADD COLUMN object_key TEXT NOT NULL DEFAULT ''");
+      }
+      const script_columns = this.ctx.storage.sql
+        .exec("PRAGMA table_info(scripts)")
+        .toArray();
+      if (!script_columns.some((column) => column.name === "path")) {
+        this.ctx.storage.sql.exec("ALTER TABLE scripts ADD COLUMN path TEXT NOT NULL DEFAULT ''");
+      }
+      if (!script_columns.some((column) => column.name === "metadata_json")) {
+        this.ctx.storage.sql.exec(
+          "ALTER TABLE scripts ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
+      }
+      const legacy_scripts = this.ctx.storage.sql
+        .exec(
+          `SELECT route, title, script, metadata_json FROM scripts
+           WHERE path = '' ORDER BY created_at LIMIT 500`)
+        .toArray();
+      for (const legacy_script of legacy_scripts) {
+        if (ScriptModel.fromRow(legacy_script).status === "draft") continue;
+        const path = "/" + String(legacy_script.route).replace(/^\/+/, "");
+        const metadata = {
+          path,
+          name: String(legacy_script.title || legacy_script.route),
+          url: "",
+          maintainers: [],
+          example: path,
+          parameters: {},
+          description: "由旧版函数脚本自动迁移。",
+        };
+        const legacy_handler = String(legacy_script.script).trim();
+        const module_script = `const handler = ${legacy_handler}
+
+  export const route = {
+    path: ${JSON.stringify(metadata.path)},
+    name: ${JSON.stringify(metadata.name)},
+    url: "",
+    maintainers: [],
+    handler,
+    example: ${JSON.stringify(metadata.example)},
+    parameters: {},
+    description: ${JSON.stringify(metadata.description)},
+  };
+  `;
+        this.ctx.storage.sql.exec(
+          `UPDATE scripts
+           SET path = ?, metadata_json = ?, script = ?, updated_at = ?
+           WHERE route = ?`,
+          path,
+          JSON.stringify(metadata),
+          module_script,
+          Date.now(),
+          legacy_script.route);
+      }
+      this.ctx.storage.sql.exec(
+        "CREATE UNIQUE INDEX IF NOT EXISTS scripts_path ON scripts(path) WHERE path <> ''");
+      // 每项历史迁移只属于首次升级；以后递增 schema 版本时不能重放旧任务。
+      if (schema_version < 1) {
+        const legacy_tables = new Set(
+          this.ctx.storage.sql
+            .exec("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .toArray()
+            .map((row) => row.name));
+        if (legacy_tables.has("tasks")) {
+          this.ctx.storage.sql.exec(`
+            INSERT OR IGNORE INTO calls (
+              id, method, publisher_device_id, target_device_id, idempotency_key,
+              args_json, status, assigned_device_id, lease_token, lease_expires_at,
+              attempt_count, result_json, error_message, created_at, updated_at, completed_at
+            )
+            SELECT id, kind, publisher_id, target_client_id, idempotency_key,
+              payload_json, status, assigned_client_id, lease_token, lease_expires_at,
+              attempt_count, result_json, error_message, created_at, updated_at, completed_at
+            FROM tasks
+          `);
+        }
+        if (legacy_tables.has("client_registry")) {
+          const registry_columns = this.ctx.storage.sql
+            .exec("PRAGMA table_info(client_registry)")
+            .toArray();
+          if (!registry_columns.some((column) => column.name === "device_name")) {
+            this.ctx.storage.sql.exec(
+              "ALTER TABLE client_registry ADD COLUMN device_name TEXT NOT NULL DEFAULT ''");
+          }
+          if (!registry_columns.some((column) => column.name === "device_os")) {
+            this.ctx.storage.sql.exec(
+              "ALTER TABLE client_registry ADD COLUMN device_os TEXT NOT NULL DEFAULT ''");
+          }
+          this.ctx.storage.sql.exec(`
+            INSERT OR IGNORE INTO devices (
+              device_id, connection_id, methods_json, device_name, device_os,
+              connected_at, last_seen_at, disconnected_at, status
+            )
+            SELECT client_id, connection_id, capabilities_json, device_name, device_os,
+              connected_at, last_seen_at, disconnected_at, status
+            FROM client_registry
+          `);
+        }
+        this.ctx.storage.sql.exec("DELETE FROM rss_route_cache_chunks WHERE key NOT IN (SELECT key FROM rss_route_cache)");
+        // 历史数据只回填一次；后续增删和批量状态变更由 SQLite 触发器维护。
+        this.ctx.storage.sql.exec("DELETE FROM call_status_counts");
+        this.ctx.storage.sql.exec("INSERT INTO call_status_counts(status, count) SELECT status, COUNT(*) FROM calls GROUP BY status");
+      }
+      this.ctx.storage.transactionSync(() => {
+        if (schema_version < 1) {
+          const scripts = new RepositoryScript({ sql: this.ctx.storage.sql }).list();
+          new RepositoryPlatform({ sql: this.ctx.storage.sql }).import_published(scripts);
+          new RepositoryTag({ sql: this.ctx.storage.sql }).import_published(scripts);
+        }
+        this.ctx.storage.sql.exec("INSERT OR REPLACE INTO api_schema_version(id, version) VALUES (1, ?)", API_SCHEMA_VERSION);
+      });
     }
     /** 纯 SQL 存储层：每个聚合一个 RepositoryX，只回原始行/Set/数字。 */
     this.repo = {
@@ -405,11 +424,6 @@ export const route = {
      * `infra/` import `repository/`，所以持久化只能由组合根注进去），而
      * `RepositoryRssRouteCache` 的方法名**就是** store 接口，直接注入即可。
      */
-    this.ctx.storage.transactionSync(() => {
-      const scripts = this.repo.scripts.list();
-      this.repo.platforms.import_published(scripts);
-      this.repo.tags.import_published(scripts);
-    });
     const ports = {
       object_store: create_api_object_store(env),
       transaction: callback => this.ctx.storage.transactionSync(callback),
@@ -460,7 +474,13 @@ export const route = {
       await this.app.device_tokens.import_legacy(env.DEVICE_TOKEN);
       await this.app.cookie_push_settings.import_legacy(cookie_push_uuid, cookie_push_key);
       await seed_default_data({ repo: this.repo, storage: this.ctx.storage, script: apple_script });
-      try { await this.app.scripts.migrate_script_storage(); }
+      try {
+        if (!await this.ctx.storage.get("script_storage_migrated_v1")) {
+          await this.app.scripts.migrate_script_storage();
+          if (this.app.scripts.source_store.available && !this.app.scripts.migration_pending)
+            await this.ctx.storage.put("script_storage_migrated_v1", true);
+        }
+      }
       catch (error) { this.app.scripts.migration_pending = true; console.warn("Script storage migration failed", error.message); }
     });
     this.app.auth = new ServiceAuth({
@@ -614,7 +634,11 @@ export const route = {
   async maintain_alarm() {
     const now = Date.now();
     if (this.app.scripts.migration_pending) {
-      try { await this.app.scripts.migrate_script_storage(); }
+      try {
+        await this.app.scripts.migrate_script_storage();
+        if (this.app.scripts.source_store.available && !this.app.scripts.migration_pending)
+          await this.ctx.storage.put("script_storage_migrated_v1", true);
+      }
       catch (error) { this.app.scripts.migration_pending = true; console.warn("Script storage migration retry failed", error.message); }
     }
     this.ctx.waitUntil(this.app.scripts.prune_script_objects().catch(error => console.warn("Script object cleanup failed", error.message)));
