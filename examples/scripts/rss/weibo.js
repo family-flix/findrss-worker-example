@@ -511,6 +511,7 @@ export class WeiboRSS extends RSSScript {
           "UPSTREAM_INVALID_RESPONSE",
         );
       }
+      await WeiboRSS.resolve_references(ctx, items, link);
       const result_8 = await WeiboRSS.fetch_profile(ctx, uid, link);
       if (result_8.error) return result_8;
       const result_9 = WeiboRSS.build_channel(
@@ -685,6 +686,7 @@ export class WeiboRSS extends RSSScript {
       .join("");
   }
   static status_text(status) {
+    if (!status) return "";
     const long_text = status.longText?.longTextContent;
     return (
       (long_text &&
@@ -721,83 +723,125 @@ export class WeiboRSS extends RSSScript {
       })
       .filter(Boolean);
   }
-  static parse_feed(status, uid) {
-    const id = String(status.idstr || status.id);
+  static valid_id(value) {
+    return /^\d{1,24}$/.test(String(value || "")) && (typeof value !== "number" || Number.isSafeInteger(value));
+  }
+  static status_unavailable(status) {
+    return [true, 1, "1"].includes(status?.deleted) || [7, "7"].includes(status?.state);
+  }
+  static has_status_content(status) {
+    return !!status && (typeof status.text_raw === "string" || typeof status.text === "string"
+      || typeof status.longText?.longTextContent === "string" || WeiboRSS.status_images(status).length > 0
+      || status.page_info?.type === "video");
+  }
+  static parse_feed(status, uid, ancestors = []) {
+    const raw_id = status.idstr || status.id;
+    if (!WeiboRSS.valid_id(raw_id)) return null;
+    const id = String(raw_id);
     const text = WeiboRSS.status_text(status);
-    const retweet = status.retweeted_status;
-    const quoted = retweet
-      ? "转发 @" +
-        (retweet.user?.screen_name || "[原微博不可访问]") +
-        "：" +
-        WeiboRSS.status_text(retweet)
-      : "";
-    const images = [
-      ...new Set([
-        ...WeiboRSS.status_images(status),
-        ...(retweet ? WeiboRSS.status_images(retweet) : []),
-      ]),
-    ];
-    const page =
-      status.page_info?.type === "video"
-        ? status.page_info
-        : retweet?.page_info || status.page_info;
+    const images = [...new Set(WeiboRSS.status_images(status))];
+    const page = status.page_info;
     const media = page?.media_info || {};
     const urls = page?.urls || {};
-    const video =
-      page?.type === "video"
-        ? WeiboRSS.public_url(
-            urls.mp4_720p_mp4 ||
-              urls.mp4_hd_mp4 ||
-              media.stream_url_hd ||
-              media.mp4_hd_url ||
-              media.stream_url ||
-              media.mp4_sd_url,
-          )
-        : "";
-    const description = text + (quoted ? "\n\n" + quoted : "");
-    return {
-      id,
-      title: Array.from(description).slice(0, 100).join("") || "微博 " + id,
-      description,
-      content:
-        "<p>" +
-        WeiboRSS.render_text(
-          text,
-          status.text,
-          status.longText?.longTextContent,
-        ) +
-        "</p>" +
-        (quoted
-          ? "<blockquote>" +
-            WeiboRSS.render_text(
-              quoted,
-              retweet.text,
-              retweet.longText?.longTextContent,
-            ) +
-            "</blockquote>"
-          : ""),
-      link:
-        "https://weibo.com/" + uid + "/" + (status.mblogid || status.bid || id),
-      author: status.user?.screen_name || "",
-      published: status.created_at,
-      image: images[0] || WeiboRSS.public_url(page?.page_pic?.url) || undefined,
-      images,
-      ...(video
-        ? {
-            enclosure: {
-              url: video,
-              type: "video/mp4",
-            },
-          }
-        : {}),
+    const video = page?.type === "video" ? WeiboRSS.public_url(
+      urls.mp4_720p_mp4 || urls.mp4_hd_mp4 || media.stream_url_hd || media.mp4_hd_url || media.stream_url || media.mp4_sd_url,
+    ) : "";
+    const author_id = status.user?.idstr || status.user?.id || uid;
+    const references = [];
+    const add = (relation, original, target_id) => {
+      target_id = original?.idstr || original?.id || target_id;
+      if (!WeiboRSS.valid_id(target_id) || String(target_id) === id) return;
+      const original_uid = original?.user?.idstr || original?.user?.id;
+      const unavailable = WeiboRSS.status_unavailable(original);
+      const child = !unavailable && WeiboRSS.has_status_content(original) && ancestors.length < 4 && !ancestors.includes(String(target_id))
+        ? WeiboRSS.parse_feed(original, original_uid, [...ancestors, id]) : null;
+      references.push({ relation, id: String(target_id),
+        link: child?.link || "https://weibo.com/detail/" + target_id,
+        ...(child ? { item: child } : {}), ...(unavailable ? { unavailable: true } : {}),
+      });
     };
+    add("repost", status.retweeted_status,
+      status.retweeted_status_idstr || status.retweeted_status_id_str || status.retweeted_status_id);
+    add("reply", status.in_reply_to_status || status.reply_to_status,
+      status.in_reply_to_status_idstr || status.in_reply_to_status_id_str || status.in_reply_to_status_id
+      || status.reply_to_status_idstr || status.reply_to_status_id_str || status.reply_to_status_id);
+    add("quote", status.quoted_status,
+      status.quoted_status_idstr || status.quoted_status_id_str || status.quoted_status_id);
+    return {
+      id, kind: references.some(ref => ref.relation === "repost") ? "repost"
+        : references.some(ref => ref.relation === "reply") ? "reply" : references.length ? "quote" : "post",
+      title: Array.from(text || "").slice(0, 100).join("") || "微博 " + id,
+      description: text,
+      content: "<p>" + WeiboRSS.render_text(text, status.text, status.longText?.longTextContent) + "</p>",
+      link: author_id ? "https://weibo.com/" + author_id + "/" + (status.mblogid || status.bid || id) : "https://weibo.com/detail/" + id,
+      author: status.user?.screen_name || "", published: status.created_at,
+      image: images[0] || WeiboRSS.public_url(typeof page?.page_pic === "string" ? page.page_pic : page?.page_pic?.url) || undefined,
+      images, ...(video ? { enclosure: { url: video, type: "video/mp4" } } : {}),
+      ...(references.length ? { references } : {}),
+    };
+  }
+  static async resolve_references(ctx, items, link) {
+    const known = new Map(items.map(item => [item.id, item]));
+    const unavailable = new Set();
+    const remember = (item) => {
+      for (const reference of item.references || []) {
+        if (reference.unavailable) unavailable.add(reference.id);
+        if (reference.item && !known.has(reference.item.id)) {
+          known.set(reference.item.id, reference.item);
+          remember(reference.item);
+        }
+      }
+    };
+    for (const item of items) remember(item);
+    let remaining = 8;
+    const resolve = async (item, path = []) => {
+      if (path.length >= 4) return;
+      for (const reference of item.references || []) {
+        if (path.includes(reference.id) || reference.id === item.id) continue;
+        if (!reference.item && !reference.unavailable) {
+          if (WeiboRSS.valid_id(reference.id) && !known.has(reference.id) && !unavailable.has(reference.id) && remaining > 0) {
+            remaining--;
+            known.set(reference.id, null);
+            const result = await WeiboRSS.request_text(ctx, "https://weibo.com/ajax/statuses/show?id=" + reference.id, {
+              headers: WeiboRSS.request_headers(link, true), cookie_headers: { "x-xsrf-token": "XSRF-TOKEN" }, timeout_ms: 3000,
+            });
+            if (!result.error) {
+              const parsed = parseJSON(result.data);
+              if (!parsed.error) {
+                const status = parsed.data?.data || parsed.data;
+                if (String(status?.idstr || status?.id) === reference.id) {
+                  if (WeiboRSS.status_unavailable(status)) unavailable.add(reference.id);
+                  else if (WeiboRSS.has_status_content(status)) {
+                    const original = WeiboRSS.parse_feed(status);
+                    known.set(reference.id, original);
+                    if (original) remember(original);
+                  }
+                }
+              }
+            }
+          }
+          if (unavailable.has(reference.id)) {
+            reference.unavailable = true;
+            continue;
+          }
+          const original = known.get(reference.id);
+          // 拷贝引用子树，避免共享列表对象形成循环或重复改写媒体。
+          if (original) {
+            const clone = parseJSON(JSON.stringify(original));
+            if (!clone.error) { reference.item = clone.data; reference.link = clone.data.link; }
+          }
+        }
+        if (reference.item) await resolve(reference.item, [...path, item.id]);
+      }
+    };
+    for (const item of items) await resolve(item);
   }
   static parse_feeds(html, uid) {
     try {
       const items = [];
       const seen = {};
       const add = function (item) {
-        if (item.id && !seen[item.id]) {
+        if (item?.id && !seen[item.id]) {
           seen[item.id] = true;
           items.push(item);
         }
@@ -848,23 +892,47 @@ export class WeiboRSS extends RSSScript {
         if (!text) {
           continue;
         }
-        const link = card.match(
-          /href=["']((?:https?:)?\/\/weibo\.com\/\d+\/[A-Za-z0-9]+|\/\d+\/[A-Za-z0-9]+)["'][^>]*\bdate=["'](\d+)["']/i,
-        );
+        const parsed_card = utils.document_nodes(card);
+        if (parsed_card.error) throw parsed_card.error;
+        const root = parsed_card.data;
+        const forward = utils.first(root, '[node-type="feed_list_forwardContent"]');
+        const inside_forward = node => {
+          for (let parent = node; parent; parent = parent.parent) if (parent === forward) return true;
+          return false;
+        };
+        const links = utils.select(root, "a[date]").filter(node => /^(?:(?:https?:)?\/\/weibo\.com)?\/\d+\/[A-Za-z0-9]+$/.test(node.attrs.href || ""));
+        const link = links.find(node => !inside_forward(node));
+        const absolute_link = value => value ? (value.startsWith("//") ? "https:" + value
+          : value.startsWith("/") ? "https://weibo.com" + value : value) : "";
         const description = utils.plain_text(text);
+        const original_url = links.find(inside_forward)?.attrs.href;
+        const original_id = card.match(/\b(?:omid|rootmid)=(\d+)/i)?.[1];
+        const original_link = absolute_link(original_url) || (original_id ? "https://weibo.com/detail/" + original_id : "");
+        const original_text = utils.first(forward, '[node-type="feed_list_reason"]') || utils.first(forward, '[node-type="feed_list_content"]');
+        const node_text = node => !node ? "" : node.tag === "img" ? node.attrs.alt || "" : node.tag === "br" ? "\n"
+          : node.text || node.children.map(node_text).join("");
+        const original_description = node_text(original_text).trim();
+        const references = forward && (original_id || original_link) ? [{ relation: "repost",
+          ...(original_id ? { id: original_id } : {}), link: original_link,
+          ...(original_text && original_link ? { item: {
+            id: original_id || original_link, kind: "post", title: Array.from(original_description).slice(0, 100).join("") || "原微博",
+            link: original_link, description: original_description,
+            content: "<p>" + WeiboRSS.render_text(original_description, card) + "</p>",
+            author: utils.attribute(forward, "a[nick-name]", "nick-name") || utils.field(forward, "a[usercard]"),
+            published: Number(links.find(inside_forward)?.attrs.date) || undefined,
+            images: utils.select(forward, "img").filter(node => !/^\[[^\[\]]+\]$/.test(node.attrs.alt || ""))
+              .map(node => WeiboRSS.public_url(node.attrs["data-src"] || node.attrs.src)).filter(Boolean),
+          } } : {}),
+        }] : [];
         add({
           id,
+          kind: forward ? "repost" : "post",
+          ...(references.length ? { references } : {}),
           title: Array.from(description).slice(0, 100).join("") || "微博 " + id,
           description,
           content: "<p>" + WeiboRSS.render_text(description, text) + "</p>",
-          link: link
-            ? link[1].startsWith("//")
-              ? "https:" + link[1]
-              : link[1].startsWith("/")
-                ? "https://weibo.com" + link[1]
-                : link[1]
-            : "https://weibo.com/" + uid + "/" + id,
-          published: link ? Number(link[2]) : undefined,
+          link: absolute_link(link?.attrs.href) || "https://weibo.com/" + uid + "/" + id,
+          published: link ? Number(link.attrs.date) : undefined,
           images: [],
         });
       }
@@ -905,7 +973,7 @@ export class WeiboRSS extends RSSScript {
   static build_channel(ctx, uid, link, items, profile) {
     try {
       const values_21 = items;
-      const result_22 = utils.map_results(values_21, function (item) {
+      const proxy_item = function (item) {
         try {
           const values_16 = item.images || [];
           const result_17 = utils.map_results(values_16, function (url) {
@@ -944,8 +1012,15 @@ export class WeiboRSS extends RSSScript {
             },
           );
           if (result_20.error) return result_20;
+          const references = utils.map_results(item.references || [], function (reference) {
+            if (!reference.item) return Result.Ok(reference);
+            const child = proxy_item(reference.item);
+            return child.error ? child : Result.Ok({ ...reference, item: child.data });
+          });
+          if (references.error) return references;
           return Result.Ok({
             ...item,
+            ...(references.data.length ? { references: references.data } : {}),
             image: result_18.data || undefined,
             images,
             content:
@@ -963,7 +1038,8 @@ export class WeiboRSS extends RSSScript {
         } catch (error) {
           return Result.Err(error, error?.code ?? "UPSTREAM_INVALID_RESPONSE");
         }
-      });
+      };
+      const result_22 = utils.map_results(values_21, proxy_item);
       if (result_22.error) return result_22;
       items = result_22.data;
       const name = profile?.name || items[0]?.author || "微博 · " + uid;

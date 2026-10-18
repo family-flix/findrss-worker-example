@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { FeedModel } from "../server/domain/feed_format.js";
-import { SCRIPT_AGENT_FEED_EXAMPLE, SCRIPT_AGENT_MEDIA_FEED_EXAMPLE, SCRIPT_AGENT_FEED_KNOWLEDGE } from "../server/lib/script_agent_feed_knowledge.js";
+import { SCRIPT_AGENT_FEED_EXAMPLE, SCRIPT_AGENT_MEDIA_FEED_EXAMPLE, SCRIPT_AGENT_REFERENCE_FEED_EXAMPLE, SCRIPT_AGENT_FEED_KNOWLEDGE } from "../server/lib/script_agent_feed_knowledge.js";
 
 const parser = new XMLParser({ ignoreAttributes: false, parseTagValue: false,
   isArray: name => ["item", "entry", "category", "media:content", "media:group"].includes(name) });
@@ -71,8 +71,27 @@ test("知识中的最低结构、错误 channel 包装和不支持的 RSS 字段
   assert.equal(channel.item[0].pubDate, undefined);
   assert.equal(channel.item[0]["content:encoded"], undefined);
   assert.equal(channel.item[0]["media:thumbnail"], undefined);
-  for (const example of [SCRIPT_AGENT_FEED_EXAMPLE, SCRIPT_AGENT_MEDIA_FEED_EXAMPLE]) {
+  for (const example of [SCRIPT_AGENT_FEED_EXAMPLE, SCRIPT_AGENT_MEDIA_FEED_EXAMPLE, SCRIPT_AGENT_REFERENCE_FEED_EXAMPLE]) {
     assert.ok(SCRIPT_AGENT_FEED_KNOWLEDGE.includes(JSON.stringify(example, null, 2)));
     assert.ok(Object.isFrozen(example.items));
+  }
+});
+
+
+test("助手知识中的原帖引用在 RSS/Atom 中输出子 item/entry，保留各自正文与作者", () => {
+  const raw = SCRIPT_AGENT_REFERENCE_FEED_EXAMPLE;
+  for (const format of ["rss", "atom"]) {
+    const doc = document(raw, format);
+    const parents = format === "rss" ? doc.rss.channel.item : doc.feed.entry;
+    assert.equal(parents.length, 1);
+    const parent = parents[0];
+    assert.equal(parent["findrss:kind"]["#text"], "reply");
+    const reference = parent["findrss:reference"][0];
+    assert.equal(reference["@_relation"], "reply");
+    assert.equal(reference["@_ref"], "post-1");
+    const original = format === "rss" ? reference.item[0] : reference.entry[0];
+    assert.equal(original.title, "原帖");
+    assert.equal(format === "rss" ? original["dc:creator"] : original.author.name, "原帖作者");
+    assert.equal(parent["findrss:reference"][1]["@_unavailable"], "true");
   }
 });

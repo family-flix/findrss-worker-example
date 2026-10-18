@@ -42,6 +42,32 @@ function fixture(public_source = true, social_routes = []) {
     set_public(value) { public_source = value; }, fail(value = true) { fail = value; } };
 }
 
+for (const public_source of [true, false]) test(`${public_source ? "公开" : "私密"} XML 刷新计算图片元数据并持久保存，RSS/Atom 和读取共用结果`, async t => {
+  const f = fixture(public_source); t.after(() => f.db.close());
+  f.row.script = `export const route = { path: "/snapshot/:id", async handler() {
+    return Result.Ok({ title: "图片源", items: [{ title: "图集", image: "https://example.com/cover.jpg",
+      images: ["https://example.com/cover.jpg", "https://example.com/second.jpg", "https://example.com/bad.jpg"] }] });
+  } };`;
+  const calls = [];
+  f.ports.fetch_cover_metadata = async url => {
+    calls.push(url);
+    if (url.endsWith("bad.jpg")) throw new Error("offline");
+    return { width: 800, height: 450, blurhash: "LKO2?U%2Tw=w]~RBVZRi};RPxuwH" };
+  };
+  const options = public_source ? {} : { token: "user" };
+  const rss = await f.serve("rss", options, true);
+  assert.equal(calls.length, 3);
+  assert.match(rss.body, /<media:thumbnail url="https:\/\/example.com\/cover.jpg" width="800" height="450" blurhash="LKO2\?U%2Tw=w\]~RBVZRi};RPxuwH"/);
+  assert.match(rss.body, /url="https:\/\/example.com\/second.jpg" medium="image" width="800" height="450" blurhash=/);
+  assert.match(rss.body, /url="https:\/\/example.com\/bad.jpg" medium="image" \/>/);
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo, object_store: f.object_store });
+  const atom = await f.serve("atom", options);
+  assert.match(atom.body, /width="800" height="450" blurhash=/);
+  assert.equal(calls.length, 3);
+  assert.equal((await f.serve("rss", options)).body, rss.body);
+  assert.equal(calls.length, 3);
+});
+
 for (const public_source of [true, false]) test(`${public_source ? "公开" : "私密"} XML 按完整源地址写入社媒主页，持久化后 RSS/Atom 均保留`, async t => {
   const routes = [
     { feed_url: "{{hostname}}/rss/snapshot/1?account=other", social_url: "https://x.com/other" },

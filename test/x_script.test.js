@@ -69,3 +69,100 @@ test('X 不把缺失时间线或不安全的用户 ID 当作空列表，不执�
     return true;
   });
 });
+
+const tweet = (id, text, fields = {}, user = 'original') => ({ rest_id: id,
+  core: { user_results: { result: { core: { name: user, screen_name: user } } } },
+  legacy: { full_text: text, created_at: 'Sat Oct 17 01:00:00 +0000 2026', ...fields },
+});
+const timeline_html = tweets => stream({ data: { user_result_by_screen_name: { result: {
+  rest_id: '123', legacy: { name: '订阅用户' }, profile_user_originals_timeline: { timeline: {
+    instructions: [{ entries: tweets.map(result => ({ content: { itemContent: { tweet_results: { result } } } })) }],
+  } },
+} } } });
+
+test('X 转发、引用与回复保留当前帖与原帖作者和媒体，引用子项不混进时间线', async t => {
+  const saved = globalThis.fetch;
+  t.after(() => { globalThis.fetch = saved; });
+  const original = tweet('100', '原帖正文', { extended_entities: { media: [{ type: 'photo', media_url_https: 'https://pbs.twimg.com/original.jpg' }] } });
+  const calls = [];
+  globalThis.fetch = async url => {
+    calls.push(url);
+    return new Response(timeline_html([
+      tweet('200', '转发', { retweeted_status_result: { result: { tweet: original } } }, 'reposter'),
+      { ...tweet('201', '引用点评', { quoted_status_id_str: '100' }, 'quoter'), quoted_status_result: { result: original } },
+      tweet('202', '我的回复', { in_reply_to_status_id_str: '100', in_reply_to_screen_name: 'original' }, 'replier'),
+    ]));
+  };
+  const feed = JSON.parse((await run('example')).output);
+  assert.equal(calls.length, 1, '回复优先复用页面中已有的原帖，不重复查询');
+  assert.equal(feed.items.length, 3);
+  for (const [index, kind] of ['repost', 'quote', 'reply'].entries()) {
+    const item = feed.items[index];
+    assert.equal(item.kind, kind);
+    assert.equal(item.references[0].relation, kind);
+    assert.equal(item.references[0].item.id, 'x:tweet:100');
+    assert.equal(item.references[0].item.author.name, 'original');
+    assert.equal(item.references[0].item.link, 'https://x.com/original/status/100');
+    assert.equal(item.references[0].item.published, '2026-10-17T01:00:00.000Z');
+    assert.deepEqual(item.references[0].item.images, ['https://pbs.twimg.com/original.jpg']);
+    assert.equal(item.images, undefined);
+  }
+  assert.equal(feed.items[0].link, 'https://x.com/reposter/status/200');
+  assert.equal(feed.items[2].description, '我的回复');
+});
+
+for (const operation of ['TweetResultByRestId', 'TweetDetail']) test('X 使用 ' + operation + ' 补取回复原帖，共享引用只查询一次且失败保留链接', async t => {
+  const saved = globalThis.fetch;
+  t.after(() => { globalThis.fetch = saved; });
+  const calls = [];
+  const client = 'queryId:"detail_1",operationName:"' + operation + '",featureSwitches:["other"];AAAAA' + 'a'.repeat(64);
+  globalThis.fetch = async url => {
+    calls.push(url);
+    if (url.includes('abs.twimg')) return new Response(client);
+    if (url.includes('/' + operation + '?')) {
+      const variables = JSON.parse(new URL(url).searchParams.get('variables'));
+      const id = variables.tweetId || variables.focalTweetId;
+      return id === '100' ? Response.json({ data: { tweetResult: { result: tweet('100', '补取原帖') } } }) : new Response('denied', { status: 403 });
+    }
+    return new Response('<script src="https://abs.twimg.com/responsive-web/client-web/main.123.js"></script>' + timeline_html([
+      tweet('200', '回复一', { in_reply_to_status_id_str: '100' }),
+      tweet('201', '回复二', { in_reply_to_status_id_str: '100' }),
+      tweet('202', '回复已删帖', { in_reply_to_status_id_str: '999' }),
+      tweet('203', '再次回复已删帖', { in_reply_to_status_id_str: '999' }),
+    ]));
+  };
+  const feed = JSON.parse((await run('example')).output);
+  assert.equal(calls.filter(url => url.includes('abs.twimg')).length, 1);
+  assert.equal(calls.filter(url => url.includes('/' + operation + '?')).length, 2);
+  for (const item of feed.items.slice(0, 2)) assert.equal(item.references[0].item.description, '补取原帖');
+  for (const item of feed.items.slice(2)) {
+    assert.equal(item.kind, 'reply');
+    assert.equal(item.references[0].id, 'x:tweet:999');
+    assert.equal(item.references[0].link, 'https://x.com/i/web/status/999');
+    assert.equal(item.references[0].item, undefined);
+  }
+});
+
+test('X 多种引用并存，原帖查询有预算，明确不可用的引用不重复查询', async t => {
+  const saved = globalThis.fetch;
+  t.after(() => { globalThis.fetch = saved; });
+  let queries = 0;
+  const client = 'queryId:"detail_1",operationName:"TweetResultByRestId",featureSwitches:[];AAAAA' + 'a'.repeat(64);
+  globalThis.fetch = async url => {
+    if (url.includes('abs.twimg')) return new Response(client);
+    if (url.includes('/TweetResultByRestId?')) { queries++; return new Response('denied', { status: 403 }); }
+    return new Response('<script src="https://abs.twimg.com/responsive-web/client-web/main.123.js"></script>' + timeline_html([
+      { ...tweet('300', '回复并引用', { in_reply_to_status_id_str: '100', quoted_status_id_str: '99' }),
+        quoted_status_result: { result: { __typename: 'TweetUnavailable' } } },
+      ...Array.from({ length: 10 }, (_, i) => tweet(String(200 + i), '回复', { in_reply_to_status_id_str: String(100 + i) })),
+    ]));
+  };
+  const feed = JSON.parse((await run('example')).output);
+  assert.equal(queries, 8);
+  assert.equal(feed.items.length, 11);
+  const item = feed.items[0];
+  assert.equal(item.kind, 'reply');
+  assert.deepEqual(item.references.map(ref => ref.relation), ['reply', 'quote']);
+  assert.equal(item.references[1].unavailable, true);
+  assert.equal(item.references[1].id, 'x:tweet:99');
+});

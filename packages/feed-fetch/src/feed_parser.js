@@ -137,10 +137,11 @@ function node_children(node) {
  * @param {string} name
  * @returns {unknown[]}
  */
-function descendants(node, name) {
+function descendants(node, name, exclude) {
   const result = [];
   const walk = (children) => {
     for (const entry of children) {
+      if (exclude?.(entry)) continue;
       if (element_name(entry) === name) result.push(entry);
       walk(element_children(entry));
     }
@@ -375,6 +376,26 @@ function extract_thumbnail(item, base_url) {
   return "";
 }
 
+function image_dimension(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 && number <= 100000 ? number : 0;
+}
+
+function extract_thumbnail_metadata(item, base_url, thumbnail) {
+  const result = {};
+  for (const node of descendants_with_attribute(item, ["media:thumbnail", "thumbnail", "media:content", "content", "enclosure"], "url")) {
+    const name = element_name(node);
+    if (!["media:thumbnail", "thumbnail"].includes(name) && attribute(node, "medium") !== "image" && !lower(attribute(node, "type")).startsWith("image/")) continue;
+    if (resolve_absolute_url(attribute(node, "url"), base_url) !== thumbnail) continue;
+    const width = image_dimension(attribute(node, "width")), height = image_dimension(attribute(node, "height"));
+    const blurhash = attribute(node, "blurhash");
+    if (width) result.thumbnail_width = width;
+    if (height) result.thumbnail_height = height;
+    if (blurhash) result.thumbnail_blurhash = blurhash;
+  }
+  return result;
+}
+
 /**
  * 文章图片列表（X/微博类「文本 + 多图」的载体）。收集全部图片型的
  * `media:content` / `content`（`medium="image"` 或 `type` 以 `image/` 开头），
@@ -472,7 +493,8 @@ function extract_media(item, base_url, namespaces) {
     if (!thumbnail || resolve_absolute_url(attribute(thumbnail, "url"), base_url) !== url) continue;
     if (url && video_url) pairs.push({ node: group, kind: "live_photo", url, video_url,
       poster: url, key: attribute(video, "key"), width: Number(attribute(video, "width")) || 0,
-      height: Number(attribute(video, "height")) || 0 });
+      height: Number(attribute(video, "height")) || 0,
+      ...(attribute(image, "blurhash") ? { blurhash: attribute(image, "blurhash") } : {}) });
   }
   const media = [], seen = new Set();
   const push = (value) => {
@@ -500,7 +522,8 @@ function extract_media(item, base_url, namespaces) {
     const parsed = new URL(url);
     push({ kind, url, type, key: attribute(node, "key") || parsed.searchParams.get("key") || "",
       poster: resolve_absolute_url(attribute(node, "poster") || attribute(first_of(node, "media:thumbnail"), "url") || parsed.searchParams.get("poster") || "", base_url),
-      width: Number(attribute(node, "width")) || 0, height: Number(attribute(node, "height")) || 0 });
+      width: Number(attribute(node, "width")) || 0, height: Number(attribute(node, "height")) || 0,
+      ...(kind === "image" && attribute(node, "blurhash") ? { blurhash: attribute(node, "blurhash") } : {}) });
   }
   return media;
 }
@@ -533,7 +556,40 @@ function extract_entry_type(item) {
   return "";
 }
 
-function parse_rss_item(item, base_url, namespaces) {
+const FINDRSS_NAMESPACE = "https://findrss.cloud/ns/reader";
+
+function findrss_field(node, name, namespaces) {
+  const qualified = element_name(node);
+  if (!qualified || local_name(qualified) !== name) return false;
+  const prefix = qualified.includes(":") ? qualified.split(":")[0] : "";
+  return namespaces.get(node)?.[prefix] === FINDRSS_NAMESPACE;
+}
+
+function item_extensions(node, format, base_url, namespaces, depth) {
+  const fields = node_children(node);
+  const kind = text_content(fields.find(field => findrss_field(field, "kind", namespaces)));
+  const references = fields.filter(field => findrss_field(field, "reference", namespaces)).flatMap(field => {
+    const relation = attribute(field, "relation"), id = attribute(field, "ref");
+    const link = resolve_absolute_url(attribute(field, "href"), base_url);
+    if (!["reply", "repost", "quote"].includes(relation) || (!id && !link)) return [];
+    const unavailable = attribute(field, "unavailable") === "true";
+    const original = child(field, format === "rss" ? "item" : "entry");
+    const item = original && !unavailable && depth < 4
+      ? (format === "rss" ? parse_rss_item(original, base_url, namespaces, depth + 1)
+        : parse_atom_entry(original, base_url, namespaces, depth + 1)) : null;
+    return [{ relation, id, link, ...(unavailable ? { unavailable: true } : {}), ...(item ? { item } : {}) }];
+  });
+  return { ...(["post", "reply", "repost", "quote"].includes(kind) ? { kind } : {}),
+    ...(references.length ? { references } : {}) };
+}
+
+function without_references(node, namespaces) {
+  return { ...node, [element_name(node)]: node_children(node).filter(field => !findrss_field(field, "reference", namespaces)) };
+}
+
+function parse_rss_item(item, base_url, namespaces, depth = 0) {
+  const extensions = item_extensions(item, "rss", base_url, namespaces, depth);
+  item = without_references(item, namespaces);
   const link = text_content(first_of(item, "link"));
   const media = extract_media(item, base_url, namespaces);
   const thumbnail = extract_thumbnail(item, base_url) || media.find(value => ["image", "live_photo"].includes(value.kind))?.url || media.find(value => value.poster)?.poster || "";
@@ -541,6 +597,7 @@ function parse_rss_item(item, base_url, namespaces) {
   const first_video = media.find(value => value.kind === "video");
   return {
     guid: text_content(first_of(item, "guid")) || link,
+    ...extensions,
     ...(extract_entry_type(item) ? { type: extract_entry_type(item) } : {}),
     title: text_content(first_of(item, "title")) || "(无标题)",
     link,
@@ -552,6 +609,7 @@ function parse_rss_item(item, base_url, namespaces) {
     ], namespaces),
     summary: strip_tags(text_content(first_of(item, "description"))),
     thumbnail,
+    ...extract_thumbnail_metadata(item, base_url, thumbnail),
     images: [...new Set([...extract_images(item, base_url, thumbnail), ...media.filter(value => ["image", "live_photo"].includes(value.kind)).map(value => value.url)])],
     media,
     ...video,
@@ -567,7 +625,9 @@ function parse_rss_item(item, base_url, namespaces) {
  * @param {string} base_url
  * @returns {object}
  */
-function parse_atom_entry(entry, base_url, namespaces) {
+function parse_atom_entry(entry, base_url, namespaces, depth = 0) {
+  const extensions = item_extensions(entry, "atom", base_url, namespaces, depth);
+  entry = without_references(entry, namespaces);
   const link_url = attribute(find_alternate_link(entry), "href");
   const media = extract_media(entry, base_url, namespaces);
   const thumbnail = extract_thumbnail(entry, base_url) || media.find(value => ["image", "live_photo"].includes(value.kind))?.url || media.find(value => value.poster)?.poster || "";
@@ -575,6 +635,7 @@ function parse_atom_entry(entry, base_url, namespaces) {
   const first_video = media.find(value => value.kind === "video");
   return {
     guid: text_content(first_of(entry, "id")) || link_url,
+    ...extensions,
     ...(extract_entry_type(entry) ? { type: extract_entry_type(entry) } : {}),
     title: text_content(first_of(entry, "title")) || "(无标题)",
     link: link_url,
@@ -584,6 +645,7 @@ function parse_atom_entry(entry, base_url, namespaces) {
     ], namespaces),
     summary: strip_tags(text_content(first_of(entry, "summary")) || text_content(first_of(entry, "media:description"))),
     thumbnail,
+    ...extract_thumbnail_metadata(entry, base_url, thumbnail),
     images: [...new Set([...extract_images(entry, base_url, thumbnail), ...media.filter(value => ["image", "live_photo"].includes(value.kind)).map(value => value.url)])],
     media,
     ...video,
@@ -738,7 +800,8 @@ function parse_feed_document(xml, feed_url, XMLParser, XMLValidator) {
     site_url: base_url,
     kind,
     ...feed_extra(channel, document.entry),
-    articles: descendants(document.root, "item").map((item) => parse_rss_item(item, base_url, namespaces)),
+    articles: descendants(document.root, "item", node => findrss_field(node, "reference", namespaces))
+      .map(item => parse_rss_item(item, base_url, namespaces)),
   };
 }
 

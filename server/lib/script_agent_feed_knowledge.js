@@ -52,6 +52,24 @@ export const SCRIPT_AGENT_MEDIA_FEED_EXAMPLE = freeze_example({
   }],
 });
 
+export const SCRIPT_AGENT_REFERENCE_FEED_EXAMPLE = freeze_example({
+  title: "社交动态示例", link: "https://example.com/user", updated: "2026-10-14T08:00:00Z",
+  items: [{
+    id: "reply-2", kind: "reply", type: "article", title: "我的回复", link: "https://example.com/posts/2",
+    description: "回复正文", author: { name: "回复作者", uri: "https://example.com/user" },
+    published: "2026-10-14T08:00:00Z",
+    references: [{
+      relation: "reply", id: "post-1", link: "https://example.com/posts/1",
+      item: {
+        id: "post-1", kind: "post", title: "原帖", link: "https://example.com/posts/1",
+        description: "原帖摘要", content: "<p>原帖正文</p>",
+        author: { name: "原帖作者", uri: "https://example.com/original-author" },
+        published: "2026-10-14T07:30:00Z", images: ["https://example.com/original.jpg"],
+      },
+    }, { relation: "quote", id: "deleted-3", link: "https://example.com/posts/3", unavailable: true }],
+  }],
+});
+
 export const SCRIPT_AGENT_FEED_KNOWLEDGE = `
 FindRSS feed JSON → XML 返回格式知识（以本项目 FeedModel 渲染器为准）：
 以下规则适用于 RSSScript 和 /rss、/atom 订阅输出；HotRankScript 的普通路由输出 entries 榜单快照，不适用 items/XML 规则。
@@ -91,6 +109,8 @@ images: string[] → 每张图片一个 media:content medium="image"；与封面
 enclosure: { url: string, type?: string, length?: number|string, key?: string } → RSS enclosure + media:content；Atom enclosure link + media:content。url 必须非空，type 是 MIME 类型，例如 video/mp4、audio/mpeg、image/jpeg；length 是文件字节数，不是时长，已知时填写；key 是可选的附件解密密钥，仅在上游实际提供时填写。
 video: string → enclosure 的快捷写法，默认 type="video/mp4"；存在有效 enclosure 时以 enclosure 为准。不要用 video 对象或 attachments 数组代替。
 type: "article" | "gallery" | "video" | "live" → RSS 带 domain="urn:content-type" 的 category；Atom 带 scheme="urn:content-type" 的 category。其他值被忽略。
+kind: "post" | "reply" | "repost" | "quote" → findrss:kind，分别表示原创、回复、转发、引用。与 type 的图文/视频类型独立；一篇回复也可以是视频。
+references: [{ relation: "reply" | "repost" | "quote", id?: string, link?: string, item?: item对象, unavailable?: true }] → 父 item/entry 内的 findrss:reference，relation 属性表示关系，ref/href 属性表示原帖稳定 ID/链接。id/link 缺省时从 item.id/link 补齐，至少须有一个；内嵌 item 使用同一套条目字段，在 RSS 输出子 item、Atom 输出子 entry，不加入顶层 items。引用链最多内嵌四层，遇到循环或深度上限仅保留引用标识。已确认删除/不可用时可标 unavailable: true；获取失败但尚不确定是否删除时仅省略 item，保留 ID/链接。支持一篇同时回复和引用不同原帖；不能把原帖只拼入父项 content/description，也不能混用两者的作者和媒体。命名空间统一为 https://findrss.cloud/ns/reader；脚本不自行拼 XML。
 media_group: true → 将媒体内容聚合在 media:group，包含 media:title/media:description；RSS enclosure 仍在 item 下。存在有效 live_photos 时不再建立外层 media_group。
 live_photos: [{ image: string, video: string, key?: string, width?: number, height?: number }] → 每对照片与视频各生成一个 media:group，静态图 media:content medium="image" isDefault="true"，动态视频 media:content medium="video" type="video/mp4" 并携带缩略图、key、尺寸。image/video 均须非空；动态视频的 key 必须来自该视频，不能拿静态图片的密钥替代。如同一图片也在 images 中，渲染器会合并而不重复输出配对组。
 
@@ -110,5 +130,10 @@ ${JSON.stringify(SCRIPT_AGENT_FEED_EXAMPLE, null, 2)}
 六、多图、视频附件、动态照片 feed JSON 示例（可选能力，不必给每篇文章填满所有字段）
 \`\`\`json
 ${JSON.stringify(SCRIPT_AGENT_MEDIA_FEED_EXAMPLE, null, 2)}
+\`\`\`
+
+七、回复、转发与原帖引用 feed JSON 示例
+\`\`\`json
+${JSON.stringify(SCRIPT_AGENT_REFERENCE_FEED_EXAMPLE, null, 2)}
 \`\`\`
 `;

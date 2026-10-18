@@ -46,6 +46,7 @@ export class XUserRSS extends RSSScript {
       const embedded = XUserRSS.embedded_account(html);
       if (embedded.error) return embedded;
       let account = embedded.data;
+      let client_script = "";
       if (!account) {
         const script_url = html.match(
           /https:\/\/abs\.twimg\.com\/responsive-web\/client-web\/main\.[A-Za-z0-9_-]+\.js/,
@@ -61,6 +62,7 @@ export class XUserRSS extends RSSScript {
         });
         if (result_2.error) return result_2;
         const script = result_2.data;
+        client_script = script;
         let result;
         let profile;
         let user_id;
@@ -158,9 +160,8 @@ export class XUserRSS extends RSSScript {
       );
       for (const tweet of tweets) {
         const id = String(tweet.rest_id);
-        const post = tweet.details || tweet.legacy;
         if (
-          !/^\d+$/.test(id) ||
+          !XUserRSS.valid_id(tweet.rest_id) ||
           (typeof tweet.rest_id === "number" &&
             !Number.isSafeInteger(tweet.rest_id))
         ) {
@@ -170,65 +171,52 @@ export class XUserRSS extends RSSScript {
           continue;
         }
         seen.add(id);
-        const description = String(
-          tweet.note_tweet?.note_tweet_results?.result?.text ||
-            post.full_text ||
-            "",
-        );
-        const media =
-          tweet.media_entities2 || post.extended_entities?.media || [];
-        const images = media
-          .filter(function (item) {
-            return item.type === "photo";
-          })
-          .map(function (item) {
-            return XUserRSS.public_url(item.media_url_https);
-          })
-          .filter(Boolean);
-        const variants = media
-          .flatMap(function (item) {
-            return item.video_info?.variants || [];
-          })
-          .filter(function (item) {
-            return (
-              item.content_type === "video/mp4" && XUserRSS.public_url(item.url)
-            );
-          })
-          .sort(function (a, b) {
-            return (b.bitrate || 0) - (a.bitrate || 0);
-          });
-        const published =
-          tweet.details?.created_at_ms ?? Date.parse(post.created_at);
-        items.push({
-          id: "x:tweet:" + id,
-          title: description.split("\n")[0] || "X 作品 " + id,
-          link: link + "/status/" + id,
-          description,
-          author: {
-            name,
-            uri: link,
-          },
-          image: XUserRSS.public_url(media[0]?.media_url_https) || undefined,
-          ...(images.length
-            ? {
-                images,
-              }
-            : {}),
-          ...(Number.isFinite(published)
-            ? {
-                published,
-              }
-            : {}),
-          ...(variants.length
-            ? {
-                enclosure: {
-                  url: variants[0].url,
-                  type: "video/mp4",
-                },
-              }
-            : {}),
-        });
+        items.push(XUserRSS.parse_tweet(tweet, { name, username }));
       }
+      const originals = new Map(tweets.map(tweet => [String(tweet.rest_id), tweet]));
+      let remaining = 8;
+      let client_attempted = !!client_script;
+      const resolve = async (item, path = []) => {
+        if (path.length >= 4) return;
+        for (const reference of item.references || []) {
+          if (path.includes(reference.id) || reference.id === item.id) continue;
+          if (!reference.item && !reference.unavailable) {
+            const target_id = reference.id.replace("x:tweet:", "");
+            if (!originals.has(target_id)) {
+              const embedded = XUserRSS.find_tweet(tweets, target_id);
+              if (embedded) originals.set(target_id, embedded);
+            }
+            if (!originals.has(target_id) && remaining > 0) {
+              remaining--;
+              originals.set(target_id, null);
+              if (!client_attempted) {
+                client_attempted = true;
+                const script_url = html.match(/https:\/\/abs\.twimg\.com\/responsive-web\/client-web\/main\.[A-Za-z0-9_-]+\.js/)?.[0];
+                if (script_url) {
+                  const loaded = await XUserRSS.request_text(ctx, script_url, { headers, timeout_ms: 3000 });
+                  if (!loaded.error) client_script = loaded.data;
+                }
+              }
+              if (client_script) {
+                const operation = XUserRSS.operation_info(client_script, "TweetResultByRestId");
+                const result = await XUserRSS.fetch_operation(ctx, client_script,
+                  operation.error ? "TweetDetail" : "TweetResultByRestId",
+                  operation.error ? { focalTweetId: target_id, with_rux_injections: false, rankingMode: "Relevance", includePromotedContent: false, withCommunity: true, withVoice: true }
+                    : { tweetId: target_id, withCommunity: false, includePromotedContent: false, withVoice: true },
+                  headers, { withArticlePlainText: false }, 3000);
+                if (!result.error) originals.set(target_id, XUserRSS.find_tweet(result.data, target_id));
+              }
+            }
+            const original = originals.get(target_id);
+            if (original && String(original.rest_id) !== item.id.replace("x:tweet:", "")) {
+              reference.item = XUserRSS.parse_tweet(original);
+              if (reference.item) reference.link = reference.item.link;
+            }
+          }
+          if (reference.item) await resolve(reference.item, [...path, item.id]);
+        }
+      };
+      for (const item of items) await resolve(item);
       items.sort(function (a, b) {
         return (b.published || 0) - (a.published || 0);
       });
@@ -260,6 +248,69 @@ export class XUserRSS extends RSSScript {
     } catch (error) {
       return Result.Err(error, error?.code ?? "UPSTREAM_INVALID_RESPONSE");
     }
+  }
+  static tweet_result(value) {
+    let tweet = value?.result || value;
+    while (tweet && !tweet.legacy && !tweet.details && tweet.tweet) tweet = tweet.tweet;
+    return tweet;
+  }
+  static valid_id(value) {
+    return /^\d{1,24}$/.test(String(value || "")) && (typeof value !== "number" || Number.isSafeInteger(value));
+  }
+  static parse_tweet(value, fallback = {}, ancestors = []) {
+    const tweet = XUserRSS.tweet_result(value);
+    if (!tweet || !XUserRSS.valid_id(tweet.rest_id) || (!tweet.legacy && !tweet.details)) return null;
+    const id = String(tweet.rest_id);
+    const post = { ...tweet.legacy, ...tweet.details };
+    const user = tweet.core?.user_results?.result || {};
+    const username = user.core?.screen_name || user.legacy?.screen_name || fallback.username;
+    const name = user.core?.name || user.legacy?.name || fallback.name || username || "";
+    const link = username ? "https://x.com/" + username : "";
+    const description = String(tweet.note_tweet?.note_tweet_results?.result?.text || post.full_text || "");
+    const media = tweet.media_entities2 || post.extended_entities?.media || [];
+    const images = media.filter(item => item.type === "photo").map(item => XUserRSS.public_url(item.media_url_https)).filter(Boolean);
+    const variants = media.flatMap(item => item.video_info?.variants || [])
+      .filter(item => item.content_type === "video/mp4" && XUserRSS.public_url(item.url))
+      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+    const published = tweet.details?.created_at_ms ?? Date.parse(post.created_at);
+    const references = [];
+    const add = (relation, value, target_id, screen_name) => {
+      const original = XUserRSS.tweet_result(value);
+      target_id = original?.rest_id || target_id;
+      if (!XUserRSS.valid_id(target_id) || String(target_id) === id) return;
+      const child = ancestors.length < 4 && !ancestors.includes(String(target_id))
+        ? XUserRSS.parse_tweet(original, {}, [...ancestors, id]) : null;
+      references.push({ relation, id: "x:tweet:" + target_id,
+        link: child?.link || (screen_name ? "https://x.com/" + screen_name + "/status/" : "https://x.com/i/web/status/") + target_id,
+        ...(child ? { item: child } : {}),
+        ...(["TweetUnavailable", "TweetTombstone"].includes(original?.__typename) ? { unavailable: true } : {}),
+      });
+    };
+    add("repost", tweet.retweeted_status_result || post.retweeted_status_result || tweet.retweeted_status || post.retweeted_status, post.retweeted_status_id_str);
+    add("reply", tweet.in_reply_to_status_result || post.in_reply_to_status_result || post.in_reply_to_status,
+      post.in_reply_to_status_id_str || post.in_reply_to_status_id, post.in_reply_to_screen_name);
+    add("quote", tweet.quoted_status_result || post.quoted_status_result || post.quoted_status,
+      post.quoted_status_id_str || post.quoted_status_id || post.quoted_status_permalink?.expanded?.match(/\/status\/(\d+)/)?.[1]);
+    return {
+      id: "x:tweet:" + id, kind: references.find(ref => ref.relation === "repost") ? "repost"
+        : references.find(ref => ref.relation === "reply") ? "reply" : references.length ? "quote" : "post",
+      title: description.split("\n")[0] || "X 作品 " + id,
+      link: (link || "https://x.com/i/web") + "/status/" + id,
+      description, author: { name, ...(link ? { uri: link } : {}) },
+      image: XUserRSS.public_url(media[0]?.media_url_https) || undefined,
+      ...(images.length ? { images } : {}), ...(Number.isFinite(published) ? { published } : {}),
+      ...(variants.length ? { enclosure: { url: variants[0].url, type: "video/mp4" } } : {}),
+      ...(references.length ? { references } : {}),
+    };
+  }
+  static find_tweet(value, id) {
+    if (!value || typeof value !== "object") return null;
+    if (String(value.rest_id) === id && (value.legacy || value.details)) return value;
+    for (const child of Object.values(value)) {
+      const found = XUserRSS.find_tweet(child, id);
+      if (found) return found;
+    }
+    return null;
   }
   static public_url(value) {
     return /^https:\/\//i.test(String(value || "")) ? value : "";
@@ -358,6 +409,7 @@ export class XUserRSS extends RSSScript {
     variables,
     headers,
     field_toggles,
+    timeout_ms,
   ) {
     try {
       const result_5 = XUserRSS.operation_info(script, operation_name);
@@ -389,6 +441,7 @@ export class XUserRSS extends RSSScript {
             "X-Twitter-Auth-Type": "OAuth2Session",
             "X-Twitter-Client-Language": "en",
           },
+          ...(timeout_ms ? { timeout_ms } : {}),
           cookie_headers: {
             "x-csrf-token": "ct0",
           },

@@ -168,7 +168,10 @@ export async function discovery_snapshot_articles(xml, feed_url, dimensions_for 
   const covers = new Map();
   return Promise.all(feed.articles.slice(0, 3).map(async (article, index) => {
     const cover_url = public_http_url(article.thumbnail) || "";
-    if (cover_url && !covers.has(cover_url)) covers.set(cover_url, Promise.resolve().then(() => dimensions_for(cover_url)).catch(() => null));
+    if (cover_url && !covers.has(cover_url)) covers.set(cover_url,
+      article.thumbnail_width && article.thumbnail_height
+        ? Promise.resolve({ width: article.thumbnail_width, height: article.thumbnail_height, blurhash: article.thumbnail_blurhash || "" })
+        : Promise.resolve().then(() => dimensions_for(cover_url)).catch(() => null));
     const dimensions = cover_url ? await covers.get(cover_url) : null;
     return { id: String(index), title: String(article.title || "无标题").slice(0, 180),
       link: public_http_url(article.link) || "", published_at: Number(article.published_at) || 0,

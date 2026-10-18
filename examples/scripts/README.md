@@ -22,7 +22,7 @@
 | [Instagram](rss/instagram.js) | `/instagram/:username` | 用户首屏图片、视频与多图作品，保留发布时间；需授权登录 Cookie |
 | [抖音](rss/douyin.js) | `/douyin/user/:sec_uid` | 作者视频与图集；使用主页 `/user/` 后的 `sec_uid`，需授权 Cookie |
 | [快手](rss/kuaishou.js) | `/kuaishou/profile/:user_id` | 作者最新一页作品；使用主页 `/profile/` 后的 ID，需授权完整登录与验证 Cookie |
-| [小红书](rss/xiaohongshu.js) | `/xiaohongshu/user/profile/:uid` | 用户主页首屏笔记与封面；`uid` 为 24 位十六进制 ID，需授权 Cookie |
+| [小红书](rss/xiaohongshu.js) | `/xiaohongshu/user/profile/:uid` | 默认读取首屏笔记和封面；加 `?full_content=true`（或 `1`）逐条请求详情获取完整正文、图集和视频；`uid` 为 24 位十六进制 ID，需授权 Cookie |
 | [Telegram](rss/telegram.js) | `/telegram/channel/:username` | 公开频道文本、照片与视频；用户名的 `@` 可省略，无需 Bot Token |
 | [微信公众号](rss/wxmp.js) | `/wxmp/:account?` | 文章与图集；使用公众号微信号或原始 ID，需设备支持 `wxmp.biz.msg.list` |
 | [微信视频号](rss/wxchannels.js) | `/wxchannels/:account` | 视频、图集、Live Photo 与直播；使用视频号 `username`，需设备支持 `wxchannels.contact.feed.list` |
@@ -66,3 +66,48 @@ YouTube 普通视频根据页面中英文相对时间估算发布时间，月、
 依赖登录的脚本在 `permissions.cookies` 中明确声明来源、Cookie 名称和用途，显式调用 `ctx.cookies.get` 获取本次执行的句柄，再传入请求；源码变化后需重新确认授权。日志演示抓取、解析与媒体处理，不记录凭证或账户页面正文。
 
 示例不会自动导入后台。Worker 的 `test/script_examples_migration.test.js` 用生产 QuickJS 和模拟回包验证路由、排序、正文代理、RSS/Atom 渲染及媒体；未验证所有站点当前在线接口及实际登录态。SDK 仅适用于 Worker QuickJS，Go/goja 暂不支持。
+
+## 回复、转发与原帖引用
+
+`rss/x.js` 与 `rss/weibo.js` 用 `item.kind` 区分 `post`（原创）、`reply`（回复）、`repost`（转发）和 `quote`（引用）。现有 `item.type` 继续表示 `article`、`gallery`、`video`、`live`，可与互动类型同时使用。
+
+原帖通过 `references` 返回，当前条目的正文、作者、图片和视频仅属于当前帖；原帖保留自己的完整 item 字段。单条内容可同时回复一篇、引用另一篇：
+
+```js
+{
+  id: "x:tweet:200", kind: "reply", title: "我的回复",
+  link: "https://x.com/replier/status/200", description: "我的回复",
+  references: [{
+    relation: "reply", id: "x:tweet:100", link: "https://x.com/original/status/100",
+    item: {
+      id: "x:tweet:100", kind: "post", title: "原帖",
+      link: "https://x.com/original/status/100", content: "<p>原帖正文</p>",
+      author: { name: "原作者", uri: "https://x.com/original" },
+      images: ["https://example.com/original.jpg"]
+    }
+  }]
+}
+```
+
+`relation` 支持 `reply`、`repost`、`quote`。`id`、`link` 至少提供一个，缺省时可从子项补齐。已知原帖删除或不可用时返回 `unavailable: true` 并省略 `item`；权限不足、请求失败或没有返回正文时仅保留引用，避免将请求失败误判为删除。
+
+RSS 输出示例（Atom 中内嵌节点为 `entry`，其余扩展结构相同）：
+
+```xml
+<item>
+  <title>我的回复</title>
+  <findrss:kind xmlns:findrss="https://findrss.cloud/ns/reader">reply</findrss:kind>
+  <findrss:reference xmlns:findrss="https://findrss.cloud/ns/reader"
+      relation="reply" ref="x:tweet:100" href="https://x.com/original/status/100">
+    <item>
+      <title>原帖</title>
+      <link>https://x.com/original/status/100</link>
+      <guid isPermaLink="false">x:tweet:100</guid>
+    </item>
+  </findrss:reference>
+</item>
+```
+
+内嵌原帖复用同一套 RSS/Atom 正文、署名、时间、媒体和引用渲染规则；不会成为顶层独立文章。FindRSS 共用解析器也保留 `article.kind` 与 `article.references`，子项使用解析后的 article 结构（稳定标识为 `guid`），原帖媒体不会混进父项。
+
+脚本优先使用列表内嵌原帖，其次复用本页已有内容，再尝试详情接口补取；每次执行最多补取 8 个不同原帖，引用链最多内嵌 4 层，达到上限保留 ID/链接。X 补取依赖页面提供的客户端脚本和可用 GraphQL 操作。微博详情使用现有授权 Cookie，原微博图片和表情同样经过图片代理。仍只处理上游返回的这一页内容，不额外抓取完整回复或评论列表。已有后台脚本需替换示例、确认源码对应的 Cookie 授权后重新发布。

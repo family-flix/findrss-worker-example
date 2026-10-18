@@ -202,22 +202,58 @@ function normalize_live_photos(value) {
       key: String(item.key ?? ""), width: Math.max(0, Number(item.width) || 0), height: Math.max(0, Number(item.height) || 0) }));
 }
 
-function live_photo_xml(item) {
+function image_metadata_attrs(url, options) {
+  const metadata = options.image_metadata?.get(url);
+  if (!metadata) return "";
+  let attrs = "";
+  for (const name of ["width", "height"]) {
+    const value = Number(metadata[name]);
+    if (Number.isInteger(value) && value > 0 && value <= 100000) attrs += ' ' + name + '="' + value + '"';
+  }
+  if (typeof metadata.blurhash === "string" && metadata.blurhash.trim()) attrs += ' blurhash="' + escape_attr(metadata.blurhash) + '"';
+  return attrs;
+}
+
+function live_photo_xml(item, options) {
   const attr = value => escape_attr(value);
-  return '<media:group><media:content url="' + attr(item.image) + '" medium="image" isDefault="true" />' +
+  const metadata = image_metadata_attrs(item.image, options);
+  return '<media:group><media:content url="' + attr(item.image) + '" medium="image" isDefault="true"' + metadata + ' />' +
     '<media:content url="' + attr(item.video) + '" medium="video" type="video/mp4" key="' + attr(item.key) +
     '" width="' + attr(item.width) + '" height="' + attr(item.height) + '">' +
-    '<media:thumbnail url="' + attr(item.image) + '" /></media:content></media:group>';
+    '<media:thumbnail url="' + attr(item.image) + '"' + metadata + ' /></media:content></media:group>';
+}
+
+// 引用最多内嵌四层；达到深度或遇到环时仍保留原帖的稳定标识和链接。
+function normalize_references(value, ancestors) {
+  if (!Array.isArray(value)) return [];
+  const references = [];
+  for (const raw of value) {
+    if (!raw || !["reply", "repost", "quote"].includes(raw.relation)) continue;
+    const child = raw.item && typeof raw.item === "object" && !Array.isArray(raw.item) ? raw.item : null;
+    const id = trimmed(raw.id) || trimmed(child?.id);
+    const link = trimmed(raw.link) || trimmed(child?.link);
+    if (!id && !link) continue;
+    const unavailable = raw.unavailable === true;
+    const circular = [...ancestors].some(parent => id ? trimmed(parent.id) === id : trimmed(parent.link) === link);
+    const item = !unavailable && child && ancestors.size <= 4 && !ancestors.has(child) && !circular
+      ? FeedItemModel(child, ancestors) : null;
+    references.push(Object.freeze({ relation: raw.relation, id, link, unavailable, item }));
+  }
+  return references;
 }
 
 /**
  * feed item 实体。非对象一律返回 null（`FeedModel` 会丢弃）。
  * @param {unknown} raw
  */
-export function FeedItemModel(raw) {
+export function FeedItemModel(raw, ancestors = new Set()) {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const path = new Set(ancestors).add(raw);
+  const references = normalize_references(raw.references, path);
   const state = Object.freeze({
     id: trimmed(raw.id),
+    kind: ["post", "reply", "repost", "quote"].includes(raw.kind) ? raw.kind : "",
+    references: Object.freeze(references),
     type: ["article", "gallery", "video", "live"].includes(raw.type) ? raw.type : "",
     title: body_text(raw.title),
     link: trimmed(raw.link),
@@ -237,6 +273,12 @@ export function FeedItemModel(raw) {
     ...state,
     toValue: () => ({
       id: state.id,
+      ...(state.kind ? { kind: state.kind } : {}),
+      ...(state.references.length ? { references: state.references.map(reference => ({
+        relation: reference.relation, id: reference.id, link: reference.link,
+        ...(reference.unavailable ? { unavailable: true } : {}),
+        ...(reference.item ? { item: reference.item.toValue() } : {}),
+      })) } : {}),
       ...(state.type ? { type: state.type } : {}),
       title: state.title,
       link: state.link,
@@ -290,7 +332,7 @@ export function FeedModel(value) {
     /**
      * 按格式渲染成 XML 文档。
      * @param {string} format
-     * @param {{ self_url?: string }} [options]
+     * @param {{ self_url?: string, image_metadata?: Map<string, { width?: number, height?: number, blurhash?: string }> }} [options]
      * @returns {string}
      */
     render: (format = "rss", options = {}) => {
@@ -398,54 +440,62 @@ function render_rss_document(feed, options = {}) {
     if (feed.image.link !== "") lines.push("      <link>" + escape_text(feed.image.link) + "</link>");
     lines.push("    </image>");
   }
-  for (const item of feed.items) {
-    lines.push("    <item>");
-    element("title", item.title);
-    element("link", item.link);
-    const guid = item.id !== "" ? item.id : item.link;
-    if (guid !== "") {
-      // 与阅读端 extract 逻辑一致：guid 就是 link 且为 http(s) 时才是永久链接。
-      const is_permalink = guid === item.link && /^https?:\/\//i.test(guid);
-      lines.push('      <guid isPermaLink="' + (is_permalink ? "true" : "false") + '">' +
-        escape_text(guid) + "</guid>");
-    }
-    element("description", item.description);
-    if (item.content !== "") {
-      lines.push("      <content:encoded>" + escape_text(item.content) + "</content:encoded>");
-    }
-    if (item.author !== null) {
-      const name = item.author.label();
-      if (name !== "") element("dc:creator", name);
-    }
-    if (item.published !== null) element("pubDate", new Date(item.published).toUTCString());
-    if (item.media_group) {
-      if (item.enclosure !== null) lines.push("      <enclosure" + enclosure_attrs(item.enclosure, " ") + " />");
-      lines.push("      <media:group>");
-      lines.push("        <media:title>" + escape_text(item.title) + "</media:title>");
-      lines.push("        <media:description>" + escape_text(item.description) + "</media:description>");
-    }
-    if (item.image !== "") {
-      lines.push('      <media:thumbnail url="' + escape_attr(item.image) + '" />');
-    }
-    for (const image of item.images) {
-      const photo = item.live_photos.find(value => value.image === image);
-      lines.push(photo ? '      ' + live_photo_xml(photo) : '      <media:content url="' + escape_attr(image) + '" medium="image" />');
-    }
-    if (item.enclosure !== null) {
-      if (!item.media_group) lines.push("      <enclosure" + enclosure_attrs(item.enclosure, " ") + " />");
-      const medium = item.enclosure.medium();
-      lines.push("      <media:content" + enclosure_attrs(item.enclosure, " ") +
-        (medium === "" ? "" : ' medium="' + medium + '"') + " />");
-    }
-    for (const photo of item.live_photos.filter(value => !item.images.includes(value.image))) lines.push("      " + live_photo_xml(photo));
-    if (item.media_group) lines.push("      </media:group>");
-    if (item.type) lines.push('      <category domain="urn:content-type">' + item.type + "</category>");
-    for (const category of item.categories) element("category", category);
-    lines.push("    </item>");
-  }
+  for (const item of feed.items) lines.push(...render_rss_item(item, options));
   lines.push("  </channel>");
   lines.push("</rss>");
   return lines.join("\n") + "\n";
+}
+
+function render_rss_item(item, options = {}) {
+  const lines = [];
+  const element = (name, text) => {
+    if (text !== "") lines.push("    <" + name + ">" + escape_text(text) + "</" + name + ">");
+  };
+  lines.push("    <item>");
+  element("title", item.title);
+  element("link", item.link);
+  const guid = item.id !== "" ? item.id : item.link;
+  if (guid !== "") {
+    // 与阅读端 extract 逻辑一致：guid 就是 link 且为 http(s) 时才是永久链接。
+    const is_permalink = guid === item.link && /^https?:\/\//i.test(guid);
+    lines.push('      <guid isPermaLink="' + (is_permalink ? "true" : "false") + '">' +
+      escape_text(guid) + "</guid>");
+  }
+  element("description", item.description);
+  if (item.content !== "") {
+    lines.push("      <content:encoded>" + escape_text(item.content) + "</content:encoded>");
+  }
+  if (item.author !== null) {
+    const name = item.author.label();
+    if (name !== "") element("dc:creator", name);
+  }
+  if (item.published !== null) element("pubDate", new Date(item.published).toUTCString());
+  if (item.media_group) {
+    if (item.enclosure !== null) lines.push("      <enclosure" + enclosure_attrs(item.enclosure, " ") + " />");
+    lines.push("      <media:group>");
+    lines.push("        <media:title>" + escape_text(item.title) + "</media:title>");
+    lines.push("        <media:description>" + escape_text(item.description) + "</media:description>");
+  }
+  if (item.image !== "") {
+    lines.push('      <media:thumbnail url="' + escape_attr(item.image) + '"' + image_metadata_attrs(item.image, options) + ' />');
+  }
+  for (const image of item.images) {
+    const photo = item.live_photos.find(value => value.image === image);
+    lines.push(photo ? '      ' + live_photo_xml(photo, options) : '      <media:content url="' + escape_attr(image) + '" medium="image"' + image_metadata_attrs(image, options) + ' />');
+  }
+  if (item.enclosure !== null) {
+    if (!item.media_group) lines.push("      <enclosure" + enclosure_attrs(item.enclosure, " ") + " />");
+    const medium = item.enclosure.medium();
+    lines.push("      <media:content" + enclosure_attrs(item.enclosure, " ") +
+      (medium === "" ? "" : ' medium="' + medium + '"') + (medium === "image" ? image_metadata_attrs(item.enclosure.url, options) : "") + " />");
+  }
+  for (const photo of item.live_photos.filter(value => !item.images.includes(value.image))) lines.push("      " + live_photo_xml(photo, options));
+  if (item.media_group) lines.push("      </media:group>");
+  if (item.type) lines.push('      <category domain="urn:content-type">' + item.type + "</category>");
+  for (const category of item.categories) element("category", category);
+  render_item_references(lines, item, "rss", options);
+  lines.push("    </item>");
+  return lines;
 }
 
 /** entry 内的文本元素统一 4 空格缩进。 */
@@ -500,66 +550,92 @@ function render_atom_document(feed, options = {}) {
   lines.push("  </author>");
   if (feed.image !== null) element("logo", feed.image.url);
   for (const [index, item] of feed.items.entries()) {
-    lines.push("  <entry>");
-    element_at(lines, "title", item.title);
-    const entry_id = item.id !== "" ? item.id : item.link !== "" ? item.link
-      : feed_id + "#" + index;
-    element_at(lines, "id", entry_id);
-    const updated = item.updated ?? item.published ?? feed.updated;
-    if (updated !== null) {
-      lines.push("    <updated>" + new Date(updated).toISOString() + "</updated>");
-    }
-    if (item.published !== null) {
-      lines.push("    <published>" + new Date(item.published).toISOString() + "</published>");
-    }
-    if (item.link !== "") {
-      lines.push('    <link rel="alternate" href="' + escape_attr(item.link) + '" />');
-    }
-    if (item.enclosure !== null) {
-      lines.push('    <link rel="enclosure"' + enclosure_attrs(item.enclosure, " ") + " />");
-    }
-    if (item.author !== null && item.author.label() !== "") {
-      lines.push("    <author>");
-      lines.push("      <name>" + escape_text(item.author.label()) + "</name>");
-      if (item.author.email !== "") {
-        lines.push("      <email>" + escape_text(item.author.email) + "</email>");
-      }
-      if (item.author.uri !== "") {
-        lines.push("      <uri>" + escape_text(item.author.uri) + "</uri>");
-      }
-      lines.push("    </author>");
-    }
-    if (item.description !== "") {
-      lines.push('    <summary type="html">' + escape_text(item.description) + "</summary>");
-    }
-    if (item.content !== "") {
-      lines.push('    <content type="html">' + escape_text(item.content) + "</content>");
-    }
-    if (item.media_group) {
-      lines.push("    <media:group>");
-      lines.push("      <media:title>" + escape_text(item.title) + "</media:title>");
-      lines.push("      <media:description>" + escape_text(item.description) + "</media:description>");
-    }
-    if (item.image !== "") {
-      lines.push('    <media:thumbnail url="' + escape_attr(item.image) + '" />');
-    }
-    for (const image of item.images) {
-      const photo = item.live_photos.find(value => value.image === image);
-      lines.push(photo ? '    ' + live_photo_xml(photo) : '    <media:content url="' + escape_attr(image) + '" medium="image" />');
-    }
-    if (item.enclosure !== null) {
-      const medium = item.enclosure.medium();
-      lines.push("    <media:content" + enclosure_attrs(item.enclosure, " ") +
-        (medium === "" ? "" : ' medium="' + medium + '"') + " />");
-    }
-    for (const photo of item.live_photos.filter(value => !item.images.includes(value.image))) lines.push("      " + live_photo_xml(photo));
-    if (item.media_group) lines.push("    </media:group>");
-    if (item.type) lines.push('    <category scheme="urn:content-type" term="' + item.type + '" />');
-    for (const category of item.categories) {
-      lines.push('    <category term="' + escape_attr(category) + '" />');
-    }
-    lines.push("  </entry>");
+    lines.push(...render_atom_item(item, index, feed_id, feed.updated, options));
   }
   lines.push("</feed>");
   return lines.join("\n") + "\n";
+}
+
+function render_atom_item(item, index, feed_id, feed_updated, options = {}) {
+  const lines = [];
+  lines.push("  <entry>");
+  element_at(lines, "title", item.title);
+  const entry_id = item.id !== "" ? item.id : item.link !== "" ? item.link
+    : feed_id + "#" + index;
+  element_at(lines, "id", entry_id);
+  const updated = item.updated ?? item.published ?? feed_updated;
+  if (updated !== null) {
+    lines.push("    <updated>" + new Date(updated).toISOString() + "</updated>");
+  }
+  if (item.published !== null) {
+    lines.push("    <published>" + new Date(item.published).toISOString() + "</published>");
+  }
+  if (item.link !== "") {
+    lines.push('    <link rel="alternate" href="' + escape_attr(item.link) + '" />');
+  }
+  if (item.enclosure !== null) {
+    lines.push('    <link rel="enclosure"' + enclosure_attrs(item.enclosure, " ") + " />");
+  }
+  if (item.author !== null && item.author.label() !== "") {
+    lines.push("    <author>");
+    lines.push("      <name>" + escape_text(item.author.label()) + "</name>");
+    if (item.author.email !== "") {
+      lines.push("      <email>" + escape_text(item.author.email) + "</email>");
+    }
+    if (item.author.uri !== "") {
+      lines.push("      <uri>" + escape_text(item.author.uri) + "</uri>");
+    }
+    lines.push("    </author>");
+  }
+  if (item.description !== "") {
+    lines.push('    <summary type="html">' + escape_text(item.description) + "</summary>");
+  }
+  if (item.content !== "") {
+    lines.push('    <content type="html">' + escape_text(item.content) + "</content>");
+  }
+  if (item.media_group) {
+    lines.push("    <media:group>");
+    lines.push("      <media:title>" + escape_text(item.title) + "</media:title>");
+    lines.push("      <media:description>" + escape_text(item.description) + "</media:description>");
+  }
+  if (item.image !== "") {
+    lines.push('    <media:thumbnail url="' + escape_attr(item.image) + '"' + image_metadata_attrs(item.image, options) + ' />');
+  }
+  for (const image of item.images) {
+    const photo = item.live_photos.find(value => value.image === image);
+    lines.push(photo ? '    ' + live_photo_xml(photo, options) : '    <media:content url="' + escape_attr(image) + '" medium="image"' + image_metadata_attrs(image, options) + ' />');
+  }
+  if (item.enclosure !== null) {
+    const medium = item.enclosure.medium();
+    lines.push("    <media:content" + enclosure_attrs(item.enclosure, " ") +
+      (medium === "" ? "" : ' medium="' + medium + '"') + (medium === "image" ? image_metadata_attrs(item.enclosure.url, options) : "") + " />");
+  }
+  for (const photo of item.live_photos.filter(value => !item.images.includes(value.image))) lines.push("      " + live_photo_xml(photo, options));
+  if (item.media_group) lines.push("    </media:group>");
+  if (item.type) lines.push('    <category scheme="urn:content-type" term="' + item.type + '" />');
+  for (const category of item.categories) {
+    lines.push('    <category term="' + escape_attr(category) + '" />');
+  }
+  render_item_references(lines, item, "atom", options);
+  lines.push("  </entry>");
+  return lines;
+}
+
+// 扩展位于父 item/entry 内；原帖不能混入 channel 的独立文章列表。
+function render_item_references(lines, item, format, options) {
+  const indent = format === "rss" ? "      " : "    ";
+  const namespace = ' xmlns:findrss="https://findrss.cloud/ns/reader"';
+  if (item.kind) lines.push(indent + "<findrss:kind" + namespace + ">" + item.kind + "</findrss:kind>");
+  for (const reference of item.references) {
+    let open = indent + "<findrss:reference" + namespace + ' relation="' + reference.relation + '"';
+    if (reference.id) open += ' ref="' + escape_attr(reference.id) + '"';
+    if (reference.link) open += ' href="' + escape_attr(reference.link) + '"';
+    if (reference.unavailable) open += ' unavailable="true"';
+    if (!reference.item) { lines.push(open + " />"); continue; }
+    lines.push(open + ">");
+    const child_lines = format === "rss" ? render_rss_item(reference.item, options)
+      : render_atom_item(reference.item, 0, reference.id || reference.link, null, options);
+    for (const line of child_lines) lines.push(indent + line);
+    lines.push(indent + "</findrss:reference>");
+  }
 }

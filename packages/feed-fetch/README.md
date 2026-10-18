@@ -26,4 +26,8 @@ XML 普通实体展开次数按文档字符数设置有限上限，避免大量�
 
 Live Photo 使用标准 Media RSS 结构：每张图片的静态与动态版本放在独立 `media:group` 中，静态 `media:content medium="image" isDefault="true"`，动态 `media:content medium="video"` 的 `media:thumbnail` 指向静态原图。解析器仅在同组恰有这两个媒体节点且缩略图匹配时合并为 `live_photo`；这是阅读器的识别约定，不是 Media RSS 定义的 Live Photo 类型。无需私有命名空间。
 
+FindRSS 在生成 RSS/Atom XML 快照时，为封面 `media:thumbnail` 和图片 `media:content` 写入已读取的 `width`、`height`，以及成功计算时的 `blurhash` 属性（FindRSS 扩展约定）。解析后，封面元数据位于 `article.thumbnail_width`、`thumbnail_height`、`thumbnail_blurhash`；图片媒体保留 `width`、`height`、`blurhash`。未提供的封面字段保持省略，图片处理失败仍保留原地址。目录预览优先复用 XML 中的封面元数据。
+
 每条记录可通过 RSS `<category domain="urn:content-type">article|gallery|video|live</category>` 或 Atom `<category scheme="urn:content-type" term="article|gallery|video|live" />` 声明类型，解析为 `article.type`。这是使用标准 category 的类型词表约定，未声明时保留原来的媒体推断兼容。
+
+FindRSS 社交引用扩展使用 `https://findrss.cloud/ns/reader` 命名空间。条目中的 `findrss:kind` 解析为 `article.kind`（`post|reply|repost|quote`），`findrss:reference` 解析为 `article.references`：`relation` 为 `reply|repost|quote`，`ref/href` 映射为 `id/link`，`unavailable="true"` 映射为 `unavailable: true`。引用内的 RSS `item` 或 Atom `entry` 递归解析为 `reference.item`，最多四层；仅保留引用时没有 `item`。原帖不会计入顶层文章列表，正文与媒体也不会混入父项。未声明扩展的订阅源保持既有 article 字段。

@@ -25,6 +25,7 @@ import { script_config_value } from "../../lib/script_config.js";
 import { fetch_install_script } from "../../infra/script_install.js";
 import { ScriptSourceStore } from "../../infra/script_source_store.js";
 import { rss_route_cache_key } from "../../infra/rss_cache.js";
+import { feed_image_metadata } from "../../infra/feed_image_metadata.js";
 import {
   COALESCE_KEY_HEADER,
   CREDIT_SUBJECT_HEADER,
@@ -1429,6 +1430,9 @@ export class ServiceScript {
         cookie_access?.assert_grant();
         if (snapshot) {
           const feed = feed_model(result.output);
+          const image_metadata = await feed_image_metadata(feed, { signal, metadata_for: this.ports.fetch_cover_metadata });
+          assert_current();
+          cookie_access?.assert_grant();
           const rendered = new Map();
           for (const type of ["rss", "atom"]) {
             const url = this.public_origin ? new URL("/" + type + route_pathname, this.public_origin) : self_url ? new URL(self_url) : null;
@@ -1436,7 +1440,7 @@ export class ServiceScript {
               url.pathname = "/" + type + route_pathname;
               url.search = new URLSearchParams([...request_query].sort()).toString();
             }
-            rendered.set(type + "\n", feed.render(type, { self_url: url?.toString() || "" }));
+            rendered.set(type + "\n", feed.render(type, { self_url: url?.toString() || "", image_metadata }));
           }
           result.rendered = rendered;
         }

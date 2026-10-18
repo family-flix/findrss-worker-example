@@ -166,3 +166,27 @@ route.handler = async () => {
     assert.equal(failure.error.code, "UPSTREAM_INVALID_RESPONSE");
   }
 });
+
+test("RSS 基类保留原帖引用、归一化子项时间，循环引用只保留标识且不影响父项排序", async () => {
+  const result = await run(`
+class SocialFeed extends RSSScript {
+  async fetch() {
+    const parent = { id: 'reply', kind: 'reply', type: 'video', title: '回复', link: 'https://example.com/reply', published: 1700000000 };
+    const original = { id: 'original', kind: 'post', title: '原帖', link: 'https://example.com/original', published: 1700000100 };
+    parent.references = [{ relation: 'reply', item: original }];
+    original.references = [{ relation: 'quote', item: parent }];
+    return Result.Ok({ title: '源', link: 'https://example.com/', items: [parent] });
+  }
+}
+${route_source('return new SocialFeed().run(ctx);')}`);
+  const feed = JSON.parse(result.output);
+  assert.equal(feed.items.length, 1);
+  assert.equal(feed.items[0].kind, 'reply');
+  assert.equal(feed.items[0].type, 'video');
+  assert.equal(feed.updated, '2023-11-14T22:13:20.000Z');
+  const reference = feed.items[0].references[0];
+  assert.equal(reference.id, 'original');
+  assert.equal(reference.item.published, '2023-11-14T22:15:00.000Z');
+  assert.equal(reference.item.references[0].id, 'reply');
+  assert.equal(reference.item.references[0].item, undefined);
+});

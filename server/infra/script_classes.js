@@ -20,6 +20,36 @@ class RSSScript {
     } catch (error) { return Result.Err(error); }
   }
 
+  static item(item, ancestors = new Set()) {
+    const path = new Set(ancestors).add(item);
+    if (!item || typeof item.id !== "string" || !item.id || typeof item.title !== "string" || !item.title.trim()
+      || !/^https?:\/\/[^\s<>"']+$/i.test(item.link)) throw script_error("RSS 条目需要稳定 ID、标题和原文链接");
+    const result = { id: item.id, title: item.title.trim(), link: item.link };
+    for (const field of ["description", "content", "image", "images", "live_photos", "media_group", "type", "kind", "author", "enclosure", "categories", "extra"]) {
+      if (item[field] !== undefined) result[field] = item[field];
+    }
+    for (const field of ["published", "updated"]) {
+      const value = RSSScript.timestamp(item[field]);
+      if (value.error) throw value.error;
+      if (value.data !== undefined) result[field] = value.data;
+    }
+    if (Array.isArray(item.references)) {
+      const references = item.references.flatMap(reference => {
+        if (!reference || !["reply", "repost", "quote"].includes(reference.relation)) return [];
+        const id = typeof reference.id === "string" ? reference.id.trim() : reference.item?.id || "";
+        const link = typeof reference.link === "string" ? reference.link.trim() : reference.item?.link || "";
+        if (!id && !link) return [];
+        const circular = [...path].some(parent => id ? parent.id === id : parent.link === link);
+        const child = reference.unavailable !== true && reference.item && path.size <= 4 && !path.has(reference.item) && !circular
+          ? RSSScript.item(reference.item, path) : null;
+        return [{ relation: reference.relation, ...(id ? { id } : {}), ...(link ? { link } : {}),
+          ...(reference.unavailable === true ? { unavailable: true } : {}), ...(child ? { item: child } : {}) }];
+      });
+      if (references.length) result.references = references;
+    }
+    return result;
+  }
+
   async run(ctx) {
     try {
       const fetched = await this.fetch(ctx);
@@ -28,20 +58,7 @@ class RSSScript {
       const feed = fetched.data;
       if (!feed || typeof feed.title !== "string" || !feed.title.trim()
         || !/^https?:\/\/[^\s<>"']+$/i.test(feed.link) || !Array.isArray(feed.items)) throw script_error("RSS 源必须返回标题、来源链接和 items 数组");
-      const items = feed.items.map(item => {
-        if (!item || typeof item.id !== "string" || !item.id || typeof item.title !== "string" || !item.title.trim()
-          || !/^https?:\/\/[^\s<>"']+$/i.test(item.link)) throw script_error("RSS 条目需要稳定 ID、标题和原文链接");
-        const result = { id: item.id, title: item.title.trim(), link: item.link };
-        for (const field of ["description", "content", "image", "images", "live_photos", "media_group", "type", "author", "enclosure", "categories", "extra"]) {
-          if (item[field] !== undefined) result[field] = item[field];
-        }
-        for (const field of ["published", "updated"]) {
-          const value = RSSScript.timestamp(item[field]);
-          if (value.error) throw value.error;
-          if (value.data !== undefined) result[field] = value.data;
-        }
-        return result;
-      });
+      const items = feed.items.map(item => RSSScript.item(item));
       // 置顶和热度不参与排序；无发布时间的条目保留在末尾，不猜日期。
       items.sort((left, right) => (Date.parse(right.published) || 0) - (Date.parse(left.published) || 0));
       const seen = new Set();
