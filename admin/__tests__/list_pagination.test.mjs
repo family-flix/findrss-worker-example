@@ -61,3 +61,23 @@ test("ListCore 连续筛选只接受最后的响应，错误保留旧列表且�
   assert.equal(model.error.value, "");
   assert.equal(rows.length, 0);
 });
+
+test("后台补齐空页保留加载状态，并按可见条数显示范围", async t => {
+  let finish, rows = [];
+  const visible_count = list_ui.ref(0);
+  const model = ListPaginationModel(list_ui, { url: "/sources", key: "sources", visible_count,
+    fetch: () => new Promise(resolve => { finish = resolve; }),
+    on_data(value) { rows = value; visible_count.set(value.length); } });
+  t.after(() => model.destroy());
+  model.total.set(25);
+  model.page.set(1);
+  const pending = model.load(1, { background: true });
+  assert.equal(model.state.value.loading, false);
+  finish(Response.json({ total_count: 25, sources: [{ id: "one" }, { id: "two" }] }));
+  await pending;
+  assert.equal(rows.length, 2);
+  assert.equal(model.state.value.loading, false);
+  assert.equal(model.state.value.first, 21);
+  assert.equal(model.state.value.last, 22);
+  assert.equal(model.state.value.total, 25);
+});

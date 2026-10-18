@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { RepositoryDiscoverySource } from "../server/repository/discovery_source.js";
 import { API_SCHEMA_SQL } from "../server/repository/schema.js";
 import { ServiceDiscovery } from "../server/service/durable_object/discovery.js";
+import { snapshot_store } from "./support/snapshot_store.js";
 
 function fixture() {
   const calls = [];
@@ -43,13 +44,60 @@ test("标签查询使用 JSON 精确值和 AND；参数绑定，旧分类可匹�
     statement = sql; parameters = args; return { toArray: () => [] };
   } } });
   repository.list({ include_disabled: false, source_type: "x", query: "100%_", tags: ["科技", 'a"b\\c'] });
-  assert.match(statement, /enabled = 1 AND source_type = \? AND/);
+  assert.match(statement, /enabled = 1 AND require_token = 0 AND source_type = \? AND/);
   assert.equal((statement.match(/EXISTS \(SELECT 1 FROM json_each/g) || []).length, 2);
   assert.match(statement, /OR category = \?\) AND \(EXISTS/);
   assert.deepEqual(parameters, ["x", ...Array(6).fill("%100\\%\\_%"), "[]", "科技", "technology", 'a"b\\c', "__no_category__"]);
   assert.equal(statement.includes('a"b'), false);
   repository.list({ include_disabled: false, query: "科技" });
   assert.equal(parameters.at(-1), '["technology"]');
+  // 管理列表保留非公开源，公开性由 visibility 筛选控制。
+  repository.list({ include_disabled: true });
+  assert.equal(statement.includes("require_token = 0"), false);
+  repository.list({ include_disabled: true, visibility: "private" });
+  assert.match(statement, /require_token = \?/);
+});
+
+test("公开详情把非公开源当作不存在", () => {
+  const service = new ServiceDiscovery({ repo: { discovery: {
+    find_enabled: () => ({ id: "secret", require_token: 1, source_type: "website" }),
+  } } });
+  assert.throws(() => service.get_public_discovery_source("secret"), { status: 404 });
+});
+
+test("SQLite 公开列表、分页总数、搜索、详情和相关推荐只读取启用的公开源", t => {
+  const store = snapshot_store();
+  t.after(() => store.db.close());
+  const repository = new RepositoryDiscoverySource(store);
+  for (const [id, enabled, require_token] of [["public-a", 1, 0], ["public-b", 1, 0], ["private", 1, 1],
+    ["disabled-public", 0, 0], ["disabled-private", 0, 1]]) {
+    store.sql.exec(`INSERT INTO discovery_sources
+      (id, title, feed_url, category, source_type, enabled, require_token, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, id, "https://example.com/" + id, "", "website", enabled, require_token, 1, 1);
+  }
+  const service = new ServiceDiscovery({ repo: { discovery: repository } });
+  const list = (query, admin = false) => service.list_discovery_sources(new URL("https://api/discovery/sources?" + query), admin);
+  const first = list("limit=1&offset=0&visibility=private&status=disabled");
+  assert.deepEqual(first.sources.map(source => source.id), ["public-a"]);
+  assert.equal(first.total_count, 2);
+  assert.equal(first.has_more, true);
+  const second = list("limit=1&offset=1");
+  assert.deepEqual(second.sources.map(source => source.id), ["public-b"]);
+  assert.equal(second.total_count, 2);
+  assert.equal(second.has_more, false);
+  const search = list("q=private&limit=20");
+  assert.deepEqual(search.sources, []);
+  assert.equal(search.total_count, 0);
+  assert.deepEqual(service.public_catalog().sources.map(source => source.id), ["public-a", "public-b"]);
+  const detail = service.get_public_discovery_source("public-a");
+  assert.deepEqual(detail.related, [{ id: "public-b", title: "public-b" }]);
+  for (const id of ["private", "disabled-public", "disabled-private"]) {
+    assert.throws(() => service.get_public_discovery_source(id), { status: 404 });
+  }
+  assert.equal(list("limit=20", true).total_count, 5);
+  const private_sources = list("limit=20&visibility=private", true);
+  assert.equal(private_sources.total_count, 2);
+  assert.deepEqual(private_sources.sources.map(source => source.id), ["disabled-private", "private"]);
 });
 
 test("管理分页读取全部 1000 个源，公开目录维持既有上限和排序", () => {

@@ -32,7 +32,8 @@ function fixture(file, factory, fetch = async () => Response.json({})) {
   context.FindRSSAdminUI = ui;
   vm.runInContext(config_model_source, context);
   context.ScriptConfigModel = context.ScriptConfigModule.ScriptConfigModel;
-  context.FindRSSAdminAuth = { fetch: async (url, options) => paged_fixture(await fetch(url, options), url) };
+  context.FindRSSAdminAuth = { fetch: async (url, options) => url.startsWith("/admin/api/background-tasks?")
+    ? Response.json({ tasks: [] }) : paged_fixture(await fetch(url, options), url) };
   context.FindRSSAdminShell = {};
   context.FindRSSAdminPages = {};
   context.localStorage = { getItem: () => null };
@@ -79,9 +80,15 @@ test("共享分页处理空列表、末页、条数切换和加载中的按钮�
 test("订阅源通过 ListCore 读取后端筛选分页，编辑、删除末页与新增均正确", async () => {
   const rows = Array.from({ length: 41 }, (_, index) => ({ id: "source-" + index, title: "源 " + index,
     source_type: index === 40 ? "zhihu" : "website", tags: [], enabled: true }));
+  const reads = [];
+  let background = false;
   const { model } = fixture("discovery.js", "DiscoveryAdminViewModel", async (url, options) => {
     if (options?.method === "DELETE") { rows.splice(rows.findIndex(row => row.id === url.split("/").at(-1)), 1); return Response.json({}); }
     if (options?.method === "POST") { const source = { id: "new", title: "新增", enabled: true }; rows.unshift(source); return Response.json({ source }); }
+    if (!url.includes("/scripts")) {
+      reads.push(url);
+      if (background) assert.equal(model.state.loading.value, false, "删空末页补齐时不显示整表加载态");
+    }
     return Response.json({ sources: rows });
   });
   await model.methods.refresh_list();
@@ -97,14 +104,21 @@ test("订阅源通过 ListCore 读取后端筛选分页，编辑、删除末页�
   assert.deepEqual(ids(model.paged_sources.value), ["source-40"]);
   await model.methods.set_filter("platform", "all");
   await model.pagination.set_page(2);
+  const previous_reads = reads.length;
+  background = true;
   await model.methods.remove_source("source-40");
+  assert.equal(reads.length, previous_reads + 1, "只读取回退后的有效页");
+  assert.match(reads.at(-1), /offset=20/);
   assert.equal(model.pagination.state.value.page, 1);
   assert.equal(model.paged_sources.value.length, 20);
   model.methods.create_source();
   model.methods.set_draft("title", "新增");
   await model.methods.save_source();
-  assert.equal(model.pagination.state.value.page, 0);
+  assert.equal(model.pagination.state.value.page, 1);
   assert.equal(model.paged_sources.value[0].id, "new");
+  assert.equal(model.paged_sources.value.length, 20);
+  assert.equal(model.pagination.state.value.total, 41);
+  assert.equal(reads.length, previous_reads + 1, "新增无需重载列表");
 });
 
 test("订阅源 JSON 导出所有源，不受筛选和分页影响，保留模板且清理下载资源", async () => {

@@ -1323,8 +1323,15 @@ export class ServiceScript {
       : preview_script_id ? "admin-preview:" + preview_script_id + ":" : "")
       + rss_route_cache_key(route_pathname, request_query);
     if (snapshot && refresh && !signal && this.app.background_tasks) {
+      const sources = feed_public ? this.repo.discovery.list_public_routes() : private_sources;
+      const source = sources.find(row => {
+        const address = SourceAddressModel(row.feed_url);
+        return address.is_route() && rss_route_cache_key(address.route_pathname,
+          new URL(address.resolve("https://template.invalid")).searchParams) === request_key;
+      });
       return this.app.background_tasks.start(cache_key, {
         kind: "snapshot", title: "刷新 XML 快照：" + (metadata.name || route_pathname), target: route_pathname + request_url.search,
+        source_id: source?.id || "",
       }, signal => this.serve_rss_route(format, route_pathname, request, { refresh, signal })).promise;
     }
     const self_url = (request.headers.get("X-Feed-Public-URL") ?? "").trim();

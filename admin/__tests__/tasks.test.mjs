@@ -92,3 +92,61 @@ test("终止任务后立即从进行中筛选移除，并出现在已终止筛�
   model.methods.set_status("cancelled");
   assert.deepEqual(model.state.visible_tasks.value.map(task => task.id), [task.id]);
 });
+
+test("清理成功替换列表并保留筛选，清理期间阻止重复操作", async () => {
+  const tasks = [task, ...["completed", "failed", "cancelled"].map(status => ({ ...task, id: status, status }))];
+  let resolve;
+  const calls = [];
+  const model = TasksModel({ ui, fetch_impl: async (url, options) => {
+    calls.push([url, options.method || "GET"]);
+    if (options.method === "DELETE") return new Promise(done => { resolve = done; });
+    return Response.json({ tasks });
+  } });
+  await model.methods.load();
+  model.methods.set_status("failed");
+  const pending = model.methods.cleanup();
+  assert.equal(model.state.cleaning.value, true);
+  await model.methods.cleanup(); await model.methods.load(); await model.methods.cancel(task.id);
+  assert.deepEqual(calls, [["/admin/api/background-tasks", "GET"], ["/admin/api/background-tasks", "DELETE"]]);
+  resolve(Response.json({ tasks: tasks.filter(task => ["running", "cancelled"].includes(task.status)) }));
+  await pending;
+  assert.equal(model.state.cleaning.value, false);
+  assert.equal(model.state.status.value, "failed");
+  assert.deepEqual(model.state.visible_tasks.value, []);
+  assert.deepEqual(model.state.tasks.value.map(task => task.status), ["running", "cancelled"]);
+});
+
+test("清理失败或响应格式错误保留旧列表并显示错误，允许重试", async () => {
+  let response = Response.json({ error: "清理暂时不可用" }, { status: 503 });
+  const model = TasksModel({ ui, fetch_impl: async (_url, options) => options.method === "DELETE"
+    ? response : Response.json({ tasks: [{ ...task, status: "completed" }] }) });
+  await model.methods.load();
+  await model.methods.cleanup();
+  assert.equal(model.state.tasks.value.length, 1);
+  assert.match(model.state.error.value, /清理暂时不可用/);
+  assert.equal(model.state.cleaning.value, false);
+  response = Response.json({});
+  await model.methods.cleanup();
+  assert.equal(model.state.tasks.value.length, 1);
+  assert.match(model.state.error.value, /格式不正确/);
+  response = Response.json({ tasks: [] });
+  await model.methods.cleanup();
+  assert.deepEqual(model.state.tasks.value, []);
+  assert.equal(model.state.error.value, "");
+});
+
+test("清理会取消旧刷新，迟到的旧列表不能恢复已删除任务", async () => {
+  let resolve, signal;
+  const model = TasksModel({ ui, fetch_impl: async (_url, options) => {
+    if (options.method === "DELETE") return Response.json({ tasks: [] });
+    signal = options.signal;
+    return new Promise(done => { resolve = done; });
+  } });
+  const loading = model.methods.load();
+  await model.methods.cleanup();
+  assert.equal(signal.aborted, true);
+  resolve(Response.json({ tasks: [{ ...task, status: "completed" }] })); await loading;
+  assert.deepEqual(model.state.tasks.value, []);
+  assert.equal(model.state.loading.value, false);
+  assert.equal(model.state.cleaning.value, false);
+});

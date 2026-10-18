@@ -6,6 +6,7 @@ import { RssRouteCache } from "../server/infra/rss_cache.js";
 import { snapshot_store } from "./support/snapshot_store.js";
 import { image_proxy_descriptor, image_proxy_target } from "../server/lib/image_proxy.js";
 import { fetch_script_image } from "../server/infra/image_proxy.js";
+import { sha256_hex } from "../server/lib/crypto.js";
 register("./support/quickjs_wasm_hook.js", import.meta.url);
 const { compile_script_module, execute_script } = await import("../server/infra/script_sandbox.js");
 const { ServiceScript } = await import("../server/service/durable_object/scripts.js");
@@ -170,22 +171,39 @@ test("宿主读取真实二进制、验证每跳地址与类型、限制正文�
   ]) await assert.rejects(fetch_script_image(proxy_route, { url: "https://mmbiz.qpic.cn/a" }, async () => response));
 });
 
-test("公众号、微博及旧图片路由 GET/HEAD 强缓存 90 天；客户端身份头不透传上游", async () => {
+test("公众号、微博与 Apple 图片路由 GET/HEAD 强缓存 90 天并命中边缘缓存；客户端身份头不透传上游", async () => {
   const original = globalThis.fetch;
+  const original_caches = globalThis.caches;
   try {
     for (const [file, path, target, referer] of [
       ["wxmp", "/img/wxmp", "https://mmbiz.qpic.cn/a", "https://mp.weixin.qq.com/"],
-      ["wxmp", "/wxmpimgproxy", "https://mmbiz.qpic.cn/a", "https://mp.weixin.qq.com/"],
       ["weibo", "/img/weibo", "https://wx4.sinaimg.cn/orj360/001YqBPrgy1ih705eegpfj63uw8ohnpv02.jpg", "https://weibo.com/"],
       ["weibo", "/img/weibo", "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/e1/201810_yueliang_mobile.png", "https://weibo.com/"],
+      ["apple", "/img/apple", "https://is1-ssl.mzstatic.com/image/thumb/example/400x400bb.webp", "https://apps.apple.com/"],
     ]) {
       const script = await readFile(new URL(`../examples/scripts/rss/${file}.js`, import.meta.url), "utf8");
-      const { service } = await setup(script);
+      const { service, metadata, rows } = await setup(script);
+      assert.equal(metadata.routes.find(route => route.path === path).public, true);
+      service.rss_address_is_public = () => false;
+      if (metadata.permissions.cookies.length) {
+        const grant = { script_id: "module-1", script_hash: await sha256_hex(script), permissions_json: JSON.stringify({
+          permissions: metadata.permissions, visibility: service.cookie_visibility(metadata), version: metadata.version,
+        }) };
+        rows[0].metadata_json = JSON.stringify({ ...metadata, cookie_grant_id: "image-test-grant" });
+        service.repo.rss_cookie_grants = { find: id => id === "image-test-grant" ? grant : undefined };
+      }
       const env = { API: { getByName: () => ({ fetch: request => dispatch(request, { scripts: service }) }) } };
+      const entries = new Map();
+      let upstream_calls = 0;
+      globalThis.caches = { default: {
+        async match(request) { return entries.get(request.url)?.clone(); },
+        async put(request, response) { entries.set(request.url, response); },
+      } };
       globalThis.fetch = async (url, options) => {
+        upstream_calls++;
         assert.equal(url, target);
         assert.equal(options.headers.referer, referer);
-        if (file === "weibo") {
+        if (file === "weibo" || file === "apple") {
           assert.match(options.headers["user-agent"], /Chrome\/155/);
           assert.equal(options.headers["sec-fetch-dest"], "image");
           assert.equal(options.headers["sec-fetch-mode"], "no-cors");
@@ -198,7 +216,7 @@ test("公众号、微博及旧图片路由 GET/HEAD 强缓存 90 天；客户端
         assert.equal(options.headers.authorization, undefined);
         return new Response(png, { headers: { "Content-Type": "image/png", "Set-Cookie": "secret" } });
       };
-      for (const method of ["GET", "HEAD"]) {
+      for (const method of ["GET", "HEAD", "GET"]) {
         const request_url = file === "weibo" ? target.replace("/orj360/", "/large/") : target;
         const response = await worker.fetch(new Request("https://feeds.example.com" + path + "?url=" + encodeURIComponent(request_url), {
           method, headers: { Cookie: "private", Authorization: "Bearer private" },
@@ -209,8 +227,10 @@ test("公众号、微博及旧图片路由 GET/HEAD 强缓存 90 天；客户端
         assert.equal(response.headers.get("Set-Cookie"), null);
         assert.equal((await response.arrayBuffer()).byteLength, method === "HEAD" ? 0 : png.length);
       }
+      assert.equal(upstream_calls, 1, file + " 图片缓存命中后不再请求上游");
+      assert.equal(entries.size, 1);
     }
-  } finally { globalThis.fetch = original; }
+  } finally { globalThis.fetch = original; globalThis.caches = original_caches; }
 });
 
 test("图片缓存复用二进制，停用后仍检查路由，缓存不可用不影响成功响应", async () => {

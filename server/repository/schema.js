@@ -78,10 +78,12 @@ export const API_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS snapshot_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     policy_json TEXT NOT NULL,
+    max_concurrency INTEGER NOT NULL DEFAULT 4,
     updated_at INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS background_tasks (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, target TEXT NOT NULL,
+    source_id TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER NOT NULL DEFAULT 0,
     error TEXT NOT NULL DEFAULT ''
   );

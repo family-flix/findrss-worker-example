@@ -16,7 +16,8 @@ export class RepositoryDiscoverySource {
     const conditions = [];
     const parameters = [];
     if (!include_disabled) {
-      conditions.push("enabled = 1");
+      // 公开目录只展示启用中的公开源；非公开源（require_token）不出现在广场页面。
+      conditions.push("enabled = 1", "require_token = 0");
     }
     if (include_disabled && status !== "all") {
       conditions.push("enabled = ?");
@@ -60,7 +61,8 @@ export class RepositoryDiscoverySource {
     if (limit !== undefined) parameters.push(limit, offset);
     return this.sql
       .exec(
-        `SELECT discovery_sources.*, snapshots.articles_json, snapshots.saved_at AS snapshot_saved_at,
+        `SELECT discovery_sources.*, (SELECT object_key FROM discovery_source_avatars WHERE source_id = discovery_sources.id) AS avatar_object_key,
+                snapshots.articles_json, snapshots.saved_at AS snapshot_saved_at,
                 snapshots.attempted_at AS snapshot_attempted_at, snapshots.error AS snapshot_error, snapshots.adaptive_interval
          FROM discovery_sources LEFT JOIN discovery_source_snapshots AS snapshots
          ON snapshots.source_id = discovery_sources.id AND snapshots.feed_url = discovery_sources.feed_url ${where}
@@ -129,14 +131,16 @@ export class RepositoryDiscoverySource {
   /** @param {string} id @returns {Record<string, unknown> | undefined} */
   find(id) {
     return this.sql
-      .exec("SELECT * FROM discovery_sources WHERE id = ? LIMIT 1", id)
+      .exec(`SELECT discovery_sources.*, (SELECT object_key FROM discovery_source_avatars WHERE source_id = discovery_sources.id) AS avatar_object_key
+        FROM discovery_sources WHERE id = ? LIMIT 1`, id)
       .toArray()[0];
   }
 
-  /** @param {string} id @returns {Record<string, unknown> | undefined} 仅启用中的源。 */
+  /** @param {string} id @returns {Record<string, unknown> | undefined} 仅启用中的公开源。 */
   find_enabled(id) {
     return this.sql
-      .exec("SELECT * FROM discovery_sources WHERE id = ? AND enabled = 1 LIMIT 1", id)
+      .exec(`SELECT discovery_sources.*, (SELECT object_key FROM discovery_source_avatars WHERE source_id = discovery_sources.id) AS avatar_object_key
+        FROM discovery_sources WHERE id = ? AND enabled = 1 AND require_token = 0 LIMIT 1`, id)
       .toArray()[0];
   }
 
@@ -148,7 +152,7 @@ export class RepositoryDiscoverySource {
   }
 
   /**
-   * 同来源的其它启用源（只回 id/title，用于详情页内部链接网）。
+   * 同来源的其它启用公开源（只回 id/title，用于详情页内部链接网）。
    * @param {string} id @param {string} source_type @param {number} limit
    * @returns {Array<{ id: string, title: string }>}
    */
@@ -156,7 +160,7 @@ export class RepositoryDiscoverySource {
     return this.sql
       .exec(
         `SELECT id, title FROM discovery_sources
-         WHERE enabled = 1 AND id != ? AND source_type = ?
+         WHERE enabled = 1 AND require_token = 0 AND id != ? AND source_type = ?
          ORDER BY sort_order ASC, title COLLATE NOCASE LIMIT ?`,
         id,
         source_type,
@@ -192,7 +196,7 @@ export class RepositoryDiscoverySource {
   list_public_routes() {
     return this.sql
       .exec(
-        `SELECT feed_url, enabled, require_token FROM discovery_sources
+        `SELECT id, feed_url, enabled, require_token FROM discovery_sources
          WHERE enabled = 1 AND require_token = 0 LIMIT 500`)
       .toArray();
   }

@@ -245,7 +245,7 @@ input:focus-visible {
 .search-input:focus-visible { outline: none; }
 .search-input::placeholder { color: var(--muted); }
 
-/* 来源单选、标签多选共用筛选按钮，长列表自然换行。 */
+/* 来源单选筛选按钮，长列表自然换行。 */
 .filter-row { display: flex; align-items: baseline; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--rule); }
 .filter-label { flex: 0 0 auto; color: var(--paper-2); font-size: 13px; }
 .filter-options { display: flex; flex: 1; flex-wrap: wrap; gap: 8px; }
@@ -417,9 +417,7 @@ input:focus-visible {
   text-wrap: pretty;
 }
 
-/* meta 行：语言 · 分类 · 标签。**不带底色**——原来的胶囊 chip 行是自造的，
-   一排行全被它撑高、还让「科技」这种分类+标签同值重复两遍。现在只剩普通文字 + 顿点，
-   标签按钮保留（它是唯一的标签入口），靠 hover/选中态而不是底色来表明可点。 */
+/* meta 行仅展示订阅源语言。 */
 .feed-meta {
   display: flex;
   flex-wrap: wrap;
@@ -431,18 +429,6 @@ input:focus-visible {
 }
 
 .feed-language { font-size: 11px; }
-
-.feed-tag {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.feed-tag:hover { color: var(--paper); text-decoration: underline; text-underline-offset: 3px; }
-
-.feed-tag[aria-pressed="true"] { color: var(--brand-ink); }
 
 /* 动作行左对齐、与标题同一条左沿（设计稿 A 的 `.fr-row-actions`），
    而不是贴到行的最右边——贴在右边时它与标题隔了半个版面，读作「另一行」 */

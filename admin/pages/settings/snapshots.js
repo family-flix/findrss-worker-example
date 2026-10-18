@@ -1,8 +1,9 @@
 import { SnapshotSettingsModel } from "../../components/snapshot_settings.model.js";
 import { PollPolicyView } from "../../components/poll_policy.js";
 import { SettingsSection } from "./section.js";
+import { MAX_SNAPSHOT_CONCURRENCY } from "../../../server/lib/constants.js";
 
-const { View, Button, Show, computed } = window.FindRSSAdminUI;
+const { View, Button, Input, Show, computed } = window.FindRSSAdminUI;
 
 function SettingsSnapshotsPage({ view, history } = {}) {
   const snapshots = SnapshotSettingsModel({ ui: window.FindRSSAdminUI });
@@ -32,6 +33,14 @@ function SettingsSnapshotsPage({ view, history } = {}) {
                 name: "settings-snapshot-policy",
                 disabled: snapshots.state.busy,
               }),
+              Input({
+                label: "最大并发抓取数",
+                value: snapshots.state.max_concurrency,
+                disabled: snapshots.state.busy,
+                help: "默认 4，范围 1 至 " + MAX_SNAPSHOT_CONCURRENCY + "。保存后用于自动抓取；调低时已开始的任务会继续完成。",
+                attributes: { n: "settings-snapshot-concurrency", type: "number", min: 1, max: MAX_SNAPSHOT_CONCURRENCY, step: 1 },
+                onInput: event => snapshots.methods.set_max_concurrency(event.target.value),
+              }),
               Button(
                 {
                   class: "justify-self-start",
@@ -41,7 +50,7 @@ function SettingsSnapshotsPage({ view, history } = {}) {
                 },
                 [
                   computed(snapshots.state.busy, (busy) =>
-                    busy ? "正在保存…" : "保存抓取规则",
+                    busy ? "正在保存…" : "保存抓取设置",
                   ),
                 ],
               ),

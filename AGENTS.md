@@ -8,6 +8,12 @@
 
 - Never invoke or automate a browser. After implementation and non-browser checks are complete, tell the user the work is ready and let the user manually verify browser behavior.
 
+## Commit message 准则
+
+- 基于实际变更描述实现的功能、解决的问题及目的，让读者理解行为变化和价值。
+- 不要罗列代码改动、文件名、函数名或实现步骤。
+- 示例：使用「支持按来源筛选订阅，方便快速定位内容」，避免「修改筛选组件并新增查询参数」。
+
 ## 项目版本升级
 
 - 升级 FindRSS 项目版本时，以下位置必须同步为同一个目标版本：

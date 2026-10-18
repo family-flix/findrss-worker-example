@@ -1,4 +1,5 @@
 import { secure_site_response } from "./server/lib/site_security.js";
+import { discovery_query_state } from "./discover/index.js";
 // Public site HTTP routes share the main Worker with the API.
 import {
   is_public_feed_url,
@@ -43,11 +44,18 @@ async function catalog_response(env, api_fetch) {
 async function home_page(request, env, api_fetch) {
   const url = new URL(request.url);
   const origin = new URL(feed_hostname_origin(env) || url.origin).origin;
+  const filters = discovery_query_state(url.searchParams);
+  const parameters = new URLSearchParams();
+  if (filters.query) parameters.set("q", filters.query);
+  if (filters.source_type) parameters.set("source_type", filters.source_type);
+  if (filters.page) parameters.set("page", String(filters.page + 1));
   const cache_url = new URL("/index.html", url.origin);
   cache_url.searchParams.set("feed_origin", origin);
   cache_url.searchParams.set("runtime", "0.34.2");
   cache_url.searchParams.set("assets", DISCOVERY_ASSETS_VERSION);
   cache_url.searchParams.set("compression", "v2");
+  cache_url.searchParams.set("render", "query-v1");
+  parameters.forEach((value, key) => cache_url.searchParams.append(key, value));
   const cache = globalThis.caches?.default;
   try {
     cache_url.searchParams.set("styles", await discovery_style_hash());
@@ -63,15 +71,18 @@ async function home_page(request, env, api_fetch) {
       html = html
         .replaceAll(DISCOVERY_CATALOG_ORIGIN, origin)
         .replaceAll("/assets/timeless/0.34.0/", "/assets/timeless/0.34.2/");
-      if (!html.includes(`name="discovery-embedded-assets" content="${DISCOVERY_ASSETS_VERSION}"`)) {
+      if (parameters.size || !html.includes(`name="discovery-embedded-assets" content="${DISCOVERY_ASSETS_VERSION}"`)) {
         const bootstrap =
           /<script (?:id|data-n)="discovery-catalog" type="application\/json">([^]*?)<\/script>/.exec(
             html,
           );
         if (bootstrap)
-          html = render_embedded_home(JSON.parse(bootstrap[1]), origin);
+          html = render_embedded_home(JSON.parse(bootstrap[1]), origin, parameters);
+        else if (parameters.size)
+          html = "";
       }
-    } else {
+    }
+    if (!html) {
       const response = await catalog_response(
         { ...env, FINDRSS_HOSTNAME: origin },
         api_fetch,
@@ -84,7 +95,7 @@ async function home_page(request, env, api_fetch) {
           headers,
         });
       }
-      html = render_embedded_home(await response.json(), origin);
+      html = render_embedded_home(await response.json(), origin, parameters);
     }
     html = resolve_home_metadata(inline_home_styles(html), url.origin);
     const response = new Response(html, {

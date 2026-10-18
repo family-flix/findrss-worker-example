@@ -107,7 +107,7 @@ test("新增、改为私密与删除订阅源都保留已有持久 XML，私密�
   assert.equal((await rebuilt.resolve(key, Date.now())).rendered.get("rss\n"), "快手 XML");
 });
 
-test("预览保存为私密源只复用私密 XML，不发布文章，清理和重建后仍需身份访问", async t => {
+test("预览保存为私密源只复用私密 XML，不进入公开目录，清理和重建后仍需身份访问", async t => {
   const f = fixture(t);
   const feed_url = "{{hostname}}/rss/preview/1?a=1&b=2";
   const data = await (await f.preview(feed_url)).json();
@@ -117,7 +117,7 @@ test("预览保存为私密源只复用私密 XML，不发布文章，清理和�
   assert.equal(source.snapshot.saved_at, 0);
   assert.deepEqual(source.snapshot.articles, []);
   assert.equal(source.cache.status, "fresh");
-  assert.deepEqual(f.published.sources[0].snapshot.articles, []);
+  assert.deepEqual(f.published.sources, []);
   assert.doesNotMatch(JSON.stringify(f.published), /预览文章|example.com\/article/);
   await assert.rejects(f.serve(), { status: 401 });
   f.repo.rss_route_cache.delete_expired(Date.now() + RSS_ROUTE_CACHE_TTL_MS + 1);

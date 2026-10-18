@@ -37,11 +37,13 @@ import {
 import { public_rss_route } from "./server/service/worker/rss.js";
 import { admin_network_test, admin_network_cookie_domains } from "./server/service/worker/network_test.js";
 import { admin_storage_request } from "./server/service/worker/storage.js";
+import { public_asset_request } from "./server/service/worker/public_assets.js";
 
 /** @type {ExportedHandler<Env>} */
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname === "/public" || url.pathname.startsWith("/public/")) return public_asset_request(request, env, ctx);
     // 兼容已发布的管理客户端；内部与前端统一使用 /scripts。
     url.pathname = url.pathname.replace(
       /^\/admin\/api\/rss-scripts(?=\/|$)/,
@@ -76,7 +78,9 @@ export default {
         return admin_auth_required();
       }
       if (/^\/admin\/api\/background-tasks(?:\/[A-Za-z0-9-]+\/cancel)?$/.test(url.pathname)) {
-        return env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal" + url.pathname.replace("/admin/api/", "/_admin/"), request));
+        const internal_url = new URL("https://internal" + url.pathname.replace("/admin/api/", "/_admin/"));
+        internal_url.search = url.search;
+        return env.API.getByName(API_OBJECT_NAME).fetch(new Request(internal_url, request));
       }
       if (["/admin/api/storage", "/admin/api/storage/usage", "/admin/api/storage/file"].includes(url.pathname)) {
         return admin_storage_request(request, env);
@@ -201,6 +205,10 @@ export default {
         request.method === "POST"
       ) {
         return admin_discovery_source_request(env, request);
+      }
+      if (url.pathname === "/admin/api/discovery/sources/recover-overdue") {
+        if (request.method !== "POST") return error_response("method not allowed", 405);
+        return admin_discovery_source_request(env, request, "/recover-overdue");
       }
       const admin_discovery_snapshot_match = url.pathname.match(
         /^\/admin\/api\/discovery\/sources\/([A-Za-z0-9-]+)\/snapshot$/,

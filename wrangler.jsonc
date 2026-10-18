@@ -13,6 +13,8 @@
       "/admin/*",
       "/api/*",
       "/discovery/*",
+      "/public",
+      "/public/*",
       "/health",
       "/mcp",
       "/oauth/*",

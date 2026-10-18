@@ -1,7 +1,7 @@
 // Shared pagination state. Lists filter first, then use the resulting total.
 // ListCore 负责服务端分页；PaginationModel 仅将其状态适配到现有分页控件。
 export function ListPaginationModel(ui, { url, key, normalize = value => value, loading, error,
-  filters = () => ({}), on_data, fetch = window.FindRSSAdminAuth.fetch } = {}) {
+  filters = () => ({}), on_data, visible_count, fetch = window.FindRSSAdminAuth.fetch } = {}) {
   const { kit, Result } = ui;
   const page = ui.ref(0), page_size = ui.ref(20), total = ui.ref(0);
   loading = loading || ui.ref(false);
@@ -25,10 +25,10 @@ export function ListPaginationModel(ui, { url, key, normalize = value => value, 
   const list = new kit.ListCore(request, { pageSize: 20,
     processor(response, original) { return { ...response, payload: original.payload }; } });
   let generation = 0, active = null;
-  function load(target_page = page.value) {
+  function load(target_page = page.value, { background = false } = {}) {
     const current = ++generation;
     const params = { ...filters(), page: target_page + 1, pageSize: page_size.value };
-    loading.set(true);
+    if (!background) loading.set(true);
     error.set("");
     async function run() {
       if (current !== generation) return;
@@ -48,7 +48,7 @@ export function ListPaginationModel(ui, { url, key, normalize = value => value, 
         }
         page.set(target_page);
         total.set(list.response.total);
-        on_data?.(list.response.dataSource, list.response.payload);
+        await on_data?.(list.response.dataSource, list.response.payload);
       } catch (failure) {
         if (current === generation) error.set(failure.message || String(failure));
       } finally {
@@ -61,23 +61,24 @@ export function ListPaginationModel(ui, { url, key, normalize = value => value, 
     task.finally(() => { if (active === task) active = null; });
     return task;
   }
-  const pagination = PaginationModel(ui, { total, page, page_size, loading, on_change: load });
+  const pagination = PaginationModel(ui, { total, page, page_size, loading, visible_count, on_change: load });
   return { ...pagination, list, total, load, error,
     destroy() { generation++; list.destroy(); request.destroy(); client.destroy(); } };
 }
 
-export function PaginationModel(ui, { total, loading, page, page_size, on_change } = {}) {
+export function PaginationModel(ui, { total, loading, page, page_size, visible_count, on_change } = {}) {
   const { ref, combine } = ui;
   page = page || ref(0);
   page_size = page_size || ref(20);
   loading = loading || ref(false);
-  const state = combine({ total, page, page_size, loading }, values => {
+  const state = combine({ total, page, page_size, loading, ...(visible_count ? { visible_count } : {}) }, values => {
     const count = Math.max(0, Number(values.total) || 0);
     const size = values.page_size;
     const pages = Math.max(1, Math.ceil(count / size));
     const current = Math.min(pages - 1, Math.max(0, values.page));
+    const shown = values.visible_count ?? size;
     return { total: count, page: current, page_size: size, pages, loading: values.loading,
-      first: count ? current * size + 1 : 0, last: Math.min(count, (current + 1) * size) };
+      first: count && shown ? current * size + 1 : 0, last: shown ? Math.min(count, current * size + shown) : 0 };
   });
   function set_page(value) {
     if (loading.value) return;

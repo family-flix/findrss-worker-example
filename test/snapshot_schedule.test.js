@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { register } from "node:module";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import { snapshot_store } from "./support/snapshot_store.js";
 import { RepositoryDiscoverySource } from "../server/repository/discovery_source.js";
 import { RepositoryAccessToken } from "../server/repository/access_token.js";
@@ -62,6 +64,96 @@ test("默认一小时；默认规则保存重建后继承，单源覆盖与仅�
   assert.deepEqual(restarted.settings().policy, interval(30));
 });
 
+test("每60分钟规则的手动刷新响应与重新加载列表返回相同的下次抓取时间", async t => {
+  let now = at("2026-10-18T01:00:45Z");
+  t.mock.method(Date, "now", () => now);
+  const f = fixture(t);
+  f.add("inherit");
+  f.add("own", interval(60));
+  for (const id of ["inherit", "own"]) {
+    const started_at = now;
+    f.service.load_snapshot = async () => { now += 2000; return [{ title: "刷新后的文章" }]; };
+    const result = await f.service.refresh_discovery_snapshot(id);
+    const listed = f.service.list_discovery_sources(new URL("https://internal/_admin/discovery/sources"), true)
+      .sources.find(source => source.id === id);
+    assert.equal(result.next_snapshot_at, started_at + 3_600_000);
+    assert.equal(result.next_snapshot_at, listed.next_snapshot_at);
+    assert.deepEqual(result.poll_effective, interval(60));
+  }
+});
+
+test("并发设置默认四个，保存及重启恢复；只改并发不推迟抓取时间，旧客户端保存保留并发", async t => {
+  let now = at("2026-10-16T01:00:00Z"); t.mock.method(Date, "now", () => now);
+  const f = fixture(t);
+  assert.equal(f.settings.settings().max_concurrency, 4);
+  f.add("inherit");
+  await f.settings.save_settings({ policy: interval(30), max_concurrency: 8 });
+  const before = f.settings.settings();
+  const next = f.service.scheduled_at(f.repo.discovery.find("inherit"));
+  now += 60000;
+  await f.settings.save_settings({ policy: before.policy, max_concurrency: 2 });
+  assert.equal(f.settings.settings().updated_at, before.updated_at);
+  assert.equal(f.service.scheduled_at(f.repo.discovery.find("inherit")), next);
+  const restarted = new ServiceSnapshotSettings({ repo: new RepositorySnapshotSettings(f) });
+  assert.equal(restarted.settings().max_concurrency, 2);
+  await restarted.save_settings({ policy: interval(60) });
+  assert.equal(restarted.settings().max_concurrency, 2);
+  const saved = restarted.settings();
+  for (const value of [0, 17, -1, 1.5, "8", null, true]) {
+    await assert.rejects(restarted.save_settings({ max_concurrency: value }), error => error.status === 400);
+    assert.deepEqual(restarted.settings(), saved);
+  }
+});
+
+test("旧库补齐并发设置列且不修改已有抓取规则与更新时间，重复迁移安全", t => {
+  const store = snapshot_store(); t.after(() => store.db.close());
+  store.db.exec("DROP TABLE snapshot_settings; CREATE TABLE snapshot_settings(id INTEGER PRIMARY KEY, policy_json TEXT NOT NULL, updated_at INTEGER NOT NULL)");
+  store.sql.exec("INSERT INTO snapshot_settings VALUES (1, ?, ?)", JSON.stringify(interval(30)), 1234);
+  const source = readFileSync(new URL("../server/durable_object.js", import.meta.url), "utf8");
+  const migration = source.match(/    const snapshot_settings_columns = [^\n]+\n    if \(!snapshot_settings_columns[^\n]+/)[0];
+  for (let repeat = 0; repeat < 2; repeat++) vm.runInNewContext("(function() {" + migration + "}).call(object)", { object: { ctx: { storage: { sql: store.sql } } } });
+  const settings = new ServiceSnapshotSettings({ repo: new RepositorySnapshotSettings(store) }).settings();
+  assert.equal(settings.max_concurrency, 4);
+  assert.equal(settings.updated_at, 1234);
+  assert.deepEqual(settings.policy, interval(30));
+});
+
+test("自动抓取运行中调高并发补充空位，调低等待已开始任务完成且不重复抓取", async t => {
+  t.mock.method(Date, "now", () => at("2026-10-16T01:00:00Z"));
+  const f = fixture(t);
+  for (let index = 0; index < 8; index++) f.add("source-" + index);
+  const running = new Map(), pending = [];
+  f.service.load_snapshot = source => {
+    f.calls.push(source.id);
+    return new Promise(resolve => running.set(source.id, resolve));
+  };
+  function finish(id) { running.get(id)([]); running.delete(id); }
+  try {
+    await f.settings.save_settings({ max_concurrency: 2 });
+    pending.push(f.service.refresh_due_snapshots()); await new Promise(setImmediate);
+    assert.equal(f.calls.length, 2);
+    assert.equal(f.service.next_snapshot_at(), Date.now() + 60000);
+    await f.settings.save_settings({ max_concurrency: 5 });
+    assert.equal(f.service.next_snapshot_at(), Date.now() + 5000);
+    pending.push(f.service.refresh_due_snapshots()); await new Promise(setImmediate);
+    assert.equal(f.calls.length, 5);
+    await f.settings.save_settings({ max_concurrency: 1 });
+    for (let index = 0; index < 4; index++) finish("source-" + index);
+    await new Promise(setImmediate);
+    f.service.refresh_due_snapshots(); await new Promise(setImmediate);
+    assert.equal(f.calls.length, 5, "达到调低后的上限时不再启动新任务");
+    assert.equal(running.size, 1, "调低并发不终止已有任务");
+    finish("source-4"); await Promise.all(pending);
+    pending.push(f.service.refresh_due_snapshots()); await new Promise(setImmediate);
+    assert.equal(f.calls.length, 6);
+    assert.equal(running.size, 1);
+    assert.equal(new Set(f.calls).size, 6);
+  } finally {
+    for (const id of [...running.keys()]) finish(id);
+    await Promise.all(pending);
+  }
+});
+
 test("每天、多时间点、星期与 Cron 按指定时区计算，跨午夜时段尊重开始日", () => {
   const now = at("2026-10-16T00:00:00Z"); // 周五北京时间 08:00
   assert.equal(next_policy_at(parse_poll_policy({ mode: "times", times: ["09:00", "18:00"], days: [1,2,3,4,5] }), now), at("2026-10-16T01:00:00Z"));
@@ -106,6 +198,153 @@ test("分批抓取到期源，失败保留文章并推迟到下一轮，重建�
   assert.equal(restarted.scheduled_at(row), now + 300000);
 });
 
+test("错过多个调度周期后普通请求补抓一次过期源，未来及仅手动源保留原计划", async t => {
+  const now = at("2026-10-18T12:00:00Z");
+  t.mock.method(Date, "now", () => now);
+  const f = fixture(t);
+  f.add("overdue", interval(60));
+  f.add("future", interval(60));
+  f.add("manual", { mode: "manual" });
+  f.repo.discovery.snapshot_attempt("overdue", "https://example.com/overdue", now - 5 * 3600000);
+  f.repo.discovery.snapshot_attempt("future", "https://example.com/future", now - 60000);
+  const future_at = f.service.scheduled_sources().find(source => source.id === "future").next_at;
+  const pending = [];
+  const fetch_source = readFileSync(new URL("../server/durable_object.js", import.meta.url), "utf8")
+    .match(/  async fetch\(request\) \{[\s\S]*?\n  \}/)[0];
+  const fetch = vm.runInNewContext("({" + fetch_source + "}).fetch", {
+    route: () => "ok", URL, Date: { now: () => now }, console: { warn() {} },
+  });
+  const object = { discovery_alarm_started: false, discovery_alarm_checked_at: 0,
+    app: { discovery: f.service, scripts: { refresh_due_snapshots: async () => {} } },
+    // 模拟丢失唤醒且重新登记 alarm 失败：普通请求仍应能补抓。
+    schedule_alarm: async () => { throw new Error("alarm unavailable"); },
+    ctx: { waitUntil: promise => pending.push(promise) },
+  };
+  assert.equal(await fetch.call(object, new Request("https://internal/_admin/background-tasks")), "ok");
+  await Promise.all(pending.splice(0));
+  assert.deepEqual(f.calls, ["overdue"]);
+  assert.equal(f.repo.discovery.snapshot_get("overdue").attempted_at, now);
+  assert.equal(f.service.scheduled_sources().find(source => source.id === "overdue").next_at, now + 3600000);
+  assert.equal(f.service.scheduled_sources().find(source => source.id === "future").next_at, future_at);
+  await fetch.call(object, new Request("https://internal/_admin/background-tasks"));
+  await Promise.all(pending.splice(0));
+  assert.deepEqual(f.calls, ["overdue"], "错过多个周期只补抓一次，不重复抓取");
+});
+
+test("手动补抓按下次计划逾期五小时筛选全部源，跳过运行中、停用和仅手动源", async t => {
+  const now = at("2026-10-18T12:00:00Z");
+  t.mock.method(Date, "now", () => now);
+  const f = fixture(t);
+  for (const id of ["old", "boundary", "recent", "future", "never-old", "running"]) f.add(id, interval(60));
+  f.add("never-new", interval(60), { created_at: now });
+  f.add("disabled", interval(60), { enabled: 0 });
+  f.add("manual", { mode: "manual" });
+  f.add("external", interval(60), { require_token: 1 });
+  f.add("private", interval(60), { require_token: 1, feed_url: "{{hostname}}/rss/private" });
+  for (const [id, attempted_at] of [["old", now - 9 * 3600000], ["boundary", now - 6 * 3600000],
+    ["recent", now - 6 * 3600000 + 1], ["future", now], ["running", now - 9 * 3600000], ["private", now - 9 * 3600000]]) {
+    f.repo.discovery.snapshot_attempt(id, f.repo.discovery.find(id).feed_url, attempted_at);
+  }
+  f.service.snapshot_pending.set("running", new Promise(() => {}));
+  const result = f.service.recover_overdue_snapshots();
+  assert.deepEqual(result, { matched_count: 5, queued_count: 4, skipped_count: 1 });
+  assert.deepEqual(f.service.recover_overdue_snapshots(), { matched_count: 5, queued_count: 0, skipped_count: 5 });
+  await f.service.snapshot_refreshing;
+  assert.deepEqual([...f.calls].sort(), ["boundary", "never-old", "old", "private"]);
+  assert.equal(f.service.snapshot_recovery.size, 0);
+  assert.equal(f.service.scheduled_sources().find(source => source.id === "boundary").next_at, now + 3600000);
+});
+
+test("手动补抓超过一批时持续填充空闲位置，失败继续且并发不超过设置", async t => {
+  const now = at("2026-10-18T12:00:00Z");
+  t.mock.method(Date, "now", () => now);
+  const f = fixture(t), jobs = [], running = new Map();
+  await f.settings.save_settings({ max_concurrency: 2 });
+  f.service.wait_until = promise => jobs.push(promise);
+  for (let index = 0; index < 7; index++) f.add("overdue-" + index, interval(60));
+  let active = 0, maximum = 0;
+  f.service.load_snapshot = async source => {
+    f.calls.push(source.id);
+    maximum = Math.max(maximum, ++active);
+    try { return await new Promise((resolve, reject) => running.set(source.id, { resolve, reject })); }
+    finally { active--; }
+  };
+  const result = await route(new Request("https://internal/_admin/discovery/sources/recover-overdue", { method: "POST" }), { discovery: f.service });
+  assert.equal(result.status, 202);
+  assert.equal((await result.json()).queued_count, 7);
+  await new Promise(setImmediate);
+  assert.equal(running.size, 2);
+  assert.equal(f.service.snapshot_recovery.size, 5);
+  running.get("overdue-0").reject(new Error("上游离线")); running.delete("overdue-0");
+  await new Promise(setImmediate);
+  assert.equal(running.size, 2, "某个源失败后自动补充下一个");
+  while (running.size) {
+    const [id, job] = running.entries().next().value;
+    running.delete(id); job.resolve([]);
+    await new Promise(setImmediate);
+  }
+  await Promise.all(jobs);
+  assert.equal(maximum, 2);
+  assert.equal(new Set(f.calls).size, 7);
+  assert.equal(f.service.snapshot_recovery.size, 0);
+  assert.equal(f.service.snapshot_automatic.size, 0);
+  assert.match(f.repo.discovery.snapshot_get("overdue-0").error, /上游离线/);
+});
+
+test("补抓排队期间修改为仅手动的源不再启动，无匹配及不可用服务正确返回", async t => {
+  t.mock.method(Date, "now", () => at("2026-10-18T12:00:00Z"));
+  const f = fixture(t);
+  assert.deepEqual(f.service.recover_overdue_snapshots(), { matched_count: 0, queued_count: 0, skipped_count: 0 });
+  await f.settings.save_settings({ max_concurrency: 1 });
+  f.add("a", interval(60)); f.add("b", interval(60));
+  let finish;
+  f.service.load_snapshot = async source => { f.calls.push(source.id); return new Promise(resolve => { finish = resolve; }); };
+  assert.equal(f.service.recover_overdue_snapshots().queued_count, 2);
+  await new Promise(setImmediate);
+  f.sql.exec("UPDATE discovery_sources SET poll_policy_json = ? WHERE id = 'b'", '{"mode":"manual"}');
+  finish([]); await f.service.snapshot_refreshing;
+  assert.deepEqual(f.calls, ["a"]);
+  assert.equal(f.service.snapshot_recovery.size, 0);
+  assert.equal((await route(new Request("https://internal/_admin/discovery/sources/recover-overdue"), { discovery: f.service })).status, 405);
+  f.service.load_snapshot = null;
+  assert.throws(() => f.service.recover_overdue_snapshots(), { status: 503 });
+});
+
+test("三百个到期源中单个慢源不阻塞后续抓取，空闲位置继续补充且并发不超过四个", async t => {
+  const now = at("2026-10-16T01:00:00Z"); t.mock.method(Date, "now", () => now);
+  const f = fixture(t);
+  for (let index = 0; index < 300; index++) f.add("source-" + index, interval(60));
+  let finish_slow, active = 0, maximum = 0;
+  f.service.load_snapshot = async source => {
+    f.calls.push(source.id);
+    maximum = Math.max(maximum, ++active);
+    try {
+      if (source.id === "source-0") await new Promise(resolve => { finish_slow = resolve; });
+      return [];
+    } finally { active--; }
+  };
+  const pending = [f.service.refresh_due_snapshots()];
+  try {
+    await new Promise(setImmediate);
+    assert.equal(f.calls.length, 4);
+    assert.equal(f.service.next_snapshot_at(), now + 5000, "仍有到期源及空闲位置时及时安排下一轮");
+    pending.push(f.service.refresh_due_snapshots());
+    await new Promise(setImmediate);
+    assert.equal(f.calls.length, 7, "不等待第一批最慢的源");
+    while (f.calls.length < 300) {
+      const previous = f.calls.length;
+      pending.push(f.service.refresh_due_snapshots());
+      await new Promise(setImmediate);
+      assert.ok(f.calls.length > previous, "慢源运行期间仍持续推进");
+    }
+    assert.equal(new Set(f.calls).size, 300, "运行中的源不重复启动");
+    assert.ok(maximum <= 4);
+  } finally {
+    finish_slow?.();
+    await Promise.all(pending);
+  }
+});
+
 test("智能刷新从文章变化学习间隔，手动和首次抓取不改变学习结果", async t => {
   let now = at("2026-10-16T01:00:00Z"); t.mock.method(Date, "now", () => now);
   const f = fixture(t);
@@ -138,8 +377,10 @@ test("默认规则 API 要求管理员身份，保存校验错误返回 400 且�
   const url = "https://feeds.example/admin/api/settings/snapshots";
   assert.equal((await api.fetch(new Request(url), env)).status, 401);
   const headers = { Authorization: "Bearer test-password", "Content-Type": "application/json" };
-  const saved = await api.fetch(new Request(url, { method: "PUT", headers, body: JSON.stringify({ policy: interval(30) }) }), env);
-  assert.equal(saved.status, 200); assert.deepEqual((await saved.json()).policy, interval(30));
+  const saved = await api.fetch(new Request(url, { method: "PUT", headers, body: JSON.stringify({ policy: interval(30), max_concurrency: 8 }) }), env);
+  assert.equal(saved.status, 200);
+  const saved_settings = await saved.json();
+  assert.deepEqual(saved_settings.policy, interval(30)); assert.equal(saved_settings.max_concurrency, 8);
   const bad = await api.fetch(new Request(url, { method: "PUT", headers, body: '{"policy":{"mode":"cron","cron":"bad"}}' }), env);
   assert.equal(bad.status, 400);
   const read = await api.fetch(new Request(url, { headers }), env);

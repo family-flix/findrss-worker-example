@@ -145,6 +145,10 @@ export class APIDurableObject extends DurableObject {
     const cookie_push_key = String(env.COOKIE_PUSH_KEY || "").trim();
     this.ctx.storage.transactionSync(() => migrate_script_tables(this.ctx.storage.sql));
     this.ctx.storage.sql.exec(API_SCHEMA_SQL);
+    const background_task_columns = this.ctx.storage.sql.exec("PRAGMA table_info(background_tasks)").toArray();
+    if (!background_task_columns.some(column => column.name === "source_id")) {
+      this.ctx.storage.sql.exec("ALTER TABLE background_tasks ADD COLUMN source_id TEXT NOT NULL DEFAULT ''");
+    }
     const agent_columns = this.ctx.storage.sql.exec("PRAGMA table_info(script_agent_settings)").toArray();
     if (!agent_columns.some(column => column.name === "config_json")) this.ctx.storage.sql.exec("ALTER TABLE script_agent_settings ADD COLUMN config_json TEXT NOT NULL DEFAULT ''");
     if (!agent_columns.some(column => column.name === "encrypted_keys_json")) this.ctx.storage.sql.exec("ALTER TABLE script_agent_settings ADD COLUMN encrypted_keys_json TEXT NOT NULL DEFAULT '{}'");
@@ -260,6 +264,8 @@ export class APIDurableObject extends DurableObject {
       if (!discovery_source_columns.some(column => column.name === name)) this.ctx.storage.sql.exec(`ALTER TABLE discovery_sources ADD COLUMN ${name} ${definition}`);
     }
     const snapshot_columns = this.ctx.storage.sql.exec("PRAGMA table_info(discovery_source_snapshots)").toArray();
+    const snapshot_settings_columns = this.ctx.storage.sql.exec("PRAGMA table_info(snapshot_settings)").toArray();
+    if (!snapshot_settings_columns.some(column => column.name === "max_concurrency")) this.ctx.storage.sql.exec("ALTER TABLE snapshot_settings ADD COLUMN max_concurrency INTEGER NOT NULL DEFAULT 4");
     if (!snapshot_columns.some(column => column.name === "adaptive_interval")) this.ctx.storage.sql.exec("ALTER TABLE discovery_source_snapshots ADD COLUMN adaptive_interval INTEGER NOT NULL DEFAULT 0");
     if (!snapshot_columns.some(column => column.name === "poll_fingerprint")) this.ctx.storage.sql.exec("ALTER TABLE discovery_source_snapshots ADD COLUMN poll_fingerprint TEXT NOT NULL DEFAULT ''");
     if (!avatar_columns.some((column) => column.name === "object_key")) {
@@ -459,6 +465,7 @@ export const route = {
     this.app.users = new ServiceUser({ repo: this.repo, storage: this.ctx.storage });
     this.app.discovery = new ServiceDiscovery({
       background_tasks: this.app.background_tasks,
+      wait_until: ports.wait_until,
       snapshot_settings: () => this.app.snapshot_settings.settings(),
       check_cookie_permissions: script_id => this.app.scripts.check_cookie_permissions(script_id),
       public_origin: feed_hostname_origin(env),
@@ -509,6 +516,7 @@ export const route = {
     });
     this.app.script_agent.wait_until = promise => this.ctx.waitUntil(promise);
     this.discovery_alarm_started = false;
+    this.discovery_alarm_checked_at = 0;
   }
 
   /**
@@ -521,10 +529,23 @@ export const route = {
     if (/^\/_(admin|public)\/discovery\//.test(new URL(request.url).pathname)) {
       await this.app.discovery.remember_public_origin(request.headers.get("X-Feed-Public-URL"));
     }
-    if (!this.discovery_alarm_started) {
+    if (!this.discovery_alarm_started || Date.now() - this.discovery_alarm_checked_at >= 60000) {
+      const initialize = !this.discovery_alarm_started;
       this.discovery_alarm_started = true;
-      this.ctx.waitUntil(this.schedule_alarm());
-      this.ctx.waitUntil(this.app.discovery.ensure_catalog().catch(error => console.warn("discovery catalog initialization failed", error)));
+      this.discovery_alarm_checked_at = Date.now();
+      // 定期检查并恢复丢失的 alarm；初始化失败时允许下次请求重试。
+      this.ctx.waitUntil(this.schedule_alarm().catch(error => {
+        this.discovery_alarm_started = false;
+        console.warn("discovery alarm initialization failed", error.message);
+      }));
+      // alarm 丢失或未唤醒时，普通请求也按原规则补抓到期源；入口内部负责并发去重。
+      for (const [name, run] of [
+        ["discovery snapshot", () => this.app.discovery.refresh_due_snapshots()],
+        ["RSS snapshot", () => this.app.scripts.refresh_due_snapshots()],
+      ]) {
+        this.ctx.waitUntil(Promise.resolve().then(run).catch(error => console.warn(name + " recovery failed", error.message)));
+      }
+      if (initialize) this.ctx.waitUntil(this.app.discovery.ensure_catalog().catch(error => console.warn("discovery catalog initialization failed", error)));
     }
     return route(request, this.app);
   }
@@ -559,6 +580,24 @@ export const route = {
 
   /** @returns {Promise<void>} */
   async alarm() {
+    try {
+      await this.maintain_alarm();
+    } finally {
+      // 维护或统计失败不能跳过抓取，更不能中断后续的定时唤醒。
+      for (const [name, run] of [
+        ["discovery snapshot", () => this.app.discovery.refresh_due_snapshots()],
+        ["RSS snapshot", () => this.app.scripts.refresh_due_snapshots()],
+        ["discovery catalog", () => this.app.discovery.ensure_catalog()],
+      ]) {
+        try { this.ctx.waitUntil(Promise.resolve(run()).catch(error => console.warn(name + " alarm failed", error.message))); }
+        catch (error) { console.warn(name + " alarm failed", error.message); }
+      }
+      await this.schedule_alarm();
+    }
+  }
+
+  /** @returns {Promise<void>} */
+  async maintain_alarm() {
     const now = Date.now();
     if (this.app.scripts.migration_pending) {
       try { await this.app.scripts.migrate_script_storage(); }
@@ -610,10 +649,6 @@ export const route = {
     }
     await this.app.tasks.dispatch_pending();
     this.app.statistics.refresh_snapshot(now);
-    this.ctx.waitUntil(this.app.discovery.refresh_due_snapshots());
-    this.ctx.waitUntil(this.app.scripts.refresh_due_snapshots());
-    this.ctx.waitUntil(this.app.discovery.ensure_catalog().catch(error => console.warn("discovery catalog retry failed", error)));
-    await this.schedule_alarm();
   }
 
   /** @returns {Promise<void>} */
@@ -628,8 +663,8 @@ export const route = {
     const desired = Math.min(next_lease ?? Infinity, next_snapshot ?? Infinity, next_feed ?? Infinity, next_statistics, next_token_expiry ?? Infinity,
       this.app.scripts?.migration_pending ? now + 10000 : Infinity, now + MAINTENANCE_MILLISECONDS);
     const current = await this.ctx.storage.getAlarm();
-    // 新任务只能提前唤醒，不能把已经安排的快照或租约检查不断推迟。
-    if (current === null || desired < current - 1000) {
+    // 保留仍有效的更早唤醒；滞留超过一分钟的过期 alarm 重新登记以恢复调度。
+    if (current === null || current < now - 60000 || desired < current - 1000) {
       await this.ctx.storage.setAlarm(desired);
     }
   }

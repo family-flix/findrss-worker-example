@@ -602,8 +602,13 @@ function format_relative_time(timestamp, now) {
 }
 
 function RelativeTimeView({ timestamp, now, scheduled = false, name, class: custom_class }) {
+  // 新抓取结果先使用渲染时刻，避免分钟计时器的旧值把约一小时向上取整成两小时。
+  const rendered_at = Date.now();
   return View({ as: "time", class: custom_class, attributes: { n: name, title: format_time(timestamp) } }, [
-    computed(now, current => scheduled && timestamp <= current ? "等待调度" : format_relative_time(timestamp, current)),
+    computed(now, current => {
+      const current_time = Math.max(current, rendered_at);
+      return scheduled && timestamp <= current_time ? "等待调度" : format_relative_time(timestamp, current_time);
+    }),
   ]);
 }
 
@@ -841,6 +846,16 @@ function SourceTableView({ store: vm$ }) {
   ]);
 }
 
+function OverdueRecoveryButton({ store: vm$ }) {
+  return Button({ variant: "secondary", loading: vm$.state.recovery_busy,
+    disabled: combine({ busy: vm$.state.recovery_busy, loading: vm$.state.loading, bulk: vm$.state.bulk_busy, saving: vm$.state.saving },
+      values => values.busy || values.loading || values.bulk || values.saving),
+    attributes: { n: "discovery-source-recover-overdue-button", type: "button",
+      title: "补抓全部启用且下次抓取时间已逾期至少 5 小时的订阅源，不受分页和筛选影响，跳过运行中任务" },
+    onClick: vm$.methods.recover_overdue,
+  }, [computed(vm$.state.recovery_busy, busy => busy ? "提交中…" : "补抓逾期 5 小时")]);
+}
+
 function SourceListView({ store }) {
   const vm$ = store;
   return View(
@@ -848,6 +863,9 @@ function SourceListView({ store }) {
     [
       FilterFormView({ store: vm$ }),
       SourceBulkActionsView({ store: vm$ }),
+      Show({ when: computed(vm$.state.recovery_message, Boolean), ok() {
+        return View({ class: "text-muted", attributes: { n: "discovery-source-recovery-message", role: "status" } }, [vm$.state.recovery_message]);
+      } }),
       Show({
         when: computed(vm$.state.list_error, Boolean),
         ok() {
@@ -936,7 +954,7 @@ function DiscoveryApplicationView(embedded = false) {
           },
         });
       },
-      onUnmounted() { detach_agent?.(); vm$.pagination.destroy(); },
+      onUnmounted() { detach_agent?.(); vm$.methods.destroy(); },
     },
     [SourceListView({ store: vm$ }), Show({ when: vm$.state.form_open,
       ok() { return SourceFormView({ store: vm$ }); },
@@ -947,7 +965,7 @@ function DiscoveryApplicationView(embedded = false) {
     eyebrow: "Discovery Operations",
     title: "订阅源管理",
     count: computed(vm$.pagination.total, String),
-    actions: [Button({ attributes: { n: "discovery-source-import-button" },
+    actions: [OverdueRecoveryButton({ store: vm$ }), Button({ attributes: { n: "discovery-source-import-button" },
       disabled: combine({ loading: vm$.state.loading, saving: vm$.state.saving, bulk_busy: vm$.state.bulk_busy }, values => values.loading || values.saving || values.bulk_busy),
       onClick: vm$.methods.open_import }, ["导入 JSON"]),
       Button({class: "box-border",  variant: "secondary", attributes: { n: "discovery-source-export-button", title: "导出所有订阅源，包括停用源，不受分页和筛选影响" },

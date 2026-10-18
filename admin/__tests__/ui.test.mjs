@@ -806,6 +806,8 @@ test("订阅源表格选择控制批量菜单，启停后行内容和数量同�
 
 test("抓取与快照每 60 秒仅更新相对时间，保留列表与选择，卸载后停止计时", async () => {
   ui.DOM = {};
+  context.FindRSSAdminShell ||= {};
+  context.document = { querySelector: () => null };
   let current_time = Date.UTC(2026, 9, 17, 12);
   let requests = 0;
   const timers = new Map();
@@ -870,6 +872,86 @@ test("抓取与快照每 60 秒仅更新相对时间，保留列表与选择，�
     else context.Date = previous_date;
     context.setInterval = previous_set_interval;
     context.clearInterval = previous_clear_interval;
+  }
+});
+
+test("逾期补抓按钮显示范围说明、提交 loading 和结果状态", async () => {
+  ui.DOM = {};
+  context.FindRSSAdminShell ||= {};
+  context.document = { querySelector: () => null };
+  let finish;
+  context.FindRSSAdminAuth = { fetch: async url => url.endsWith("/recover-overdue")
+    ? new Promise(resolve => { finish = resolve; }) : Response.json({ sources: [] }) };
+  vm.runInContext("(() => {\n" + page_source("discovery.js") +
+    "\nglobalThis.recovery_model = DiscoveryAdminViewModel(); globalThis.recovery_button = OverdueRecoveryButton({ store: recovery_model }); globalThis.recovery_list = SourceListView({ store: recovery_model }); })();", context);
+  const model = context.recovery_model, button = context.recovery_button;
+  try {
+    assert.match(button.state.attributes.title, /全部启用.*至少 5 小时/);
+    assert.match(button.state.attributes.title, /不受分页和筛选影响/);
+    const pending = button.events.onClick();
+    assert.equal(model.state.recovery_busy.value, true);
+    assert.equal(button.state.attributes.disabled, true);
+    assert.equal(button.state.attributes["aria-busy"], "true");
+    finish(Response.json({ matched_count: 2, queued_count: 1, skipped_count: 1 }, { status: 202 }));
+    await pending;
+    await new Promise(setImmediate);
+    assert.equal(model.state.recovery_busy.value, false);
+    assert.equal(button.state.attributes.disabled, undefined);
+    assert.equal(button.state.attributes["aria-busy"], undefined);
+    const result = find(context.recovery_list, "discovery-source-recovery-message");
+    assert.equal(result.state.attributes.role, "status");
+    assert.match(result.children[0].state.value, /已提交 1 个补抓任务/);
+  } finally {
+    button.onUnmounted();
+    model.methods.destroy();
+  }
+});
+
+test("刷新快照完成后按当前时间显示下次抓取，不受表格上一分钟的时钟影响", async () => {
+  ui.DOM = {};
+  context.FindRSSAdminShell ||= {};
+  context.document = { querySelector: () => null };
+  let current_time = Date.UTC(2026, 9, 18, 12);
+  const previous_date = context.Date;
+  context.Date = class extends Date { static now() { return current_time; } };
+  let finish, saved_at = current_time - 600_000, next_snapshot_at = current_time + 1_800_000;
+  context.FindRSSAdminAuth = { fetch: async (url, options) => {
+    if (url.startsWith("/admin/api/background-tasks?")) return Response.json({ tasks: [] });
+    if (url.endsWith("/snapshot") && options.method === "POST") return new Promise(resolve => { finish = resolve; });
+    return Response.json({ sources: [{ id: "refresh-time", title: "每60分钟", enabled: true,
+      feed_url: "https://example.com/feed", poll_policy: { mode: "interval", interval: 3600 },
+      poll_effective: { mode: "interval", interval: 3600 }, next_snapshot_at,
+      snapshot: { saved_at, articles: [], error: "" },
+    }] });
+  } };
+  let root, model;
+  try {
+    vm.runInContext("(() => {\n" + page_source("discovery.js") +
+      "\nglobalThis.refresh_time_model = DiscoveryAdminViewModel(); globalThis.refresh_time_table = SourceTableView({ store: refresh_time_model }); })();", context);
+    root = context.refresh_time_table;
+    model = context.refresh_time_model;
+    await model.methods.start();
+    root.onMounted();
+    assert.equal(find(root, "discovery-source-next-snapshot-time").children[0].state.value, "30分钟后");
+    // 距上次分钟计时已有 45 秒；抓取耗时 2 秒，期间没有触发分钟计时器。
+    current_time += 45_000;
+    next_snapshot_at = current_time + 3_600_000;
+    const pending = model.methods.refresh_snapshot("refresh-time");
+    current_time += 2000;
+    saved_at = current_time;
+    finish(Response.json({ snapshot: { saved_at, articles: [], error: "" }, next_snapshot_at,
+      poll_effective: { mode: "interval", interval: 3600 } }));
+    assert.equal(await pending, true);
+    assert.equal(model.state.sources.value[0].next_snapshot_at, next_snapshot_at);
+    assert.equal(find(root, "discovery-source-next-snapshot-time").children[0].state.value, "60分钟后");
+    assert.equal(find(root, "discovery-source-snapshot-saved-at").children[0].state.value, "刚刚");
+    await model.methods.refresh_list();
+    assert.equal(find(root, "discovery-source-next-snapshot-time").children[0].state.value, "60分钟后");
+  } finally {
+    root?.onUnmounted();
+    model?.methods.destroy();
+    if (previous_date === undefined) delete context.Date;
+    else context.Date = previous_date;
   }
 });
 
@@ -1531,10 +1613,17 @@ test("设置子页面各自加载配置，保留编辑和重试功能，切换�
     assert.equal(find(root, "settings-webhook-fields"), null);
     assert.equal(requests.at(-1).url, "/admin/api/settings/snapshots");
     assert.ok(find(root, "settings-snapshot-save"));
+    const concurrency = find(root, "settings-snapshot-concurrency");
+    assert.equal(concurrency.state.value, "4");
+    assert.equal(concurrency.state.attributes.type, "number");
+    assert.equal(concurrency.state.attributes.min, 1);
+    assert.equal(concurrency.state.attributes.max, 16);
+    concurrency.events.onInput({ target: { value: "8" } });
     await find(root, "settings-snapshot-save").events.onClick();
     await new Promise(setImmediate);
     assert.equal(requests.at(-1).url, "/admin/api/settings/snapshots");
     assert.equal(requests.at(-1).method, "PUT");
+    assert.equal(requests.at(-1).body.max_concurrency, 8);
 
     const token_reads = requests.filter(request => request.url === "/admin/api/device-tokens" && request.method === "GET").length;
     await activate("device-tokens");

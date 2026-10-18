@@ -28,6 +28,7 @@ export function safe_avatar_url(value) {
     try {
       const url = new URL(path);
       if (url.username || url.password || path.length > 2048) return "";
+      if (/^\/public\/avatar\/[A-Za-z0-9-]+(?:\/[A-Za-z0-9-]+)?$/.test(url.pathname)) return url.pathname + url.search;
       const avatar = /^\/(?:api\/avatar|discovery\/avatars)\/([A-Za-z0-9-]+)$/.exec(url.pathname);
       if (avatar) return `/api/avatar/${avatar[1]}${url.search}`;
       return url.protocol === "https:" ? url.href : "";

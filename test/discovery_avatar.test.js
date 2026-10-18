@@ -13,7 +13,7 @@ function fixture({ with_bucket = true } = {}) {
   const sources = new Map([["src-1", { id: "src-1", title: "源", avatar_updated_at: 0 }]]);
   const avatars = new Map();
   const repo = { discovery: {
-    find: id => sources.get(id),
+    find: id => sources.has(id) ? { ...sources.get(id), avatar_object_key: avatars.get(id)?.object_key } : undefined,
     snapshot_get: () => undefined,
     exists: id => sources.has(id),
     delete(id) { sources.delete(id); avatars.delete(id); },
@@ -42,7 +42,7 @@ function fixture({ with_bucket = true } = {}) {
 test("上传到 R2，SQLite 只留指针，公开头像仍使用同源路径与图片响应", async () => {
   const { service, bucket, avatars } = fixture();
   const result = await service.put_discovery_avatar(upload(), "src-1");
-  assert.match(result.source.avatar_url, /^\/api\/avatar\/src-1\?v=\d+$/);
+  assert.match(result.source.avatar_url, /^\/public\/avatar\/src-1\/[a-f0-9-]+$/);
   const row = avatars.get("src-1");
   assert.match(row.object_key, /^discovery\/avatars\/src-1\//);
   assert.equal(row.bytes.byteLength, 0);

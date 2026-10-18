@@ -117,8 +117,10 @@ test("SourceAvatarModel.sniff 对残缺字节与空输入回空串", () => {
 });
 
 test("SourceAvatarModel.path 只在有头像时给出带版本号的相对路径", () => {
-  assert.equal(SourceAvatarModel.path("src-1", 1700000000000), "/api/avatar/src-1?v=1700000000000");
-  assert.equal(SourceAvatarModel.path("src-1", 1), "/api/avatar/src-1?v=1");
+  assert.equal(SourceAvatarModel.path("src-1", 1700000000000), "/public/avatar/src-1?v=1700000000000");
+  assert.equal(SourceAvatarModel.path("src-1", 1), "/public/avatar/src-1?v=1");
+  assert.equal(SourceAvatarModel.path("src-1", 1, "discovery/avatars/src-1/object-1"), "/public/avatar/src-1/object-1");
+  assert.equal(SourceAvatarModel.path("src-1", 1, "discovery/avatars/other/object-1"), "/public/avatar/src-1?v=1");
   assert.equal(SourceAvatarModel.path("src-1", 0), "");
   assert.equal(SourceAvatarModel.path("src-1", null), "");
   assert.equal(SourceAvatarModel.path("src-1", undefined), "");
@@ -133,7 +135,7 @@ test("DiscoverySourceModel 组合出头像实体（path / has）", () => {
 
   const with_avatar = DiscoverySourceModel.fromRow(source_row({ avatar_updated_at: 1700000000000 })).avatar();
   assert.equal(with_avatar.has(), true);
-  assert.equal(with_avatar.path(), "/api/avatar/src-1?v=1700000000000");
+  assert.equal(with_avatar.path(), "/public/avatar/src-1?v=1700000000000");
 });
 
 test("DiscoverySourceModel.fromRow().toValue() 把 0/1 列翻成布尔，tags 逐项转字符串", () => {
@@ -169,7 +171,7 @@ test("DiscoverySourceModel 老行缺列时 source_type 回退 website、avatar_u
 });
 
 test("DiscoverySourceModel 有头像时给出带版本号的同源路径", () => {
-  assert.equal(value_of({ avatar_updated_at: 1700000000000 }).avatar_url, "/api/avatar/src-1?v=1700000000000");
+  assert.equal(value_of({ avatar_updated_at: 1700000000000 }).avatar_url, "/public/avatar/src-1?v=1700000000000");
 });
 
 test("DiscoverySourceModel 对坏 tags_json 与非数组降级成空数组，不抛错", () => {

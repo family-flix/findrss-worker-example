@@ -18,6 +18,6 @@ export function initialize_home(context, vm) {
   context.Timeless.combine ||= (sources, map) => ({ __is_ref: true, get value() {
     return map(Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.value])));
   } });
-  vm.runInContext(home_source + "\nglobalThis.model = DiscoveryViewModel(globalThis.catalog || null);", context);
+  vm.runInContext(home_source + "\nglobalThis.model = DiscoveryViewModel(globalThis.catalog || null, globalThis.parameters || null);", context);
   return context.model;
 }

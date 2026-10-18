@@ -10,16 +10,29 @@ import * as platform_helpers from "../components/discovery_platform.js";
 import { RssRoutePatternModel } from "../../server/domain/rss_route.js";
 import { PollPolicyModel } from "../components/poll_policy.model.js";
 
-function modal_model(fetch, { confirm = () => true, notify = () => {}, document = { querySelector: () => null } } = {}) {
+function modal_model(fetch, { confirm = () => true, notify = () => {}, document = { querySelector: () => null },
+  background_tasks = async () => Response.json({ tasks: [] }), timers = { setTimeout: handler => handler(), clearTimeout() {} } } = {}) {
   const ref = value => ({ value, set(next) { this.value = next; }, as(next) { this.value = next; } });
   const context = vm.createContext({ ...platform_helpers, PollPolicyView, poll_policy_label, PollPolicyModel, RssRoutePatternModel, ListPaginationModel, PaginationModel, PaginationView, URL, File, Blob, document, window: {
     FindRSSAdminUI: { ...list_runtime, DOM: {}, notify, ref, refarr: ref, computed: (source, map) => ({ get value() { return map(source.value); } }), combine: (sources, map) => ({ get value() { return map(Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.value]))); } }) },
-    confirm, setTimeout: handler => handler(), FindRSSAdminShell: {}, FindRSSAdminPages: {}, FindRSSAdminAuth: { fetch: async (url, options) => paged_fixture(await fetch(url, options || {}), url) },
+    confirm, ...timers, FindRSSAdminShell: {}, FindRSSAdminPages: {}, FindRSSAdminAuth: { fetch: async (url, options) =>
+      url.startsWith("/admin/api/background-tasks?") ? background_tasks(url, options || {}) : paged_fixture(await fetch(url, options || {}), url) },
   } });
   vm.runInContext(page_source("discovery.js") + "\nglobalThis.model = DiscoveryAdminViewModel();", context);
   assert.deepEqual(JSON.parse(JSON.stringify(context.model.state.platforms.value)), [{ id: "website", label: "网页", icon: "" }]);
   return context.model;
 }
+
+test("订阅源列表和编辑头像保留新的公开对象路径，并兼容旧 API 地址", async () => {
+  const urls = ["/public/avatar/one/object-1", "/api/avatar/two?v=123"];
+  const model = modal_model(async () => Response.json({ sources: urls.map((avatar_url, index) => ({
+    id: String(index), title: "源", feed_url: "https://example.com/feed/" + index, avatar_url,
+  })) }));
+  await model.methods.refresh_list();
+  assert.deepEqual(Array.from(model.state.sources.value, source => source.avatar_url), urls);
+  model.methods.edit_source("0");
+  assert.equal(model.editing_source.value.avatar_url, urls[0]);
+});
 
 test("社媒主页新增保存、编辑回填与清空，关闭表单清除草稿，关键词可检索主页", async () => {
   const writes = [];
@@ -115,6 +128,181 @@ test("多主页 JSON 导出后重新导入保留全部地址和顺序", async ()
   assert.equal(writes[0].social_url, social_urls[0]);
 });
 
+function task_timers() {
+  const pending = new Map();
+  let next_id = 0;
+  return { pending,
+    setTimeout(handler) { const id = ++next_id; pending.set(id, handler); return id; },
+    clearTimeout(id) { pending.delete(id); },
+    async tick() {
+      const [id, handler] = pending.entries().next().value;
+      pending.delete(id);
+      handler();
+      await new Promise(setImmediate);
+    },
+  };
+}
+
+test("重新进入、翻页、修改条数和搜索后批量恢复当前页的任务 loading", async t => {
+  const sources = Array.from({ length: 25 }, (_, index) => ({ id: "source-" + index, title: "源 " + index, enabled: true }));
+  const calls = [], timers = task_timers();
+  const model = modal_model(async () => Response.json({ sources }), { timers,
+    background_tasks: async url => {
+      const ids = new URL(url, "https://admin").searchParams.get("source_ids").split(",");
+      calls.push(ids);
+      return Response.json({ tasks: ids.filter(id => ["source-1", "source-21"].includes(id))
+        .map(source_id => ({ id: "task-" + source_id, source_id, status: "running" })) });
+    },
+  });
+  t.after(() => model.methods.destroy());
+  await model.methods.start();
+  assert.deepEqual(calls[0], sources.slice(0, 20).map(source => source.id));
+  assert.deepEqual(Array.from(model.state.snapshot_refreshing.value), ["source-1"]);
+  assert.equal(await model.methods.refresh_snapshot("source-1"), false);
+  assert.equal(timers.pending.size, 1);
+  await model.pagination.set_page(1);
+  assert.deepEqual(calls[1], sources.slice(20).map(source => source.id));
+  assert.deepEqual(Array.from(model.state.snapshot_refreshing.value), ["source-21"]);
+  assert.equal(timers.pending.size, 1);
+  await model.pagination.set_page_size(10);
+  assert.deepEqual(calls[2], sources.slice(0, 10).map(source => source.id));
+  await model.methods.set_filter("query", "源 21");
+  assert.deepEqual(calls[3], ["source-21"]);
+  assert.deepEqual(Array.from(model.state.snapshot_refreshing.value), ["source-21"]);
+  await model.methods.set_filter("query", "无匹配");
+  assert.equal(calls.length, 4);
+  assert.equal(model.state.snapshot_refreshing.value.length, 0);
+  assert.equal(timers.pending.size, 0);
+});
+
+test("恢复的任务轮询至所有任务结束，随后更新快照且保持页码、筛选和勾选", async t => {
+  const timers = task_timers();
+  let active = 2, saved_at = 10, list_calls = 0;
+  const model = modal_model(async () => {
+    list_calls++;
+    return Response.json({ sources: Array.from({ length: 25 }, (_, index) => ({
+      id: "source-" + index, title: "源 " + index, enabled: true,
+      cache: { status: "fresh", refreshing: active > 0 }, snapshot: { saved_at, articles: [] },
+    })) });
+  }, { timers, background_tasks: async () => Response.json({ tasks: Array.from({ length: active }, (_, index) => ({
+    id: "task-" + index, source_id: "source-21", status: "running",
+  })) }) });
+  t.after(() => model.methods.destroy());
+  await model.methods.start();
+  await model.pagination.set_page(1);
+  model.methods.toggle_selection("source-21");
+  active = 1;
+  await timers.tick();
+  assert.deepEqual(Array.from(model.state.snapshot_refreshing.value), ["source-21"]);
+  assert.equal(list_calls, 2);
+  active = 0;
+  saved_at = 50;
+  await timers.tick();
+  assert.equal(list_calls, 3);
+  assert.equal(model.pagination.page.value, 1);
+  assert.deepEqual(Array.from(model.state.selected_ids.value), ["source-21"]);
+  assert.equal(model.state.filter_status.value, "enabled");
+  assert.equal(model.state.sources.value[1].snapshot.saved_at, 50);
+  assert.equal(model.state.sources.value[1].cache.refreshing, false);
+  assert.equal(model.state.snapshot_refreshing.value.length, 0);
+  assert.equal(timers.pending.size, 0);
+});
+
+test("查询任务不会清除本页未完成的刷新请求，失败保留 loading 并重试", async t => {
+  const timers = task_timers();
+  let finish, offline = false, active = true;
+  const model = modal_model(async url => url.endsWith("/snapshot") ? new Promise(resolve => { finish = resolve; })
+    : Response.json({ sources: [{ id: "one", title: "源" }, { id: "two", title: "另一源" }] }),
+  { timers, background_tasks: async () => offline ? Response.json({ error: "离线" }, { status: 503 })
+    : Response.json({ tasks: active ? [{ source_id: "two", status: "running" }] : [] }) });
+  t.after(() => model.methods.destroy());
+  await model.methods.start();
+  const pending = model.methods.refresh_snapshot("one");
+  await model.methods.refresh_list();
+  assert.deepEqual(Array.from(model.state.snapshot_refreshing.value).sort(), ["one", "two"]);
+  offline = true;
+  await timers.tick();
+  assert.deepEqual(Array.from(model.state.snapshot_refreshing.value).sort(), ["one", "two"]);
+  assert.match(model.state.list_error.value, /后台任务加载失败：离线/);
+  assert.equal(timers.pending.size, 1);
+  offline = false;
+  active = false;
+  await timers.tick();
+  assert.deepEqual(Array.from(model.state.snapshot_refreshing.value), ["one"]);
+  finish(Response.json({ snapshot: { saved_at: 100, articles: [], error: "" } }));
+  await pending;
+  assert.equal(model.state.snapshot_refreshing.value.length, 0);
+});
+
+test("搜索和卸载时忽略迟到的任务响应，卸载清理轮询", async () => {
+  const timers = task_timers(), pending = [];
+  const model = modal_model(async () => Response.json({ sources: [
+    { id: "one", title: "第一源" }, { id: "two", title: "第二源" },
+  ] }), { timers, background_tasks: () => new Promise(resolve => pending.push(resolve)) });
+  const first = model.methods.start();
+  await new Promise(setImmediate);
+  const latest = model.methods.set_filter("query", "第二源");
+  pending[0](Response.json({ tasks: [{ source_id: "one", status: "running" }] }));
+  await first;
+  await new Promise(setImmediate);
+  assert.equal(model.state.snapshot_refreshing.value.length, 0);
+  pending[1](Response.json({ tasks: [{ source_id: "two", status: "running" }] }));
+  await latest;
+  assert.deepEqual(Array.from(model.state.snapshot_refreshing.value), ["two"]);
+  assert.equal(timers.pending.size, 1);
+  await timers.tick();
+  model.methods.destroy();
+  pending[2](Response.json({ tasks: [{ source_id: "one", status: "running" }] }));
+  await new Promise(setImmediate);
+  assert.deepEqual(Array.from(model.state.snapshot_refreshing.value), ["two"]);
+  assert.equal(timers.pending.size, 0);
+});
+
+test("补抓全局逾期源只提交一次，成功后保留分页、筛选、勾选并展示计数", async () => {
+  const calls = [], notifications = [];
+  let finish;
+  const sources = Array.from({ length: 25 }, (_, index) => ({ id: String(index), title: "源 " + index, enabled: true, source_type: "website" }));
+  const model = modal_model(async (url, options) => {
+    calls.push({ url, options });
+    if (url.endsWith("/recover-overdue")) return new Promise(resolve => { finish = resolve; });
+    return Response.json({ sources });
+  }, { notify: message => notifications.push(message) });
+  await model.methods.set_filter("query", "源");
+  await model.pagination.set_page(1);
+  model.methods.toggle_selection("20");
+  const pending = model.methods.recover_overdue();
+  assert.equal(model.state.recovery_busy.value, true);
+  assert.equal(await model.methods.recover_overdue(), false);
+  const submitted = calls.filter(call => call.options.method === "POST");
+  assert.equal(submitted.length, 1);
+  assert.equal(submitted[0].url, "/admin/api/discovery/sources/recover-overdue");
+  assert.equal(submitted[0].options.body, undefined, "由后端筛选全局逾期源，不提交当前页或勾选 ID");
+  finish(Response.json({ matched_count: 3, queued_count: 2, skipped_count: 1 }, { status: 202 }));
+  assert.equal(await pending, true);
+  assert.equal(model.state.recovery_busy.value, false);
+  assert.equal(model.pagination.page.value, 1);
+  assert.equal(model.state.query.value, "源");
+  assert.deepEqual(Array.from(model.state.selected_ids.value), ["20"]);
+  assert.match(model.state.recovery_message.value, /已提交 2 个补抓任务，跳过 1 个/);
+  assert.equal(notifications.at(-1), model.state.recovery_message.value);
+});
+
+test("补抓提交失败显示错误并允许重试，没有匹配时显示空结果", async () => {
+  let fail = true;
+  const model = modal_model(async url => url.endsWith("/recover-overdue")
+    ? fail ? Response.json({ error: "服务不可用" }, { status: 503 })
+      : Response.json({ matched_count: 0, queued_count: 0, skipped_count: 0 }, { status: 202 })
+    : Response.json({ sources: [] }));
+  assert.equal(await model.methods.recover_overdue(), false);
+  assert.equal(model.state.recovery_busy.value, false);
+  assert.equal(model.state.list_error.value, "补抓提交失败：服务不可用");
+  assert.equal(model.state.recovery_message.value, "");
+  fail = false;
+  assert.equal(await model.methods.recover_overdue(), true);
+  assert.equal(model.state.list_error.value, "");
+  assert.equal(model.state.recovery_message.value, "没有逾期 5 小时以上的订阅源。");
+});
+
 test("手动刷新保持加载状态，完成后更新当前记录的快照、缓存与头像", async () => {
   const snapshot = { saved_at: 123, articles: [{ title: "旧文章" }] };
   let finish;
@@ -139,6 +327,165 @@ test("手动刷新保持加载状态，完成后更新当前记录的快照、�
   assert.equal(model.state.sources.value[0].poll_effective.interval, 300);
   assert.equal(model.state.sources.value[1].snapshot.saved_at, 123);
   assert.equal(model.state.snapshot_refreshing.value.length, 0);
+});
+
+test("公开开关只更新当前行，不重新加载列表并保留分页、筛选和选择", async () => {
+  const sources = Array.from({ length: 25 }, (_, index) => ({
+    id: String(index), title: "源 " + index, enabled: true, require_token: true,
+  }));
+  const calls = [];
+  let finish;
+  const model = modal_model((url, options) => {
+    calls.push({ url, options });
+    if (options.method !== "PATCH") return Response.json({ sources });
+    const id = url.split("/").at(-1);
+    return new Promise(resolve => { finish = () => resolve(Response.json({
+      source: { ...sources.find(source => source.id === id), ...JSON.parse(options.body), updated_at: 123 },
+    })); });
+  });
+  await model.methods.set_filter("visibility", "all");
+  await model.pagination.set_page(1);
+  model.methods.toggle_selection("20");
+  const untouched = model.state.sources.value[1];
+  calls.length = 0;
+
+  for (const is_public of [true, false]) {
+    const pending = model.methods.set_source_public("20", is_public);
+    assert.equal(model.state.loading.value, false);
+    assert.deepEqual(Array.from(model.state.source_updating.value), ["20"]);
+    assert.equal(await model.methods.set_source_public("20", is_public), false, "阻止重复提交");
+    finish();
+    assert.equal(await pending, true);
+    assert.equal(model.state.sources.value[0].require_token, !is_public);
+    assert.equal(model.state.sources.value[0].updated_at, 123);
+    assert.equal(model.state.sources.value[1], untouched);
+    assert.equal(model.state.sources.value.length, 5);
+    assert.equal(model.state.loading.value, false);
+    assert.equal(model.state.source_updating.value.length, 0);
+    assert.equal(model.pagination.page.value, 1);
+    assert.equal(model.pagination.state.value.total, 25);
+    assert.equal(model.state.filter_visibility.value, "all");
+    assert.deepEqual(Array.from(model.state.selected_ids.value), ["20"]);
+  }
+  assert.deepEqual(calls.map(call => [call.url, call.options.method, JSON.parse(call.options.body)]), [
+    ["/admin/api/discovery/sources/20", "PATCH", { require_token: false }],
+    ["/admin/api/discovery/sources/20", "PATCH", { require_token: true }],
+  ]);
+});
+
+test("公开开关保存失败保留原状态，显示错误并允许重试，不重新加载列表", async () => {
+  let fail = true;
+  const calls = [];
+  const source = { id: "one", title: "源", enabled: true, require_token: true };
+  const model = modal_model((url, options) => {
+    calls.push(options.method || "GET");
+    if (options.method !== "PATCH") return Response.json({ sources: [source] });
+    return fail ? Response.json({ error: "保存失败" }, { status: 500 })
+      : Response.json({ source: { ...source, require_token: false } });
+  });
+  await model.methods.refresh_list();
+  assert.equal(await model.methods.set_source_public("one", true), false);
+  assert.equal(model.state.sources.value[0].require_token, true);
+  assert.equal(model.state.list_error.value, "保存失败");
+  assert.equal(model.state.source_updating.value.length, 0);
+  assert.equal(model.state.loading.value, false);
+  fail = false;
+  assert.equal(await model.methods.set_source_public("one", true), true);
+  assert.equal(model.state.sources.value[0].require_token, false);
+  assert.equal(model.state.list_error.value, "");
+  assert.deepEqual(calls, ["GET", "PATCH", "PATCH"]);
+});
+
+test("删除只移除当前记录并更新总数和选择，失败保留原行且阻止重复请求", async () => {
+  const calls = [];
+  let finish, fail = true;
+  const model = modal_model((url, options) => {
+    calls.push(options.method || "GET");
+    if (options.method !== "DELETE") return Response.json({ sources: [
+      { id: "one", title: "源一", enabled: true }, { id: "two", title: "源二", enabled: true },
+    ] });
+    return new Promise(resolve => { finish = () => resolve(fail
+      ? Response.json({ error: "删除失败" }, { status: 500 }) : Response.json({})); });
+  });
+  await model.methods.refresh_list();
+  model.methods.toggle_page_selection();
+  model.state.snapshot_errors.set(new Map([["one", "旧错误"]]));
+  const untouched = model.state.sources.value[1];
+  let pending = model.methods.remove_source("one");
+  assert.equal(await model.methods.remove_source("one"), false);
+  assert.equal(model.state.loading.value, false);
+  finish();
+  assert.equal(await pending, false);
+  assert.equal(model.pagination.total.value, 2);
+  assert.deepEqual(Array.from(model.state.selected_ids.value), ["one", "two"]);
+  assert.equal(model.state.list_error.value, "删除失败");
+  assert.equal(model.state.source_updating.value.length, 0);
+  fail = false;
+  pending = model.methods.remove_source("one");
+  finish();
+  assert.equal(await pending, true);
+  assert.equal(model.pagination.total.value, 1);
+  assert.equal(model.state.sources.value[0], untouched);
+  assert.deepEqual(Array.from(model.state.selected_ids.value), ["two"]);
+  assert.equal(model.state.snapshot_errors.value.has("one"), false);
+  assert.equal(model.state.list_error.value, "");
+  assert.equal(await model.methods.remove_source("one"), false);
+  assert.deepEqual(calls, ["GET", "DELETE", "DELETE"]);
+});
+
+test("启停和公开开关直接移出不再匹配筛选的行，不重新请求列表", async () => {
+  const calls = [];
+  let sources = ["one", "two", "three"].map(id => ({ id, title: id, enabled: true, require_token: true }));
+  const model = modal_model((url, options) => {
+    calls.push(options.method || "GET");
+    if (options.method !== "PATCH") return Response.json({ sources });
+    const source = { ...sources.find(source => url.endsWith("/" + source.id)), ...JSON.parse(options.body) };
+    return Response.json({ source });
+  });
+  await model.methods.set_filter("visibility", "private");
+  model.methods.toggle_page_selection();
+  const untouched = model.state.sources.value[2];
+  assert.equal(await model.methods.toggle_source("one", false), true);
+  assert.equal(await model.methods.set_source_public("two", true), true);
+  assert.equal(model.state.sources.value.length, 1);
+  assert.equal(model.state.sources.value[0], untouched);
+  assert.equal(model.pagination.total.value, 1);
+  assert.deepEqual(Array.from(model.state.selected_ids.value), ["three"]);
+  assert.equal(model.state.loading.value, false);
+  assert.deepEqual(calls, ["GET", "PATCH", "PATCH"]);
+});
+
+test("新增和编辑在当前页合并权威记录并维护总数，不重新请求列表", async () => {
+  const sources = Array.from({ length: 25 }, (_, index) => ({ id: String(index), title: "源 " + index, enabled: true }));
+  const calls = [];
+  const model = modal_model((url, options) => {
+    if (url.includes("/scripts")) return Response.json({ scripts: [] });
+    calls.push(options.method || "GET");
+    if (!options.method) return Response.json({ sources });
+    return Response.json({ source: { ...JSON.parse(options.body), id: "new", updated_at: 123 } });
+  });
+  await model.methods.refresh_list();
+  await model.pagination.set_page(1);
+  const untouched = model.state.sources.value[0];
+  model.methods.create_source();
+  model.methods.set_draft("title", "新增");
+  await model.methods.save_source();
+  assert.equal(model.pagination.page.value, 1);
+  assert.equal(model.pagination.total.value, 26);
+  assert.equal(model.state.sources.value[0].id, "new");
+  assert.equal(model.state.sources.value[1], untouched);
+  model.methods.toggle_selection("new");
+  model.methods.edit_source("new");
+  model.methods.set_draft("title", "新名称");
+  await model.methods.save_source();
+  assert.equal(model.state.sources.value[0].title, "新名称");
+  assert.equal(model.state.sources.value[0].updated_at, 123);
+  assert.equal(model.state.sources.value[1], untouched);
+  assert.equal(model.pagination.total.value, 26);
+  assert.equal(model.pagination.page.value, 1);
+  assert.deepEqual(Array.from(model.state.selected_ids.value), ["new"]);
+  assert.equal(model.state.loading.value, false);
+  assert.deepEqual(calls, ["GET", "GET", "POST", "PATCH"]);
 });
 
 test("表格选择支持本页全选和跨页保留，筛选与刷新清理过期选择", async () => {
@@ -221,6 +568,7 @@ test("批量启停设置明确状态，保留失败项，重复提交与处理�
 
 test("批量删除提交所选订阅源，失败保留以便重试", async () => {
   const deleted = [];
+  let reads = 0;
   let sources = ["one", "two"].map(id => ({ id, title: id, enabled: true }));
   const model = modal_model(async (url, options) => {
     if (options.method === "DELETE") {
@@ -228,6 +576,7 @@ test("批量删除提交所选订阅源，失败保留以便重试", async () =>
       if (deleted.at(-1) !== "two") sources = sources.filter(source => source.id !== deleted.at(-1));
       return deleted.at(-1) === "two" ? Response.json({ error: "删除失败" }, { status: 500 }) : Response.json({});
     }
+    reads++;
     return Response.json({ sources });
   });
   await model.methods.refresh_list();
@@ -239,6 +588,8 @@ test("批量删除提交所选订阅源，失败保留以便重试", async () =>
   assert.deepEqual(Array.from(model.state.sources.value, source => source.id), ["two"]);
   assert.deepEqual(Array.from(model.state.selected_ids.value), ["two"]);
   assert.match(model.state.list_error.value, /two：删除失败/);
+  assert.equal(model.pagination.total.value, 1);
+  assert.equal(reads, 1, "批量删除结束不重新读取列表");
 });
 
 test("批量刷新更新 XML 和快照，跳过外部私密源，失败保留选择与原内容", async () => {
@@ -271,6 +622,7 @@ test("批量刷新更新 XML 和快照，跳过外部私密源，失败保留选
 test("后端翻页后仍可批量刷新和停用前一页选中的订阅源", async () => {
   const sources = Array.from({ length: 21 }, (_, index) => ({ id: String(index), title: "源 " + index, enabled: true }));
   const refreshed = [], disabled = [];
+  let reads = 0;
   const model = modal_model(async (url, options) => {
     if (options.method === "POST") {
       refreshed.push(url.split("/").at(-2));
@@ -282,6 +634,7 @@ test("后端翻页后仍可批量刷新和停用前一页选中的订阅源", as
       disabled.push(source.id);
       return Response.json({ source });
     }
+    reads++;
     return Response.json({ sources });
   });
   await model.methods.refresh_list();
@@ -296,6 +649,8 @@ test("后端翻页后仍可批量刷新和停用前一页选中的订阅源", as
   await model.methods.bulk_action("disable");
   assert.deepEqual(disabled, ["20", "0"]);
   assert.equal(model.pagination.state.value.total, 19);
+  assert.equal(model.pagination.state.value.last, 19);
+  assert.equal(reads, 3, "只有首次加载和两次翻页读取列表");
 });
 
 test("后台可选标签使用脚本目录，匹配路由预填且手动修改保留，草稿和源标签不进入选项", async () => {
@@ -335,9 +690,10 @@ test("后台可选标签使用脚本目录，匹配路由预填且手动修改�
 
 test("JSON 导入兼容导出格式，保留配置和模板，跳过已有及重复地址", async () => {
   const writes = [];
+  let reads = 0;
   const sources = [{ id: "old", title: "已有", feed_url: "https://example.com/existing", enabled: true }];
   const model = modal_model(async (_, options) => {
-    if (!options?.body) return Response.json({ sources });
+    if (!options?.body) { reads++; return Response.json({ sources }); }
     const source = JSON.parse(options.body);
     writes.push(source);
     const saved = { ...source, id: "new-" + writes.length };
@@ -355,6 +711,8 @@ test("JSON 导入兼容导出格式，保留配置和模板，跳过已有及重
   await model.methods.import_sources();
   assert.deepEqual(writes, [{ title: "导入源", social_url: "https://x.com/imported", feed_url: "{{hostname}}/rss/test", tags: ["标签"], enabled: false, require_token: true, credit_cost: 7, source_type: "website", sort_order: 3, poll_policy: { mode: "manual" } }]);
   assert.equal(model.state.sources.value.length, 1, "默认启用筛选排除导入的停用源");
+  assert.equal(model.pagination.total.value, 1);
+  assert.equal(reads, 2, "首次加载和导入查重各读取一次，导入后不重载");
   await model.methods.set_filter("status", "all");
   assert.equal(model.state.sources.value.length, 2);
   assert.match(model.state.import_message.value, /已导入 1 个.*跳过重复地址 2 个/);
@@ -419,7 +777,7 @@ test("JSON 导入中断保留结果与剩余条目，重复提交被阻止，重
   const sources = [];
   const model = modal_model(async (_, options) => {
     if (!options.body) return Response.json({ sources });
-    const source = JSON.parse(options.body);
+    const source = { enabled: true, ...JSON.parse(options.body) };
     calls.push(source.title);
     if (source.title === "one") return new Promise(resolve => { finish = () => { sources.push({ ...source, id: "one" }); resolve(Response.json({ source: sources.at(-1) })); }; });
     if (fail) return Response.json({ error: "路由不存在" }, { status: 400 });

@@ -10,10 +10,11 @@ test("头像目录保留轻量 URL，API 绝对地址和旧内嵌头像归一为
     { id: "c", avatar_url: "data:image/png;base64,YQ==", updated_at: 3 },
     { id: "d", avatar_url: "https://api.example/discovery/avatars/d?v=4" },
     { id: "e", avatar_url: "https://images.example/avatar.png" },
+    { id: "f", avatar_url: "http://127.0.0.1:1234/public/avatar/f/object-1" },
   ], tags: ["文章"] };
   const result = lazy_catalog_avatars(catalog);
   assert.deepEqual(result.sources.map(source => source.avatar_url), [
-    "/api/avatar/a?v=1", "/api/avatar/b?v=2", "/api/avatar/c?v=3", "/api/avatar/d?v=4", "https://images.example/avatar.png",
+    "/api/avatar/a?v=1", "/api/avatar/b?v=2", "/public/avatar/c?v=3", "/api/avatar/d?v=4", "https://images.example/avatar.png", "/public/avatar/f/object-1",
   ]);
   assert.match(catalog.sources[0].avatar_url, /^http:/);
   assert.match(catalog.sources[2].avatar_url, /^data:/);

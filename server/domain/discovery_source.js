@@ -39,12 +39,13 @@ function social_urls_from_source(source) {
 }
 
 /**
- * 订阅源头像实体：`path()` 给出带版本号的同源相对路径（无头像时为空串），
+ * 订阅源头像实体：`path()` 给出不可变对象或带版本号的同源相对路径（无头像时为空串），
  * `sniff()` 按文件头魔数判断上传图片的类型。
- * @param {{ source_id?: unknown, updated_at?: unknown }} [state]
+ * @param {{ source_id?: unknown, updated_at?: unknown, object_key?: unknown }} [state]
  */
 export function SourceAvatarModel(state) {
   const source = state ?? {};
+  const object_key = String(source.object_key ?? "");
   const state_ = Object.freeze({
     source_id: String(source.source_id ?? ""),
     updated_at: Number(source.updated_at ?? 0),
@@ -53,11 +54,11 @@ export function SourceAvatarModel(state) {
     ...state_,
     /** 是否已设置头像。 */
     has: () => state_.updated_at > 0,
-    path: () => SourceAvatarModel.path(state_.source_id, state_.updated_at),
+    path: () => SourceAvatarModel.path(state_.source_id, state_.updated_at, object_key),
     toValue: () => ({
       source_id: state_.source_id,
       updated_at: state_.updated_at,
-      url: SourceAvatarModel.path(state_.source_id, state_.updated_at),
+      url: SourceAvatarModel.path(state_.source_id, state_.updated_at, object_key),
     }),
   });
 }
@@ -68,18 +69,21 @@ SourceAvatarModel.of = SourceAvatarModel;
 SourceAvatarModel.fromRow = (row) => SourceAvatarModel({
   source_id: row?.id ?? row?.source_id,
   updated_at: row?.avatar_updated_at ?? row?.updated_at,
+  object_key: row?.avatar_object_key ?? row?.object_key,
 });
 /**
- * 头像的对外地址。返回**同源相对路径**，两个前端各自在自己的 origin 上代理它；
- * URL 带 `?v=<ts>`，所以响应可以安全地长缓存。
+ * R2 头像直接使用不可变对象路径；旧 SQLite 头像使用带版本号的兼容路径。
  * @param {string} source_id
  * @param {number} avatar_updated_at
+ * @param {string} [object_key]
  * @returns {string}
  */
-SourceAvatarModel.path = (source_id, avatar_updated_at) => {
+SourceAvatarModel.path = (source_id, avatar_updated_at, object_key = "") => {
   const updated_at = Number(avatar_updated_at || 0);
   if (!(updated_at > 0)) return "";
-  return `/api/avatar/${source_id}?v=${updated_at}`;
+  const match = /^discovery\/avatars\/([A-Za-z0-9-]+)\/([A-Za-z0-9-]+)$/.exec(object_key);
+  if (match && match[1] === source_id) return `/public/avatar/${match[1]}/${match[2]}`;
+  return `/public/avatar/${source_id}?v=${updated_at}`;
 };
 /**
  * 按文件头魔数判断图片类型；不认识的返回空串（调用方据此回 415）。
@@ -120,7 +124,7 @@ SourceAvatarModel.sniff = (bytes) => {
  *   - SQLite 行（`fromRow`）：`tags_json` 列、0/1 的 `enabled`/`require_token`、
  *     `avatar_updated_at`。
  *   - 请求体（`fromValue` / `validate` 的结果）：`tags` 数组、真正的布尔。
- * `toValue()` 与旧的 `discovery_source_value(row)` 逐字节一致。
+ * `toValue()` 保持目录字段形状，头像使用公开资源路径。
  * @param {Record<string, unknown>} [state]
  */
 export function DiscoverySourceModel(state) {
@@ -148,13 +152,14 @@ export function DiscoverySourceModel(state) {
     created_at: Number(source.created_at ?? 0),
     updated_at: Number(source.updated_at ?? 0),
   });
-  const avatar_url = DiscoverySourceModel.avatar_url(state_.id, state_.avatar_updated_at);
+  const avatar_object_key = String(source.avatar_object_key ?? "");
+  const avatar_url = DiscoverySourceModel.avatar_url(state_.id, state_.avatar_updated_at, avatar_object_key);
   return Object.freeze({
     ...state_,
     /** 旧分类作为标签兼容读取，存储原文不变。 */
     discovery_tags: () => [...new Set([...state_.tags, DISCOVERY_CATEGORY_TAGS[state_.category]].filter(Boolean))],
     /** 组合出的头像实体。 */
-    avatar: () => SourceAvatarModel({ source_id: state_.id, updated_at: state_.avatar_updated_at }),
+    avatar: () => SourceAvatarModel({ source_id: state_.id, updated_at: state_.avatar_updated_at, object_key: avatar_object_key }),
     /**
      * 该源是否让给定 route pathname 公开。三种要求同时满足：启用、不要求 token、
      * 地址的 route pathname 匹配（query 与 format 都忽略）。
@@ -232,8 +237,8 @@ DiscoverySourceModel.merge_for_patch = (current, body) => {
   };
 };
 /** 无头像时为空串。 */
-DiscoverySourceModel.avatar_url = (source_id, avatar_updated_at) =>
-  SourceAvatarModel.path(source_id, avatar_updated_at);
+DiscoverySourceModel.avatar_url = (source_id, avatar_updated_at, object_key = "") =>
+  SourceAvatarModel.path(source_id, avatar_updated_at, object_key);
 /**
  * 从 feed_url 推断来源类型。`{{hostname}}` 模板先用占位 origin 归一，再取
  * `/rss|/atom/` 之后的第一个路径段：脚本源的路由约定把抓取目标写在首段

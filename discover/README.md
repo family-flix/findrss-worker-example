@@ -3,7 +3,7 @@
 本目录保存广场的业务页面、脚本、样式、SSR 共用视图与测试，由主 Worker 提供页面与接口；`../public/` 只保存公共资源。统一安装、启动与部署见 [Worker README](../README.md)。
 
 
-本模块提供类似 Folo Discover 的 RSS/Atom 订阅广场：默认展示管理员配置的订阅源，并支持关键词搜索、来源单选与标签多选、内容预览和 RSS 地址复制。
+本模块提供类似 Folo Discover 的 RSS/Atom 订阅广场：默认展示管理员配置的订阅源，并支持关键词搜索、来源单选、内容预览和 RSS 地址复制。
 
 ## 请求结构
 
@@ -43,7 +43,7 @@ HTML 外壳、内嵌样式和目录 JSON 使用 `id` 定位，不生成 `data-n`
 
 Logo 与来源 SVG 通过 `icons.js` 转为 data URL。订阅源头像只在目录 JSON 中保留轻量 URL，HTML 不内嵌头像字节；`lazy_img.js` 的 LazyAvatar 复用 LazyImgModel，SSR 显示首字占位，进入视口后才创建图片节点并发起请求，成功渐显，失败保留占位。API 返回的绝对 `/api/avatar/<id>` 或 `/discovery/avatars/<id>` 地址归一到同源 `/api/avatar/<id>?v=...`，保留版本参数；其他头像仅接受 HTTPS 或安全站内路径。构建、R2 发布和 SSR 均不读取头像字节，旧 R2 目录中的 raster data URL 按源 ID 恢复为头像接口并重新发布。构建同时生成可直接打开的 `index.html` 与无损 gzip 产物 `index.html.gz`，并打印原始字节数、压缩字节数和缩减比例。R2 的同一 HTML key 保存 gzip 字节与 `contentEncoding: gzip` 元数据，读取时兼容旧版明文；已有部署会在下一次目录检查时补发压缩产物。首页缓存保存解压后的 HTML，响应按原始客户端的编码能力由 Workers 自动压缩，并带 `Vary: Accept-Encoding`；避免对预压缩字节重复编码，或把压缩正文交给不支持的客户端。源码精简与传输压缩分开执行：共享 SSR 渲染器先去掉静态 HTML 外壳的缩进与换行，并用 CSSO 的浏览器 ESM 版本压缩合并后的 CSS（不重排规则）；`index.html` 本身即为紧凑源码，CSP 哈希基于压缩后的 CSS。SSR 正文、目录 JSON、内嵌图片和 hydration 节点保持原样；gzip 再对精简后的整份 HTML 做无损压缩。旧 R2 产物按渲染版本自动重新生成。
 
-首页使用运行时静态发布：`ServiceDiscovery` 将公开目录和文章快照通过注入的异步 `render_embedded_home` 渲成 HTML，写到现有 `API_STORAGE` 桶的 `discovery/catalog/index.html`。产物包含首屏 20 个源和最多 1000 个源的完整目录 JSON；客户端接管同一套 Model/View，搜索、筛选和分页都在浏览器完成，不查询 DO。`index.js` 是两端共用的源码，Model 与 View 在文件内分别维护，`index.js` 构建为浏览器 `dist/assets/index.js`；HTML 外壳沿用 `index.html`，构建时保留 `/app.js` 别名兼容旧 R2 首页。首页使用 Timeless 0.34.2。
+首页使用运行时静态发布：`ServiceDiscovery` 将公开目录和文章快照通过注入的异步 `render_embedded_home` 渲成 HTML，写到现有 `API_STORAGE` 桶的 `discovery/catalog/index.html`。产物包含首屏 20 个源和最多 1000 个源的完整目录 JSON。带 `q`、`source_type` 或 `page` 的首次请求，由 Worker 读取同一份 R2 目录快照按需渲染匹配页，不需要提前生成全部页码或筛选组合；边缘缓存按这些参数隔离，忽略无关参数，R2 缺席时才读取全量 API。客户端在 hydration 前按 URL 初始化同一套 Model/View，接管后的搜索、筛选和分页仍在浏览器完成，不查询 DO。`index.js` 是两端共用的源码，Model 与 View 在文件内分别维护，`index.js` 构建为浏览器 `dist/assets/index.js`；HTML 外壳沿用 `index.html`，构建时保留 `/app.js` 别名兼容旧 R2 首页。首页使用 Timeless 0.34.2。
 
 ## 部署
 
@@ -69,15 +69,15 @@ DISCOVERY_API_ORIGIN=https://your-worker.example FINDRSS_HOSTNAME=https://feeds.
 
 广场无需登录，仅保留订阅广场首页；账号页面、登录、会话和积分接口已移除。
 
-## 来源和标签筛选
+## 来源筛选
 
-来源沿用 `source_type` 字段，列表以目录接口的 `platforms: [{ id, label, icon }]` 为准；一次选择一个来源。脚本使用 `platform: { name, icon }`，正式发布后收集到数据库 `platforms` 表，订阅广场与后台来源 Select 共用此列表。SVG 源码以图片 data URL 渲染，不直接插入 DOM。接口加载成功后完整替换默认列表，保留接口返回的名称、图标、顺序和空列表；后台加载脚本只用于地址提示与来源推断，不改写选项。标签可多选，多个标签须同时满足，搜索词与来源、标签一起生效。
+来源沿用 `source_type` 字段，列表以目录接口的 `platforms: [{ id, label, icon }]` 为准；一次选择一个来源。脚本使用 `platform: { name, icon }`，正式发布后收集到数据库 `platforms` 表，订阅广场与后台来源 Select 共用此列表。SVG 源码以图片 data URL 渲染，不直接插入 DOM。接口加载成功后完整替换默认列表，保留接口返回的名称、图标、顺序和空列表；后台加载脚本只用于地址提示与来源推断，不改写选项。搜索词与来源一起生效。
 
-首页在 header 下方单独一行搜索，输入后延迟搜索，回车立即搜索。完整目录维持 API 的稳定排序，浏览器 Model 按关键词、来源和标签过滤，再按每页 20 个源切片；搜索匹配标题、介绍、网站、订阅地址和标签。翻页保留搜索和筛选，条件变化回到第一页。底部提供首页、上一页、下一页和末页。现有 `/api/sources` 的 SQL 筛选、分页字段和限制继续保留供兼容调用，首页不再使用它。
+首页在 header 下方单独一行搜索，输入后延迟搜索，回车立即搜索。完整目录维持 API 的稳定排序，浏览器 Model 按关键词和来源过滤，再按每页 20 个源切片；搜索匹配标题、介绍、网站、订阅地址和标签。翻页保留搜索和筛选，条件变化回到第一页。底部提供首页、上一页、下一页和末页。现有 `/api/sources` 的 SQL 筛选、分页字段和限制继续保留供兼容调用，首页不再使用它。
 
-首页 URL 使用从 1 开始的 `page` 页码（第一页省略），并同步 `q`、`source_type` 和重复的 `tag` 参数。刷新、分享链接及浏览器前进后退恢复对应页和筛选；无效页码回到首页，超出结果范围时修正为末页。翻页成功才写入历史记录，初始加载及前进后退只修正当前地址。
+首页 URL 使用从 1 开始的 `page` 页码（第一页省略），并同步 `q` 和 `source_type` 参数。刷新、分享链接及浏览器前进后退恢复对应页和筛选；无效页码回到首页，超出结果范围时修正为末页。翻页成功才写入历史记录，初始加载及前进后退只修正当前地址。
 
-重复 `tag` 参数恢复为 Model 的多个选择值，按标签精确匹配并要求同时满足。内嵌目录的 `tags` 是所有启用源的标签集合，筛选结果为空时仍保留选择入口。科技、视频、文章、音频、博客作为常用标签始终显示，管理员可自由录入其他标签。
+首页不展示订阅源标签或标签筛选；旧 URL 的 `tag` 参数不再参与首页筛选，客户端初始化后会清除该参数。标签数据仍保留用于关键词搜索和后台管理。
 
 后台不再要求分类。保留旧 `category` 存储与 API 参数兼容；旧的科技、开发、商业、科学、设计、生活分类在读取时并入标签，后台编辑保存时转为显式标签。
 

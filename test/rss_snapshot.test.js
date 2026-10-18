@@ -23,8 +23,8 @@ function fixture(public_source = true, social_routes = []) {
   const ports = { route_cache: new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: store.repo, object_store: store.object_store }),
     schedule_alarm: async () => { scheduled++; }, wait_until: task => jobs.push(task) };
   const repo = { rss_route_cache: store.repo, scripts: { list_enabled: () => row.enabled ? [row] : [] },
-    discovery: { list_public_routes: () => public_source ? [{ feed_url: "https://feeds.example.com/rss/snapshot/1", enabled: 1 }] : [],
-      list_private_routes: () => public_source ? [] : [{ feed_url: "https://feeds.example.com/rss/snapshot/1" }],
+    discovery: { list_public_routes: () => public_source ? [{ id: "public-source", feed_url: "https://feeds.example.com/rss/snapshot/1", enabled: 1 }] : [],
+      list_private_routes: () => public_source ? [] : [{ id: "private-source", feed_url: "https://feeds.example.com/rss/snapshot/1" }],
       list_social_routes: () => social_routes },
   };
   const token = { credit_balance: 1000 };
@@ -93,12 +93,39 @@ test("XML 刷新记录后台任务，终止真实脚本后保留旧 XML 且不�
   await invoked;
   const active = tasks.list().tasks.find(task => task.status === "running");
   assert.ok(active);
+  assert.equal(active.source_id, "public-source");
+  assert.equal(tasks.list(new URL("https://internal?source_ids=public-source")).tasks[0].id, active.id);
   tasks.cancel(active.id);
   resolve("取消后返回的内容");
   await rejected;
   assert.equal(tasks_repo.find(active.id).status, "cancelled");
   assert.match((await f.serve()).body, /版本1/);
   assert.equal(tasks.list().tasks.length, 2);
+});
+
+for (const public_source of [true, false]) test(`${public_source ? "公开" : "私密"}源首次生成 XML 的任务按完整 query 关联源 ID`, async t => {
+  const f = fixture(public_source); t.after(() => f.db.close());
+  const sources = [
+    { id: "other", feed_url: "{{hostname}}/rss/snapshot/1?a=other", enabled: 1 },
+    { id: "matching", feed_url: "{{hostname}}/atom/snapshot/1?a=1&b=2", enabled: 1 },
+  ];
+  f.service.repo.discovery.list_public_routes = () => public_source ? sources : [];
+  f.service.repo.discovery.list_private_routes = () => public_source ? [] : sources;
+  const tasks = new ServiceBackgroundTasks({ repo: new RepositoryBackgroundTasks(f), wait_until: f.ports.wait_until });
+  f.service.app.background_tasks = tasks;
+  let release, started;
+  const invoked = new Promise(resolve => { started = resolve; });
+  f.service.script_invoke = () => { started(); return new Promise(resolve => { release = resolve; }); };
+  await assert.rejects(f.serve("rss", { token: public_source ? "" : "user", query: "?b=2&a=1" }), { status: 503 });
+  await invoked;
+  const { tasks: matching } = tasks.list(new URL("https://internal?source_ids=matching"));
+  assert.equal(matching.length, 1);
+  assert.equal(matching[0].source_id, "matching");
+  assert.equal(matching[0].status, "running");
+  assert.deepEqual(tasks.list(new URL("https://internal?source_ids=other")).tasks, []);
+  release(1);
+  await f.wait_for_xml();
+  assert.deepEqual(tasks.list(new URL("https://internal?source_ids=matching")).tasks, []);
 });
 
 test("首次访问返回正在生成并启动后台任务，生成后只读 XML，重建 DO 后仍复用", async () => {

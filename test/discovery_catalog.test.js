@@ -16,8 +16,9 @@ function fixture() {
   const sources = new Map(), snapshots = new Map(), avatars = new Map();
   const repo = { tags: { list: () => ["脚本标签"] }, discovery: {
     list(filters) { assert.equal(filters.include_disabled, false); assert.equal(filters.limit, 1000);
-      return [...sources.values()].filter(row => row.enabled).map(row => ({ ...row, ...snapshots.get(row.id) })); },
-    find: id => sources.get(id), exists: id => sources.has(id), count: () => sources.size,
+      return [...sources.values()].filter(row => row.enabled).map(row => ({ ...row, ...snapshots.get(row.id), avatar_object_key: avatars.get(row.id)?.object_key })); },
+    find: id => sources.has(id) ? { ...sources.get(id), avatar_object_key: avatars.get(id)?.object_key } : undefined,
+    exists: id => sources.has(id), count: () => sources.size,
     feed_url_taken: url => [...sources.values()].some(row => row.feed_url === url),
     feed_url_taken_by_other: (url, id) => [...sources.values()].some(row => row.id !== id && row.feed_url === url),
     insert: row => sources.set(row.id, row), update: row => sources.set(row.id, { ...sources.get(row.id), ...row }),
@@ -40,15 +41,17 @@ function fixture() {
 const row = index => ({ id: String(index), title: "源" + index, feed_url: "https://example.com/feed/" + index,
   description: "", website: "", category: "technology", tags_json: '["文章"]', enabled: 1, require_token: 0, source_type: "website" });
 
-test("首次发布读取完整 1000 条目录，排除下架源和需要凭证的文章，不混入管理字段", async () => {
+test("首次发布读取完整 1000 条目录，排除下架源和非公开源，不混入管理字段", async () => {
   const f = fixture();
   for (let index = 0; index < 1000; index++) f.sources.set(String(index), row(index));
   f.sources.get("0").enabled = 0; f.sources.get("1").require_token = 1;
   f.snapshots.set("1", { articles_json: '[{"title":"私密文章"}]', snapshot_saved_at: 100 });
   await f.service.ensure_catalog();
   const published = await f.published();
-  assert.equal(published.sources.length, 999);
+  assert.equal(published.sources.length, 998);
   assert.equal(published.sources.at(-1).id, "999");
+  assert.equal(published.sources.some(source => source.id === "1"), false);
+  assert.doesNotMatch(JSON.stringify(published), /私密文章/);
   assert.deepEqual(published.sources[0].snapshot, { saved_at: 0, articles: [] });
   assert.deepEqual(published.tags, ["脚本标签"]);
   assert.deepEqual(published.sources[0].tags, ["文章", "科技"]);
@@ -68,17 +71,35 @@ test("增删改、快照和头像变化均发布，收紧权限清掉旧文章",
   await f.service.refresh_discovery_snapshot(id);
   assert.equal((await f.published()).sources[0].snapshot.articles[0].title, "新文章");
   await f.service.put_discovery_avatar(new Request("https://internal/avatar", { method: "PUT", body: png }), id);
-  assert.match((await f.published()).sources[0].avatar_url, /\?v=\d+/);
+  assert.match((await f.published()).sources[0].avatar_url, /^\/public\/avatar\//);
   await f.service.delete_discovery_avatar(id);
   assert.equal((await f.published()).sources[0].avatar_url, "");
   await f.service.update_discovery_source(request({ title: "改名", require_token: true }), id);
-  const private_source = (await f.published()).sources[0];
-  assert.equal(private_source.title, "改名"); assert.deepEqual(private_source.snapshot.articles, []);
+  // 改为非公开后整条源从公开目录移除，旧文章也随之消失。
+  assert.equal((await f.published()).sources.length, 0);
+  await f.service.update_discovery_source(request({ require_token: false }), id);
+  const republished = (await f.published()).sources[0];
+  assert.equal(republished.title, "改名"); assert.deepEqual(republished.snapshot.articles, []);
   await f.service.update_discovery_source(request({ enabled: false }), id);
   assert.equal((await f.published()).sources.length, 0);
   await f.service.delete_discovery_source(id);
   assert.equal(f.sources.size, 0);
   assert.equal((await f.published()).sources.length, 0);
+});
+
+test("旧头像静态目录升级时重新发布一次并使用 R2 公开对象 URL", async () => {
+  const f = fixture();
+  f.sources.set("avatar", row("avatar"));
+  await f.service.put_discovery_avatar(new Request("https://internal/avatar", { method: "PUT", body: png }), "avatar");
+  f.metadata.delete("discovery_catalog_public_avatars_v1");
+  const writes = f.bucket.calls.put;
+  const restarted = new ServiceDiscovery(f.dependencies);
+  await restarted.ensure_catalog();
+  assert.equal(f.bucket.calls.put, writes + 1);
+  assert.match((await f.published()).sources[0].avatar_url, /^\/public\/avatar\/avatar\/[a-f0-9-]+$/);
+  assert.equal(f.metadata.get("discovery_catalog_public_avatars_v1"), true);
+  await restarted.ensure_catalog();
+  assert.equal(f.bucket.calls.put, writes + 1);
 });
 
 test("已有静态目录升级为脚本标签目录时重新发布一次，源的手填标签不进入目录", async () => {
@@ -93,6 +114,24 @@ test("已有静态目录升级为脚本标签目录时重新发布一次，源�
   assert.equal(f.bucket.calls.put, writes + 1);
   assert.deepEqual((await f.published()).tags, ["新脚本标签"]);
   await restarted.ensure_catalog();
+  assert.equal(f.bucket.calls.put, writes + 1);
+});
+
+test("旧静态目录升级时重新发布一次并移除其中的非公开源", async () => {
+  const f = fixture();
+  f.sources.set("public", row("public"));
+  f.sources.set("private", { ...row("private"), require_token: 1 });
+  await f.service.ensure_catalog();
+  await f.dependencies.object_store.put(DISCOVERY_CATALOG_KEY, JSON.stringify({ sources: [...f.sources.values()] }));
+  f.metadata.delete("discovery_catalog_public_sources_v1");
+  const writes = f.bucket.calls.put;
+  const restarted = new ServiceDiscovery(f.dependencies);
+  await restarted.ensure_catalog();
+  assert.deepEqual((await f.published()).sources.map(source => source.id), ["public"]);
+  assert.equal(f.metadata.get("discovery_catalog_public_sources_v1"), true);
+  assert.equal(f.bucket.calls.put, writes + 1);
+  await restarted.ensure_catalog();
+  await new ServiceDiscovery(f.dependencies).ensure_catalog();
   assert.equal(f.bucket.calls.put, writes + 1);
 });
 
@@ -129,7 +168,7 @@ test("串行发布避免慢写覆盖后续编辑，失败清理旧产物且重�
 test("没有 R2 时保持可读目录，写入不依赖静态发布", async () => {
   const f = fixture(); f.service.object_store = null;
   await f.service.ensure_catalog();
-  await f.service.create_discovery_source(request({ title: "源", feed_url: "https://example.com/feed" }));
+  await f.service.create_discovery_source(request({ title: "源", feed_url: "https://example.com/feed", require_token: false }));
   assert.equal(f.service.public_catalog().sources.length, 1);
   assert.equal(f.bucket.calls.put, 0);
 });

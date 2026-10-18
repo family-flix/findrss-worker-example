@@ -1,4 +1,5 @@
 import { do_error, DurableObjectError } from "./error.js";
+import { valid_identifier } from "../../lib/identifiers.js";
 
 export class ServiceBackgroundTasks {
   constructor({ repo, wait_until }) {
@@ -8,13 +9,13 @@ export class ServiceBackgroundTasks {
     this.repo.interrupt(Date.now());
   }
 
-  start(key, { kind, title, target }, work) {
+  start(key, { kind, title, target, source_id = "" }, work) {
     const existing = this.active.get(key);
     if (existing) return { task: this.repo.find(existing.id), promise: existing.promise };
-    const task = { id: crypto.randomUUID(), kind, title, target, started_at: Date.now() };
+    const task = { id: crypto.randomUUID(), kind, title, target, source_id, started_at: Date.now() };
     this.repo.insert(task);
     const controller = new AbortController();
-    const entry = { id: task.id, controller, promise: null };
+    const entry = { id: task.id, source_id, controller, promise: null };
     entry.promise = Promise.resolve().then(() => {
       controller.signal.throwIfAborted();
       return work(controller.signal);
@@ -31,7 +32,21 @@ export class ServiceBackgroundTasks {
     return { task: this.repo.find(task.id), promise: entry.promise };
   }
 
-  list() { return { tasks: this.repo.list() }; }
+  list(url) {
+    if (!url?.searchParams.has("source_ids")) return { tasks: this.repo.list() };
+    const source_ids = url.searchParams.get("source_ids").split(",");
+    if (source_ids.length > 100 || source_ids.some(id => !valid_identifier(id))) {
+      throw do_error("source_ids 必须为 1 到 100 个逗号分隔的有效源 ID", 400);
+    }
+    return { tasks: this.repo.running_for_sources([...new Set(source_ids)]) };
+  }
+  is_source_running(source_id) {
+    return [...this.active.values()].some(entry => entry.source_id === source_id);
+  }
+  cleanup() {
+    this.repo.cleanup();
+    return this.list();
+  }
   cancel(id) {
     const task = this.repo.find(id);
     if (!task) throw do_error("任务不存在", 404);

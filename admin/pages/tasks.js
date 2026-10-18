@@ -1,17 +1,26 @@
 import { TasksModel, task_status_options } from "./tasks.model.js";
 
-const { View, Button, Badge, Select, Show, For, computed, combine } = window.FindRSSAdminUI;
+const { View, Button, Badge, Select, Popconfirm, Show, For, computed, combine } = window.FindRSSAdminUI;
 
 export function TasksPage({ view } = {}) {
   const { state, methods } = TasksModel();
+  const busy = combine({ loading: state.loading, cleaning: state.cleaning }, value => value.loading || value.cleaning);
+  const cleanup_disabled = combine({ busy, cancelling: state.cancelling }, value => value.busy || value.cancelling.length > 0);
   let stop_show, stop_hide;
   return window.FindRSSAdminShell.Page({ page_id: "tasks", title: "任务", actions: [
-    Button({ disabled: state.loading, attributes: { n: "tasks-refresh" }, onClick: methods.load }, ["刷新"]),
+    Popconfirm({ title: "从数据库删除全部已完成和失败任务？此操作无法撤销。进行中和已终止的任务会保留。",
+      confirmText: "确认清理", disabled: cleanup_disabled,
+      attributes: { n: "tasks-cleanup-confirmation" }, onConfirm: methods.cleanup,
+      trigger: props => Button({ ...props, disabled: cleanup_disabled,
+        attributes: { ...props.attributes, n: "tasks-cleanup" } },
+      [computed(state.cleaning, value => value ? "正在清理…" : "清理已完成和失败任务")]),
+    }),
+    Button({ disabled: busy, attributes: { n: "tasks-refresh" }, onClick: methods.load }, ["刷新"]),
   ] }, [
-    View({ class: "grid min-w-0 gap-space-3", attributes: { n: "tasks-page", "aria-busy": computed(state.loading, String) },
+    View({ class: "grid min-w-0 gap-space-3", attributes: { n: "tasks-page", "aria-busy": computed(busy, String) },
       onMounted() { stop_show = view?.onShow(methods.load); stop_hide = view?.onBeforeHide(methods.stop); void methods.load(); },
       onUnmounted() { stop_show?.(); stop_hide?.(); methods.stop(); } }, [
-      View({ class: "text-muted text-sm", attributes: { n: "tasks-description" } }, ["展示最近 100 条后台任务，点击刷新更新任务状态。终止刷新会保留上次成功保存的快照；下次定时刷新仍按原计划执行。"]),
+      View({ class: "text-muted text-sm", attributes: { n: "tasks-description" } }, ["展示最近 100 条后台任务，点击刷新更新任务状态。清理会从数据库移除全部已完成和失败任务。终止刷新会保留上次成功保存的快照；下次定时刷新仍按原计划执行。"]),
       View({ class: "flex flex-wrap items-center gap-space-2", attributes: { n: "tasks-filters" } }, [
         View({ class: "text-muted text-sm", attributes: { n: "tasks-status-label", id: "tasks-status-label" } }, ["状态"]),
         Select({ value: state.status, options: task_status_options, style: { width: "10rem" },
@@ -34,7 +43,7 @@ export function TasksPage({ view } = {}) {
             View({ class: "text-muted text-sm break-anywhere", attributes: { n: "tasks-item-target" } }, [task.target]),
             View({ class: "text-muted text-sm", attributes: { n: "tasks-item-time" } }, [task.started_label + " · 耗时 " + task.elapsed_label]),
             task.error ? View({ class: "text-sm break-anywhere", attributes: { n: "tasks-item-error" } }, [task.error]) : null,
-            task.cancellable ? Button({ size: "small", disabled: computed(state.cancelling, ids => ids.includes(task.id)),
+            task.cancellable ? Button({ size: "small", disabled: combine({ cancelling: state.cancelling, cleaning: state.cleaning }, value => value.cleaning || value.cancelling.includes(task.id)),
               attributes: { n: "tasks-item-cancel", "aria-label": "终止" + task.title }, onClick: () => methods.cancel(task.id) },
               [computed(state.cancelling, ids => ids.includes(task.id) ? "正在终止…" : "终止刷新")]) : null,
           ]);

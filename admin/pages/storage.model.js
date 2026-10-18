@@ -8,6 +8,7 @@ export function StorageModel() {
   const usage = ref(null), active_key = ref(null), preview = ref(null);
   const root = { key: "", folder: true, expanded: true, children: [], loaded: false };
   const nodes = new Map([["", root]]);
+  const directory_requests = new Set();
   let generation = 0, disposed = false, preview_request = null;
 
   async function request(path, options = {}) {
@@ -40,19 +41,21 @@ export function StorageModel() {
   }
 
   async function load_directory(directory, append = false) {
-    if (disposed || directory.busy) return;
+    if (disposed || directory.busy || (append && directory.loaded && !directory.cursor)) return;
     const version = generation;
+    const controller = new AbortController();
+    directory_requests.add(controller);
     directory.busy = true;
     directory.error = "";
     render();
     try {
       const params = new URLSearchParams({ prefix: directory.key });
       if (append && directory.cursor) params.set("cursor", directory.cursor);
-      const result = await (await request("?" + params)).json();
+      const result = await (await request("?" + params, { signal: controller.signal })).json();
       if (disposed || version !== generation) return;
       const children = append ? new Set(directory.children) : new Set();
       for (const key of result.delimited_prefixes) {
-        if (!nodes.has(key)) nodes.set(key, { key, title: key.slice(0, -1).split("/").at(-1), folder: true, children: [], loaded: false, expanded: true });
+        if (!nodes.has(key)) nodes.set(key, { key, title: key.slice(0, -1).split("/").at(-1), folder: true, children: [], loaded: false, expanded: false });
         children.add(key);
       }
       for (const file of result.objects) {
@@ -71,22 +74,14 @@ export function StorageModel() {
       directory.error = failure.message || String(failure);
       if (directory === root) error.as(directory.error);
     } finally {
+      directory_requests.delete(controller);
       if (!disposed && version === generation) { directory.busy = false; render(); }
     }
   }
 
-  async function load_tree(directory = root) {
-    const version = generation, queue = [directory], scheduled = new Set([directory.key]);
-    while (queue.length && !disposed && version === generation) {
-      await Promise.all(queue.splice(0, 4).map(async parent => {
-        if (!await load_directory(parent, parent.loaded) || disposed || version !== generation) return;
-        if (parent.cursor) queue.push(parent);
-        for (const key of parent.children) {
-          const child = nodes.get(key);
-          if (child.folder && !scheduled.has(key)) { scheduled.add(key); queue.push(child); }
-        }
-      }));
-    }
+  function cancel_directory_requests() {
+    for (const controller of directory_requests) controller.abort();
+    directory_requests.clear();
   }
 
   function close_preview() {
@@ -149,12 +144,15 @@ export function StorageModel() {
     const row = rows.value.find(row => row.id === id);
     if (!row) return;
     active_key.as(id);
-    if (row.more) return load_tree(nodes.get(row.parent));
+    if (row.more) {
+      const directory = nodes.get(row.parent);
+      return load_directory(directory, directory.loaded);
+    }
     const node = nodes.get(row.key);
     if (!node.folder) return open_preview(node);
     node.expanded = !node.expanded;
     render();
-    if (node.expanded && !node.loaded) return load_tree(node);
+    if (node.expanded && !node.loaded) return load_directory(node);
   }
 
   async function load_usage() {
@@ -177,10 +175,10 @@ export function StorageModel() {
     methods: {
       async refresh() {
         if (busy.value || disposed) return;
-        busy.as(true); generation++; close_preview();
+        busy.as(true); generation++; cancel_directory_requests(); close_preview();
         nodes.clear(); nodes.set("", root);
         Object.assign(root, { children: [], loaded: false, cursor: null, busy: false, error: "" });
-        try { await Promise.all([load_tree(), load_usage()]); }
+        try { await Promise.all([load_directory(root), load_usage()]); }
         finally { if (!disposed) busy.as(false); }
       },
       activate,
@@ -208,7 +206,7 @@ export function StorageModel() {
         active_key.as(target?.id ?? null);
         return rows.value.indexOf(target);
       },
-      dispose() { disposed = true; generation++; close_preview(); },
+      dispose() { disposed = true; generation++; cancel_directory_requests(); close_preview(); },
     },
   };
 }

@@ -96,6 +96,8 @@ export const MAX_SCRIPT_INVOKES = 20;
  * 泳道按需创建、不预建：并发执行少时（含同 key 合并生效的场景）只会用到一两条。
  */
 export const MAX_SANDBOX_LANES = 16;
+export const DEFAULT_SNAPSHOT_CONCURRENCY = 4;
+export const MAX_SNAPSHOT_CONCURRENCY = MAX_SANDBOX_LANES;
 export const RSS_ROUTE_CACHE_TTL_MS = 10 * 60 * 1000;
 /** L1 与 L2 共用的条目数上限。 */
 export const RSS_ROUTE_CACHE_MAX_ENTRIES = 4096;

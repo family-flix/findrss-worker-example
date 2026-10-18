@@ -107,15 +107,23 @@ function normalize_feed(item, local_time) {
   };
 }
 
-export function DiscoveryViewModel(catalog = null) {
+export function discovery_query_state(parameters) {
+  const platform = parameters?.get("source_type") || "";
+  const page = Number(parameters?.get("page"));
+  return {
+    query: (parameters?.get("q") || "").slice(0, 100),
+    source_type: platform.length <= 64 && !/[\u0000-\u001f\u007f]/.test(platform) ? platform : "",
+    page: Number.isSafeInteger(page) && page > 0 ? Math.min(page - 1, 50000) : 0,
+  };
+}
+
+export function DiscoveryViewModel(catalog = null, parameters = null) {
   let catalog_pending = null;
   // SSR 与 hydration 先使用 UTC，挂载后由模型切换为访客本地时间。
   const local_time_ = ref(false);
   const query_ = ref("");
   const selected_platform_ = ref("");
   const platforms_ = ref(default_platforms);
-  const selected_tags_ = ref([]);
-  const available_tags_ = ref([]);
   const feeds_ = ref([]);
   const page_ = ref(0);
   const total_count_ = ref(0);
@@ -126,29 +134,15 @@ export function DiscoveryViewModel(catalog = null) {
   let initialized = false;
   const copy_entries = new Map();
 
+  function read_parameters(parameters) {
+    const state = discovery_query_state(parameters);
+    query_.set(state.query);
+    selected_platform_.set(state.source_type);
+    return state.page;
+  }
+
   function read_location() {
-    const parameters = new URL(window.location.href).searchParams;
-    query_.set((parameters.get("q") || "").slice(0, 100));
-    const platform = parameters.get("source_type") || "";
-    selected_platform_.set(
-      platform.length <= 64 && !/[\u0000-\u001f\u007f]/.test(platform)
-        ? platform
-        : "",
-    );
-    selected_tags_.set(
-      [
-        ...new Set(
-          parameters
-            .getAll("tag")
-            .map((tag) => tag.trim())
-            .filter((tag) => tag && tag.length <= 32 && !/[\r\n]/.test(tag)),
-        ),
-      ].slice(0, 13),
-    );
-    const page = Number(parameters.get("page"));
-    return Number.isSafeInteger(page) && page > 0
-      ? Math.min(page - 1, 50000)
-      : 0;
+    return read_parameters(new URL(window.location.href).searchParams);
   }
 
   function sync_location(page, history_mode) {
@@ -159,7 +153,6 @@ export function DiscoveryViewModel(catalog = null) {
     if (query_.value.trim()) url.searchParams.set("q", query_.value.trim());
     if (selected_platform_.value)
       url.searchParams.set("source_type", selected_platform_.value);
-    selected_tags_.value.forEach((tag) => url.searchParams.append("tag", tag));
     if (url.href !== window.location.href) {
       window.history[history_mode === "replace" ? "replaceState" : "pushState"](
         null,
@@ -270,7 +263,6 @@ export function DiscoveryViewModel(catalog = null) {
       (source) =>
         (!selected_platform_.value ||
           source.source_type === selected_platform_.value) &&
-        selected_tags_.value.every((tag) => source.tags?.includes(tag)) &&
         (!query ||
           [
             source.title,
@@ -301,12 +293,6 @@ export function DiscoveryViewModel(catalog = null) {
         .map(item => normalize_feed(item, local_time_))
         .filter(Boolean),
     );
-    available_tags_.set([
-      ...new Set([
-        ...(catalog.tags || []),
-        ...selected_tags_.value,
-      ]),
-    ]);
   }
 
   function queue_search(query) {
@@ -344,30 +330,6 @@ export function DiscoveryViewModel(catalog = null) {
     return load_sources();
   }
 
-  function select_tag(tag_name) {
-    const tag = String(tag_name || "").trim();
-    if (!tag || tag.length > 32 || /[\r\n]/.test(tag)) return;
-    const current = selected_tags_.value;
-    if (!current.includes(tag) && current.length >= 13) return;
-    selected_tags_.set(
-      current.includes(tag)
-        ? current.filter((item) => item !== tag)
-        : [...current, tag],
-    );
-    page_.set(0);
-    clearTimeout(search_timer);
-    search_timer = 0;
-    return load_sources();
-  }
-
-  function clear_tags() {
-    page_.set(0);
-    selected_tags_.set([]);
-    clearTimeout(search_timer);
-    search_timer = 0;
-    return load_sources();
-  }
-
   function select_page(value) {
     if (loading_.value || search_timer) return;
     const number = Number(value);
@@ -395,7 +357,8 @@ export function DiscoveryViewModel(catalog = null) {
     entry.timer = setTimeout(() => entry.state.set("idle"), copy_status_ms);
   }
 
-  if (catalog) apply_catalog();
+  const initial_page = read_parameters(parameters);
+  if (catalog) apply_catalog(initial_page);
 
   return {
     state: {
@@ -406,8 +369,6 @@ export function DiscoveryViewModel(catalog = null) {
         { id: "", label: "全部" },
         ...platforms,
       ]),
-      selected_tags: selected_tags_,
-      available_tags: available_tags_,
       feeds: feeds_,
       page: page_,
       total_count: total_count_,
@@ -419,8 +380,6 @@ export function DiscoveryViewModel(catalog = null) {
       queue_search,
       submit_search,
       select_platform,
-      select_tag,
-      clear_tags,
       select_page,
       articles_for: (feed) => article_entry(feed).state,
       hide_article_cover,
@@ -619,74 +578,6 @@ export function SearchView({ vm$ }) {
   );
 }
 
-export function TagNavigationView({ vm$ }) {
-  return View(
-    {
-      class: "filter-row",
-      attributes: {
-        n: "tag-filters",
-        role: "group",
-        "aria-label": "标签多选筛选",
-      },
-    },
-    [
-      View({ class: "filter-label", attributes: { n: "tag-filter-label" } }, [
-        "标签",
-      ]),
-      View(
-        { class: "filter-options", attributes: { n: "tag-filter-options" } },
-        [
-          Button(
-            {
-              class: computed(
-                vm$.state.selected_tags,
-                (tags) =>
-                  "filter-chip" + (tags.length === 0 ? " is-selected" : ""),
-              ),
-              attributes: {
-                n: "tag-filter-all",
-                type: "button",
-                "aria-pressed": computed(vm$.state.selected_tags, (tags) =>
-                  String(tags.length === 0),
-                ),
-              },
-              onClick: vm$.methods.clear_tags,
-            },
-            ["全部"],
-          ),
-          For({
-            each: vm$.state.available_tags,
-            render(tag_value) {
-              const tag = source_value(tag_value);
-              return Button(
-                {
-                  class: computed(
-                    vm$.state.selected_tags,
-                    (tags) =>
-                      "filter-chip" +
-                      (tags.includes(tag) ? " is-selected" : ""),
-                  ),
-                  attributes: {
-                    n: "tag-filter",
-                    type: "button",
-                    "aria-pressed": computed(vm$.state.selected_tags, (tags) =>
-                      String(tags.includes(tag)),
-                    ),
-                  },
-                  onClick() {
-                    vm$.methods.select_tag(tag);
-                  },
-                },
-                [tag],
-              );
-            },
-          }),
-        ],
-      ),
-    ],
-  );
-}
-
 function FeedArticleView({ vm$, feed, item, articles }) {
   const cover_visible = computed(articles, (state) =>
     Boolean(state.items.find((article) => article.id === item.id)?.cover_url),
@@ -875,7 +766,7 @@ function FeedRowView({ vm$, feed }) {
     rank_,
     (index) => "feed-rank" + (index >= 0 && index < 3 ? " feed-rank--top" : ""),
   );
-  // 语言 / 标签对一个 feed 是恒定的（`feed` 是 `For` 交进来的普通对象），
+  // 语言对一个 feed 是恒定的（`feed` 是 `For` 交进来的普通对象），
   // 所以这一行按普通数组现拼。包成 `Show` 反而会让隐藏分支留下占位节点，
   // `dotted_nodes` 的顿点就会数错位置。
   const meta_entries = compact_nodes([
@@ -884,24 +775,6 @@ function FeedRowView({ vm$, feed }) {
           feed.language,
         ])
       : "",
-    ...feed.tags.map((tag) =>
-      Button(
-        {
-          class: "feed-tag",
-          attributes: {
-            n: "feed-tag",
-            type: "button",
-            "aria-pressed": computed(vm$.state.selected_tags, (tags) =>
-              String(tags.includes(tag)),
-            ),
-          },
-          onClick() {
-            vm$.methods.select_tag(tag);
-          },
-        },
-        [tag],
-      ),
-    ),
   ]);
   return View({ class: "feed-row", attributes: { n: "feed-row" } }, [
     View(
@@ -1093,7 +966,7 @@ export function FeedIndexView({ vm$ }) {
   );
   const empty_note_ = computed(
     vm$.state.error,
-    (error) => error || "换个关键词，或调整来源和标签筛选",
+    (error) => error || "换个关键词，或调整来源筛选",
   );
   const error_visible_ = combine(
     { error: vm$.state.error, feeds: vm$.state.feeds },
@@ -1247,7 +1120,6 @@ export function HomePage({ vm$ }) {
       SearchView({ vm$ }),
       View({ class: "shell page-main", attributes: { n: "discovery-main" } }, [
         PlatformNavigationView({ vm$ }),
-        TagNavigationView({ vm$ }),
         FeedIndexView({ vm$ }),
         FeedPaginationView({ vm$ }),
       ]),
@@ -1269,7 +1141,8 @@ function bootstrap() {
   if (!root) {
     throw new Error("FindRSS 订阅广场无法启动：缺少根节点");
   }
-  const model = DiscoveryViewModel(read_json('#discovery-catalog, [data-n="discovery-catalog"]'));
+  const model = DiscoveryViewModel(read_json('#discovery-catalog, [data-n="discovery-catalog"]'),
+    new URL(window.location.href).searchParams);
   if (root.firstChild) {
     globalThis.Timeless.DOM.hydrate(HomePage({ vm$: model }), root);
   } else {

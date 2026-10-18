@@ -76,7 +76,7 @@ function infer_source_tags(feed_url, scripts) {
   return infer_source_route(feed_url, scripts)?.tags || [];
 }
 
-/** @param {unknown} value 头像只接受站内相对路径（服务端给的就是 `/api/avatar/<id>?v=`）。*/
+/** @param {unknown} value 头像只接受站内相对路径（服务端返回 `/public/avatar/...`）。*/
 function safe_avatar_url(value) {
   if (typeof value !== "string") return "";
   const path = value.trim();
@@ -146,6 +146,12 @@ function DiscoveryAdminViewModel() {
   const platforms_ = ref(discovery_platforms());
   const tags_ = ref([]);
   const snapshot_refreshing_ = ref([]);
+  const local_refreshing = new Set();
+  let background_refreshing = new Set();
+  let task_generation = 0;
+  let task_timer = null;
+  let task_error = "";
+  let disposed = false;
   const snapshot_errors_ = ref(new Map());
   const scripts_ = ref([]);
   const scripts_error_ = ref("");
@@ -155,6 +161,7 @@ function DiscoveryAdminViewModel() {
   const filter_status_ = ref("enabled");
   const filter_visibility_ = ref("all");
   const selected_sources = new Map();
+  const known_sources = new Map();
   let loaded_page = -1;
   const draft_title_ = ref("");
   const draft_feed_url_ = ref("");
@@ -180,6 +187,8 @@ function DiscoveryAdminViewModel() {
   const selected_ids_ = ref([]);
   const bulk_busy_ = ref(false);
   const bulk_message_ = ref("");
+  const recovery_busy_ = ref(false);
+  const recovery_message_ = ref("");
   const saving_ = ref(false);
   const previewing_ = ref(false);
   const preview_avatar_ = ref("");
@@ -236,6 +245,8 @@ function DiscoveryAdminViewModel() {
     selected_ids: selected_ids_,
     bulk_busy: bulk_busy_,
     bulk_message: bulk_message_,
+    recovery_busy: recovery_busy_,
+    recovery_message: recovery_message_,
     saving: saving_,
     previewing: previewing_,
     preview_avatar: preview_avatar_,
@@ -252,6 +263,58 @@ function DiscoveryAdminViewModel() {
 
   async function load() {
     return pagination.load();
+  }
+
+  function sync_refreshing() {
+    snapshot_refreshing_.set([...new Set([...local_refreshing, ...background_refreshing])]);
+  }
+
+  function invalidate_tasks() {
+    task_generation++;
+    if (task_timer !== null) window.clearTimeout(task_timer);
+    task_timer = null;
+  }
+
+  async function load_background_tasks({ reload_completed = false } = {}) {
+    invalidate_tasks();
+    const generation = task_generation;
+    const source_ids = sources_.value.map(source => source.id);
+    if (disposed) return;
+    if (!source_ids.length) {
+      background_refreshing.clear();
+      sync_refreshing();
+      return;
+    }
+    let retry = false;
+    try {
+      const payload = await request_json("/admin/api/background-tasks?source_ids=" + encodeURIComponent(source_ids.join(",")));
+      if (disposed || generation !== task_generation) return;
+      if (task_error && list_error_.value === task_error) list_error_.set("");
+      task_error = "";
+      const visible_ids = new Set(source_ids);
+      const running = new Set((payload.tasks || [])
+        .filter(task => task.status === "running" && visible_ids.has(task.source_id))
+        .map(task => task.source_id));
+      const completed = [...background_refreshing].some(id => visible_ids.has(id) && !running.has(id));
+      background_refreshing = running;
+      sync_refreshing();
+      if (reload_completed && completed) {
+        await pagination.load(pagination.page.value, { background: true });
+        return;
+      }
+    } catch (error) {
+      if (disposed || generation !== task_generation) return;
+      task_error = "后台任务加载失败：" + (error.message || String(error));
+      list_error_.set(task_error);
+      retry = true;
+    } finally {
+      if (!disposed && generation === task_generation && (retry || background_refreshing.size)) {
+        task_timer = window.setTimeout(() => {
+          task_timer = null;
+          void load_background_tasks({ reload_completed: true });
+        }, 2000);
+      }
+    }
   }
 
   async function load_scripts() {
@@ -305,12 +368,47 @@ function DiscoveryAdminViewModel() {
     };
   }
 
-  /** 列表项按 id 就地替换（保存/上传/移除头像都回权威 `{source}`）。 */
-  function apply_source(source) {
+  function matches_filters(source) {
+    if (filter_status_.value === "enabled" && !source.enabled) return false;
+    if (filter_status_.value === "disabled" && source.enabled) return false;
+    if (filter_visibility_.value === "public" && source.require_token) return false;
+    if (filter_visibility_.value === "private" && !source.require_token) return false;
+    if (filter_platform_.value !== "all" && source.source_type !== filter_platform_.value) return false;
+    const query = query_.value.trim().slice(0, 100).toLowerCase();
+    return !query || [source.title, source.description, source.website, source.social_url,
+      ...(source.social_urls || []), source.feed_url_template || source.feed_url,
+      JSON.stringify(source.tags)].some(value => String(value || "").toLowerCase().includes(query));
+  }
+
+  /** 用接口返回值更新当前页及总数；不再匹配筛选的记录直接移出。 */
+  function apply_source(source, { created = false } = {}) {
+    const previous = known_sources.get(source.id) || sources_.value.find(item => item.id === source.id) || selected_sources.get(source.id);
+    const matches = matches_filters(source);
+    if (created || previous) {
+      const delta = Number(matches) - Number(!created && previous && matches_filters(previous));
+      pagination.total.set(Math.max(0, pagination.total.value + delta));
+    }
+    known_sources.set(source.id, source);
     if (selected_ids_.value.includes(source.id)) selected_sources.set(source.id, source);
-    sources_.as(
-      sources_.value.map((item) => (item.id === source.id ? source : item)),
-    );
+    if (!matches) {
+      sources_.as(sources_.value.filter(item => item.id !== source.id));
+      selected_ids_.set(selected_ids_.value.filter(id => id !== source.id));
+      selected_sources.delete(source.id);
+      return;
+    }
+    sources_.as(created
+      ? [source, ...sources_.value.filter(item => item.id !== source.id)].slice(0, pagination.page_size.value)
+      : sources_.value.map(item => item.id === source.id ? source : item));
+  }
+
+  async function fill_empty_page() {
+    if (sources_.value.length || !pagination.total.value) {
+      pagination.page.set(pagination.state.value.page);
+      loaded_page = pagination.page.value;
+      return;
+    }
+    // 只有当前页已空才读取有效页；普通操作保留其余行，不触发整表加载态。
+    await pagination.load(pagination.state.value.page, { background: true });
   }
 
   function show_list_message(message) {
@@ -330,7 +428,7 @@ function DiscoveryAdminViewModel() {
       });
       const updated = normalize_source(result.source);
       apply_source(updated);
-      if (!bulk_busy_.value) await load();
+      if (!bulk_busy_.value) await fill_empty_page();
       show_list_message(updated.title + (field === "enabled"
         ? updated.enabled ? " 已启用。" : " 已停用。"
         : updated.require_token ? " 已设为需要 token 访问。" : " 已设为公开。"));
@@ -395,14 +493,7 @@ function DiscoveryAdminViewModel() {
         },
       );
       let source = normalize_source(result.source);
-      sources_.as(
-        was_editing === ""
-          ? [source, ...sources_.value]
-          : sources_.value.map((item) =>
-              item.id === source.id ? source : item,
-            ),
-      );
-      if (was_editing === "") pagination.reset();
+      apply_source(source, { created: was_editing === "" });
       if (pending_avatar) {
         // 源本身已经存下来了：头像失败只提示，不回滚（否则用户丢掉刚填的其它字段）。
         try {
@@ -422,7 +513,7 @@ function DiscoveryAdminViewModel() {
       saving_.set(false);
       form_open_.set(false);
       show_list_message(source.title + " 已保存。");
-      await load();
+      await fill_empty_page();
     } catch (error) {
       form_error_.set(error instanceof Error ? error.message : String(error));
     } finally {
@@ -560,7 +651,7 @@ function DiscoveryAdminViewModel() {
               body: JSON.stringify(source),
             });
             const saved = normalize_source(result.source);
-            sources_.as([saved, ...sources_.value]);
+            apply_source(saved, { created: true });
             existing.add(source.feed_url);
             imported++;
           }
@@ -582,9 +673,8 @@ function DiscoveryAdminViewModel() {
           JSON.stringify({ sources: sources.slice(processed) }, null, 2),
         );
       } finally {
-        pagination.reset();
         import_busy_.set(false);
-        await load();
+        await fill_empty_page();
       }
     },
     async export_sources() {
@@ -635,6 +725,27 @@ function DiscoveryAdminViewModel() {
     refresh_list() {
       return load();
     },
+    async recover_overdue() {
+      if (recovery_busy_.value || loading_.value || bulk_busy_.value || saving_.value) return false;
+      recovery_busy_.set(true);
+      recovery_message_.set("");
+      list_error_.set("");
+      try {
+        const result = await request_json("/admin/api/discovery/sources/recover-overdue", { method: "POST" });
+        const message = result.matched_count
+          ? "已提交 " + result.queued_count + " 个补抓任务，跳过 " + result.skipped_count + " 个运行中或已排队的源。"
+          : "没有逾期 5 小时以上的订阅源。";
+        recovery_message_.set(message);
+        Timeless.notify(message);
+        await pagination.load(pagination.page.value, { background: true });
+        return true;
+      } catch (error) {
+        list_error_.set("补抓提交失败：" + (error.message || String(error)));
+        return false;
+      } finally {
+        recovery_busy_.set(false);
+      }
+    },
     async refresh_snapshot(source_id) {
       const source = sources_.value.find((item) => item.id === source_id) || selected_sources.get(source_id);
       if (
@@ -643,7 +754,8 @@ function DiscoveryAdminViewModel() {
         snapshot_refreshing_.value.includes(source_id)
       )
         return false;
-      snapshot_refreshing_.set([...snapshot_refreshing_.value, source_id]);
+      local_refreshing.add(source_id);
+      sync_refreshing();
       snapshot_errors_.set(new Map(snapshot_errors_.value).set(source_id, ""));
       try {
         const result = await request_json(
@@ -689,9 +801,8 @@ function DiscoveryAdminViewModel() {
         );
         return false;
       } finally {
-        snapshot_refreshing_.set(
-          snapshot_refreshing_.value.filter((id) => id !== source_id),
-        );
+        local_refreshing.delete(source_id);
+        sync_refreshing();
       }
     },
     create_source() {
@@ -800,10 +911,16 @@ function DiscoveryAdminViewModel() {
     start() {
       return load();
     },
+    destroy() {
+      disposed = true;
+      invalidate_tasks();
+      pagination.destroy();
+    },
     set_filter(name, value) {
       if (bulk_busy_.value) return;
       selected_ids_.set([]);
       selected_sources.clear();
+      known_sources.clear();
       bulk_message_.set("");
       pagination.reset();
       if (name === "query") query_.set(String(value));
@@ -985,7 +1102,7 @@ function DiscoveryAdminViewModel() {
           bulk_message_.set("已处理 " + (succeeded + errors.length + skipped) + " / " + selected.length + " 个订阅源…");
         }
       } finally {
-        if (action !== "refresh") await load();
+        if (action !== "refresh") await fill_empty_page();
         bulk_busy_.set(false);
         form_message_.set("");
         bulk_message_.set("批量操作完成：成功 " + succeeded + " 个，失败 " + errors.length + " 个，跳过 " + skipped + " 个。"
@@ -1003,7 +1120,9 @@ function DiscoveryAdminViewModel() {
     },
     async remove_source(source_id) {
       const source = sources_.value.find((item) => item.id === source_id) || selected_sources.get(source_id);
-      if (!source) return false;
+      if (!source || source_updating_.value.includes(source_id)) return false;
+      source_updating_.set([...source_updating_.value, source_id]);
+      list_error_.set("");
       try {
         await request_json(
           "/admin/api/discovery/sources/" + encodeURIComponent(source_id),
@@ -1012,14 +1131,22 @@ function DiscoveryAdminViewModel() {
           },
         );
         sources_.as(sources_.value.filter((item) => item.id !== source_id));
+        if (matches_filters(source)) pagination.total.set(Math.max(0, pagination.total.value - 1));
         selected_ids_.set(selected_ids_.value.filter(id => id !== source_id));
+        selected_sources.delete(source_id);
+        known_sources.delete(source_id);
+        const errors = new Map(snapshot_errors_.value);
+        errors.delete(source_id);
+        snapshot_errors_.set(errors);
         if (editing_id_.value === source_id) methods.reset_draft();
         show_list_message(source.title + " 已删除。");
-        if (!bulk_busy_.value) await load();
+        if (!bulk_busy_.value) await fill_empty_page();
         return true;
       } catch (error) {
         list_error_.set(error instanceof Error ? error.message : String(error));
         return false;
+      } finally {
+        source_updating_.set(source_updating_.value.filter(id => id !== source_id));
       }
     },
   };
@@ -1027,8 +1154,12 @@ function DiscoveryAdminViewModel() {
   const pagination = ListPaginationModel(Timeless, {
     fetch, url: "/admin/api/discovery/sources", key: "sources", normalize: normalize_source,
     loading: loading_, error: list_error_,
-    filters: () => ({ q: query_.value.trim(), source_type: filter_platform_.value === "all" ? "" : filter_platform_.value,
-      status: filter_status_.value, visibility: filter_visibility_.value }),
+    visible_count: computed(sources_, sources => sources.length),
+    filters: () => {
+      invalidate_tasks();
+      return { q: query_.value.trim(), source_type: filter_platform_.value === "all" ? "" : filter_platform_.value,
+        status: filter_status_.value, visibility: filter_visibility_.value };
+    },
     on_data(sources, payload) {
       if (loaded_page === pagination.page.value) {
         const previous_ids = new Set(sources_.value.map(source => source.id));
@@ -1037,11 +1168,13 @@ function DiscoveryAdminViewModel() {
       }
       loaded_page = pagination.page.value;
       sources_.as(sources);
+      for (const source of sources) known_sources.set(source.id, source);
       for (const source of sources) if (selected_ids_.value.includes(source.id)) selected_sources.set(source.id, source);
       tags_.set(Array.isArray(payload.tags) ? [...new Set(payload.tags.filter(tag => typeof tag === "string"))] : []);
       platforms_.set(Array.isArray(payload.platforms)
         ? payload.platforms.map(({ id, name, label, icon }) => ({ id, label: name || label, ...(icon === undefined ? {} : { icon }) }))
         : discovery_platforms());
+      return load_background_tasks();
     },
   });
   const visible_sources = sources_;

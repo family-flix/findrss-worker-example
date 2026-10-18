@@ -41,6 +41,19 @@ test("后台任务合并并发，记录成功与失败，已完成任务重复�
   assert.throws(() => f.tasks.cancel("missing"), { status: 404 });
 });
 
+test("补抓识别不同任务键下正在生成 XML 的源，不重复启动抓取", async t => {
+  const f = fixture(t);
+  let finish;
+  const pending = f.tasks.start("public-snapshot:/xml", { ...descriptor, source_id: "source" }, () => new Promise(resolve => { finish = resolve; }));
+  assert.equal(f.tasks.is_source_running("source"), true);
+  const discovery = new ServiceDiscovery({ background_tasks: f.tasks, repo: {}, load_snapshot: () => assert.fail("运行中源不能重复抓取") });
+  discovery.scheduled_sources = () => [{ id: "source", next_at: Date.now() - 6 * 3600000 }];
+  assert.deepEqual(discovery.recover_overdue_snapshots(), { matched_count: 1, queued_count: 0, skipped_count: 1 });
+  await new Promise(setImmediate);
+  finish({}); await pending.promise;
+  assert.equal(f.tasks.is_source_running("source"), false);
+});
+
 test("取消进行中任务传播信号，迟到结果不能将已终止状态改回完成", async t => {
   const f = fixture(t);
   let resolve, signal;
@@ -66,6 +79,7 @@ test("终止订阅源刷新保留上次快照，迟到文章不保存也不发�
   } }, load_snapshot: (_source, _origin, value) => { signal = value; return new Promise(done => { resolve = done; }); } });
   discovery.publish_catalog = () => assert.fail("取消后不能发布");
   const pending = discovery.snapshot_task(source.id);
+  assert.equal(pending.task.source_id, source.id);
   await new Promise(setImmediate);
   f.tasks.cancel(pending.task.id);
   assert.equal(signal.aborted, true);
@@ -73,6 +87,30 @@ test("终止订阅源刷新保留上次快照，迟到文章不保存也不发�
   await assert.rejects(pending.promise, /已终止/);
   assert.equal(previous.saved_at, 1234);
   assert.equal(discovery.snapshot_pending.size, 0);
+});
+
+test("按源 ID 批量查询仅返回匹配的进行中任务，不受最近 100 条限制", async t => {
+  const f = fixture(t);
+  // 地址相同的不同源不能互相匹配，同一源的多个任务都需要返回。
+  for (let index = 0; index < 105; index++) {
+    f.tasks_repo.insert({ id: String(index), ...descriptor, source_id: "source-" + index, started_at: index });
+  }
+  f.tasks_repo.insert({ id: "duplicate", ...descriptor, source_id: "source-0", started_at: 110 });
+  for (const [id, status] of [["1", "completed"], ["2", "failed"], ["3", "cancelled"]]) {
+    f.tasks_repo.finish(id, status, "", 200);
+  }
+  assert.equal(f.tasks_repo.list().some(task => task.id === "0"), false);
+  const app = { background_tasks: f.tasks };
+  const response = await route(new Request("https://internal/_admin/background-tasks?source_ids=source-0,source-1,source-2,source-3,source-4,source-0,missing"), app);
+  assert.equal(response.status, 200);
+  const { tasks } = await response.json();
+  assert.deepEqual(tasks.map(task => task.id), ["duplicate", "4", "0"]);
+  assert.deepEqual(tasks.map(task => task.source_id), ["source-0", "source-4", "source-0"]);
+  assert.deepEqual(f.tasks_repo.running_for_sources([]), []);
+  assert.deepEqual((await (await route(new Request("https://internal/_admin/background-tasks?source_ids=missing"), app)).json()).tasks, []);
+  for (const invalid of ["", "source-0,", "bad id", "' OR 1=1--", "a".repeat(129), Array(101).fill("one").join(",")]) {
+    assert.equal((await route(new Request("https://internal/_admin/background-tasks?source_ids=" + encodeURIComponent(invalid)), app)).status, 400, invalid);
+  }
 });
 
 test("取消生成和 R2 上传中的 XML，保留旧指针与缓存并清理新对象", async t => {
@@ -106,6 +144,43 @@ test("任务记录限制最近 100 条，重启后进行中任务标记为中断
   new ServiceBackgroundTasks({ repo: f.tasks_repo });
   assert.equal(f.tasks_repo.find("interrupted").status, "failed");
   assert.match(f.tasks_repo.find("interrupted").error, /重启/);
+});
+
+test("清理接口从数据库移除所有已完成和失败任务，包括列表之外的记录，保留其他状态", async t => {
+  const f = fixture(t);
+  for (let index = 0; index < 106; index++) {
+    f.tasks_repo.insert({ id: String(index), ...descriptor, started_at: index });
+  }
+  f.tasks_repo.finish("0", "completed", "", 200);
+  f.tasks_repo.finish("1", "failed", "offline", 200);
+  f.tasks_repo.finish("2", "cancelled", "已终止", 200);
+  assert.ok(f.tasks_repo.list().every(task => task.status === "running"));
+  const response = await route(new Request("https://internal/_admin/background-tasks", { method: "DELETE" }), { background_tasks: f.tasks });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).tasks.length, 100);
+  assert.equal(f.tasks_repo.find("0"), undefined);
+  assert.equal(f.tasks_repo.find("1"), undefined);
+  assert.equal(f.tasks_repo.find("2").status, "cancelled");
+  assert.equal(f.db.prepare("SELECT count(*) AS count FROM background_tasks").get().count, 104);
+  assert.deepEqual(f.tasks.cleanup(), f.tasks.list());
+  assert.equal(f.db.prepare("SELECT count(*) AS count FROM background_tasks").get().count, 104);
+});
+
+test("清理任务记录不终止正在运行的任务，清理后仍可正常完成", async t => {
+  const f = fixture(t);
+  let resolve, signal;
+  const pending = f.tasks.start("pending", descriptor, value => {
+    signal = value;
+    return new Promise(done => { resolve = done; });
+  });
+  await new Promise(setImmediate);
+  f.tasks.cleanup();
+  assert.equal(signal.aborted, false);
+  assert.equal(f.tasks_repo.find(pending.task.id).status, "running");
+  resolve({}); await pending.promise;
+  assert.equal(f.tasks_repo.find(pending.task.id).status, "completed");
+  f.tasks.cleanup();
+  assert.equal(f.tasks_repo.find(pending.task.id), undefined);
 });
 
 test("终止刷新只清理本次设备等待器，不影响共享调用的其他等待者", async () => {

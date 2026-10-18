@@ -14,7 +14,7 @@ const styles = minify(stylesheet.replace('@import url("/base.css");', base_style
 const compact_template = template.trim().replace(/>\s+</g, "><");
 let style_hash = null;
 // 页头等 HTML 结构变更时递增，旧 R2 产物与边缘缓存共用这一版本。
-export const DISCOVERY_ASSETS_VERSION = "8";
+export const DISCOVERY_ASSETS_VERSION = "10";
 
 export function discovery_style_hash() {
   return style_hash ||= crypto.subtle.digest("SHA-256", new TextEncoder().encode(styles))
@@ -36,18 +36,18 @@ export function resolve_home_metadata(html, origin) {
     .replace(/<meta name="twitter:image" content="[^"]*">/, () => `<meta name="twitter:image" content="${image_url}">`);
 }
 
-export function render_home_document(catalog, origin) {
+export function render_home_document(catalog, origin, parameters = null) {
   const data = { ...catalog, sources: lazy_catalog_avatars(catalog).sources.map(source => ({ ...source,
     feed_url: SourceAddressModel.resolve_feed_url(source.feed_url, origin),
   })) };
-  const body = renderToString(HomePage({ vm$: DiscoveryViewModel(data) }));
+  const body = renderToString(HomePage({ vm$: DiscoveryViewModel(data, parameters) }));
   const bootstrap = JSON.stringify(data).replace(/</g, "\\u003c");
   return resolve_home_metadata(inline_home_styles(compact_template), origin).replace('<main id="discovery-root"></main>',
     () => `<main id="discovery-root">${body}</main>` +
       `<script id="discovery-catalog" type="application/json">${bootstrap}</script>`);
 }
 
-export function render_embedded_home(catalog, origin) {
-  return render_home_document(catalog, origin).replace("</head>",
+export function render_embedded_home(catalog, origin, parameters = null) {
+  return render_home_document(catalog, origin, parameters).replace("</head>",
     `<meta name="discovery-embedded-assets" content="${DISCOVERY_ASSETS_VERSION}"></head>`);
 }

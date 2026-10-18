@@ -13,7 +13,7 @@ import { DISCOVERY_CATALOG_KEY, DISCOVERY_CATALOG_ORIGIN } from "../../server/li
 import { gzip_html } from "../../server/infra/discovery_compression.js";
 
 const bundle = await build({
-  stdin: { contents: 'export { render_home_document } from "../server/infra/discovery_home.js"; export { handle_discovery_request } from "../discover.js";',
+  stdin: { contents: 'export { render_home_document, render_embedded_home } from "../server/infra/discovery_home.js"; export { handle_discovery_request } from "../discover.js";',
     resolveDir: fileURLToPath(new URL("../", import.meta.url)), loader: "js" },
   bundle: true, write: false, format: "esm", platform: "neutral", mainFields: ["main"], loader: { ".html": "text", ".css": "text", ".svg": "text" },
   plugins: [timeless_plugin({ platform: LITE_ESM, ssr: true })],
@@ -21,7 +21,7 @@ const bundle = await build({
 const directory = mkdtempSync(join(tmpdir(), "findrss-home-test-"));
 const module_path = join(directory, "home.mjs");
 writeFileSync(module_path, bundle.outputFiles[0].text);
-const { handle_discovery_request, render_home_document } = await import(pathToFileURL(module_path));
+const { handle_discovery_request, render_home_document, render_embedded_home } = await import(pathToFileURL(module_path));
 const worker = { fetch: (request, env) => handle_discovery_request(request, env, env.API?.fetch.bind(env.API)) };
 rmSync(directory, { recursive: true });
 const catalog = { sources: Array.from({ length: 41 }, (_, index) => ({ id: String(index), title: "源" + index,
@@ -30,6 +30,12 @@ const catalog = { sources: Array.from({ length: 41 }, (_, index) => ({ id: Strin
 })), tags: ["科技"] };
 const request = (path = "/", init) => new Request("https://discover.example" + path, init);
 const bootstrap_data = html => JSON.parse(/<script (?:id|data-n)="discovery-catalog" type="application\/json">([^]*?)<\/script>/.exec(html)[1]);
+const rendered_titles = html => [...html.matchAll(/ n="feed-title">([^]*?)<\/div>/g)].map(match => match[1]);
+const filtered_catalog = { ...catalog,
+  sources: catalog.sources.map((source, index) => ({ ...source, source_type: index >= 10 ? "kuaishou" : "website",
+    tags: index < 35 ? ["科技", "文章"] : ["科技"] })),
+  platforms: [{ id: "website", label: "网页" }, { id: "kuaishou", label: "快手" }], tags: ["科技", "文章"],
+};
 
 test("广场账号页面与登录、会话、积分接口已移除，旧 Cookie 不触发账号服务", async () => {
   const env = {
@@ -97,6 +103,7 @@ test("预生成首屏与完整目录，链接有效，bootstrap 转义 script �
   assert_styled_home(html);
   assert.doesNotMatch(html, /\r|\n/);
   assert.equal((html.match(/ n="feed-row"/g) || []).length, 20);
+  assert.doesNotMatch(html, / n="(?:feed-tag|tag-filters|tag-filter|tag-filter-all)"/);
   assert.ok(html.includes("源19"));
   assert.match(html, /共 41 个订阅源/);
   assert.match(html, /href="https:\/\/example.com\/article"/);
@@ -170,8 +177,8 @@ test("SSR 与旧 R2 头像都按需加载，HTML 不含图片字节且不请求�
     const html = await response.text();
     assert.doesNotMatch(html, /data:image\/png;base64|127\.0\.0\.1|<img[^>]*n="feed-avatar-image"/);
     assert.match(html, /n="feed-avatar-placeholder"/);
-    assert.match(html, /name="discovery-embedded-assets" content="8"/);
-    assert.equal(bootstrap_data(html).sources[0].avatar_url, "/api/avatar/0?v=123");
+    assert.match(html, /name="discovery-embedded-assets" content="10"/);
+    assert.equal(bootstrap_data(html).sources[0].avatar_url, legacy ? "/public/avatar/0?v=123" : "/api/avatar/0?v=123");
     assert.equal(calls.length, legacy ? 0 : 1);
   }
 });
@@ -186,18 +193,18 @@ test("头像仅由独立接口读取，并保留版本参数", async () => {
   assert.equal(await response.text(), "image");
 });
 
-test("首页只读 R2，查询参数与 Cookie 不影响公共产物，按环境展开模板域名", async () => {
+test("首页只读 R2，Cookie 和无关参数不影响公共产物，按环境展开模板域名", async () => {
   const bucket = create_memory_bucket();
   await bucket.put(DISCOVERY_CATALOG_KEY, render_home_document(catalog, DISCOVERY_CATALOG_ORIGIN));
   const env = { API_STORAGE: bucket, API: { fetch() { throw Error("不能查询 DO"); } } };
-  const response = await worker.fetch(request("/?q=私人查询&page=3", { headers: { Cookie: "findrss_discover_session=private" } }), env);
+  const response = await worker.fetch(request("/?from=分享", { headers: { Cookie: "findrss_discover_session=private" } }), env);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("Set-Cookie"), null);
   assert.equal(response.headers.get("Cache-Control"), "public, max-age=0, s-maxage=60");
   assert.match(response.headers.get("Content-Security-Policy"), /manifest-src 'self'/);
   const html = await response.text();
   assert_styled_home(html, response);
-  assert.equal(html.includes("私人查询"), false);
+  assert.equal(html.includes("分享"), false);
   assert.equal(bootstrap_data(html).sources[0].feed_url, "https://discover.example/rss/demo/0");
   const fixed = await worker.fetch(request("/index.html"), { ...env, FINDRSS_HOSTNAME: "feeds.example:8443" });
   const fixed_html = await fixed.text();
@@ -209,6 +216,31 @@ test("首页只读 R2，查询参数与 Cookie 不影响公共产物，按环境
   const head = await worker.fetch(request("/", { method: "HEAD" }), env);
   assert.equal(head.status, 200); assert.equal(await head.text(), "");
   assert.equal(head.headers.get("Content-Security-Policy"), response.headers.get("Content-Security-Policy"));
+});
+
+test("R2 静态首页按 URL 渲染筛选和页码，API 回退使用相同条件", async () => {
+  const bucket = create_memory_bucket();
+  await bucket.put(DISCOVERY_CATALOG_KEY, await gzip_html(render_embedded_home(filtered_catalog, DISCOVERY_CATALOG_ORIGIN)),
+    { httpMetadata: { contentEncoding: "gzip" } });
+  for (const from_r2 of [true, false]) {
+    const env = from_r2 ? { API_STORAGE: bucket, API: { fetch() { throw Error("不能查询 DO"); } } }
+      : { API: { fetch: () => Response.json(filtered_catalog) } };
+    for (const [query, expected] of [
+      ["source_type=kuaishou", Array.from({ length: 20 }, (_, index) => "源" + (index + 10))],
+      ["source_type=kuaishou&page=2", Array.from({ length: 11 }, (_, index) => "源" + (index + 30))],
+      ["source_type=kuaishou&q=源3&tag=科技&tag=文章&page=999", Array.from({ length: 10 }, (_, index) => "源" + (index + 30))],
+      ["source_type=kuaishou&q=没有匹配结果", []],
+      ["page=3", ["源40"]],
+    ]) {
+      const response = await worker.fetch(request("/?" + query), env);
+      assert.equal(response.status, 200);
+      const html = await response.text();
+      assert.deepEqual(rendered_titles(html), expected, query);
+      // 保留完整轻量目录，客户端接管后仍可切换到其他筛选条件。
+      assert.equal(bootstrap_data(html).sources.length, 41);
+      assert.equal(bootstrap_data(html).sources[0].feed_url, "https://discover.example/rss/demo/0");
+    }
+  }
 });
 
 test("已有 R2 首页的外链样式在响应时内嵌，不需要等待目录重新发布", async () => {
@@ -255,11 +287,11 @@ test("旧版 R2 首页升级页头，跳过旧版边缘缓存并保留目录", a
     assert.match(link, /target="_blank"[^>]*rel="noopener noreferrer"/);
     assert.match(link, /aria-label="FindRSS GitHub 仓库（新标签页打开）"/);
     assert.match(link, /<div class="github-icon" n="github-icon" aria-hidden="true"><\/div><\/a>$/);
-    assert.match(html, /name="discovery-embedded-assets" content="8"/);
+    assert.match(html, /name="discovery-embedded-assets" content="10"/);
     assert.match(html, /<title>FindRSS 订阅广场 - RSS \/ Atom 订阅源搜索与发现<\/title>/);
     assert.doesNotMatch(html, /\sdata-n=/);
     assert.deepEqual(bootstrap_data(html), bootstrap_data(old_html.replaceAll(DISCOVERY_CATALOG_ORIGIN, "https://discover.example")));
-    assert.equal(new URL(cache_keys[0]).searchParams.get("assets"), "8");
+    assert.equal(new URL(cache_keys[0]).searchParams.get("assets"), "10");
     assert.equal(bucket.calls.get, 1);
   } finally { globalThis.caches = previous; }
 });
@@ -303,7 +335,7 @@ test("gzip R2 读取后缓存明文，按原始客户端编码头交给平台压
   } finally { globalThis.caches = previous; }
 });
 
-test("边缘缓存合并首页的不同查询，过期再读 R2，R2 缺席时才读全量 API", async () => {
+test("边缘缓存按筛选和页码隔离，无关参数复用缓存，过期再读 R2，缺席时读全量 API", async () => {
   const old_caches = globalThis.caches;
   let time = 0;
   const entries = new Map();
@@ -313,21 +345,38 @@ test("边缘缓存合并首页的不同查询，过期再读 R2，R2 缺席时�
   } };
   try {
     const bucket = create_memory_bucket();
-    await bucket.put(DISCOVERY_CATALOG_KEY, render_home_document(catalog, DISCOVERY_CATALOG_ORIGIN));
+    await bucket.put(DISCOVERY_CATALOG_KEY, render_embedded_home(filtered_catalog, DISCOVERY_CATALOG_ORIGIN));
     let calls = 0;
     const env = { API_STORAGE: bucket, API: { fetch() { calls++; throw Error("不能请求 DO"); } } };
-    await worker.fetch(request(), env);
-    const cached = await worker.fetch(request("/?q=日报&page=2"), env);
-    assert_styled_home(await cached.text(), cached);
-    assert.equal(bucket.calls.get, 1); assert.equal(calls, 0);
-    time = 60001; await worker.fetch(request(), env); assert.equal(bucket.calls.get, 2);
+    const home = await worker.fetch(request(), env);
+    assert_styled_home(await home.text(), home);
+    const paths = ["/?source_type=kuaishou", "/?source_type=kuaishou&page=2", "/?q=源3&tag=科技&tag=文章"];
+    const expected = [Array.from({ length: 20 }, (_, index) => "源" + (index + 10)),
+      Array.from({ length: 11 }, (_, index) => "源" + (index + 30)), ["源3", ...Array.from({ length: 10 }, (_, index) => "源" + (index + 30))]];
+    for (let index = 0; index < paths.length; index++) {
+      const response = await worker.fetch(request(paths[index]), env);
+      assert.deepEqual(rendered_titles(await response.text()), expected[index]);
+    }
+    assert.equal(entries.size, 4);
+    assert.equal(bucket.calls.get, 4); assert.equal(calls, 0);
+    for (let index = 0; index < paths.length; index++) {
+      const cached = await worker.fetch(request(paths[index] + "&from=share"), env);
+      assert.deepEqual(rendered_titles(await cached.text()), expected[index]);
+    }
+    assert.equal(bucket.calls.get, 4);
+    const legacy_tag = await worker.fetch(request("/?tag=不存在的标签"), env);
+    assert_styled_home(await legacy_tag.text(), legacy_tag);
+    assert.equal(entries.size, 4);
+    assert.equal(bucket.calls.get, 4);
+    time = 60001; await worker.fetch(request(), env); assert.equal(bucket.calls.get, 5);
     time = 120002;
     const fallback = await worker.fetch(request(), { API: { fetch(url) { calls++; assert.equal(url, "https://api/discovery/catalog"); return Response.json(catalog); } } });
     assert.equal(fallback.status, 200); assert.equal(calls, 1);
     const html = await fallback.text();
     assert_styled_home(html, fallback);
     assert.equal(bootstrap_data(html).sources.length, 41);
-    await worker.fetch(request("/?page=3"), {}); assert.equal(calls, 1);
+    const cached = await worker.fetch(request("/?from=share"), {});
+    assert.equal(cached.status, 200); assert.equal(calls, 1);
   } finally { globalThis.caches = old_caches; }
 });
 

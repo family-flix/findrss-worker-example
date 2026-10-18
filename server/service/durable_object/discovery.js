@@ -4,7 +4,7 @@
 // 由 api 层组装需要长缓存的二进制 Response。
 import { DiscoverySourceModel, SourceAvatarModel } from "../../domain/discovery_source.js";
 import { list_pagination, pagination_value } from "../../lib/list_pagination.js";
-import { DISCOVERY_CATEGORIES } from "../../lib/constants.js";
+import { DISCOVERY_CATEGORIES, DEFAULT_SNAPSHOT_CONCURRENCY, MAX_SNAPSHOT_CONCURRENCY } from "../../lib/constants.js";
 import { do_error, do_result } from "./error.js";
 import { rss_route_cache_key } from "../../infra/rss_cache.js";
 import { SourceAddressModel } from "../../domain/source_address.js";
@@ -41,9 +41,10 @@ export class ServiceDiscovery {
   /**
    * @param {{ repo: Record<string, any>, storage?: any, route_cache?: any, object_store?: any, load_snapshot?: Function, schedule_alarm?: Function, render_catalog?: Function, public_origin?: string }} deps
    */
-  constructor({ repo, storage, route_cache = null, object_store = null, load_snapshot = null, schedule_alarm = null, render_catalog = null, statistics = null, public_origin = "", snapshot_settings = () => null, check_cookie_permissions = null, background_tasks = null }) {
+  constructor({ repo, storage, route_cache = null, object_store = null, load_snapshot = null, schedule_alarm = null, render_catalog = null, statistics = null, public_origin = "", snapshot_settings = () => null, check_cookie_permissions = null, background_tasks = null, wait_until = null }) {
     this.repo = repo;
     this.background_tasks = background_tasks;
+    this.wait_until = wait_until;
     this.snapshot_settings = snapshot_settings;
     this.check_cookie_permissions = check_cookie_permissions;
     this.schedule_cache = new Map();
@@ -58,6 +59,8 @@ export class ServiceDiscovery {
     this.catalog_checked = false;
     this.catalog_retry_at = null;
     this.snapshot_pending = new Map();
+    this.snapshot_automatic = new Map();
+    this.snapshot_recovery = new Set();
     this.snapshot_refreshing = null;
     this.public_origin = http_origin(public_origin);
     this.last_public_origin = "";
@@ -153,7 +156,10 @@ export class ServiceDiscovery {
   }
 
   public_catalog() {
-    const rows = this.repo.discovery.list({ include_disabled: false, limit: DiscoverySourceModel.MAX_SOURCES, offset: 0 });
+    // 公开目录只含启用中的公开源；再按 require_token 过滤一次，确保替换仓库实现时
+    // 非公开源也不会漏进 R2 产物或 SSR 首页。
+    const rows = this.repo.discovery.list({ include_disabled: false, limit: DiscoverySourceModel.MAX_SOURCES, offset: 0 })
+      .filter(row => !Number(row.require_token));
     const sources = rows.map(row => this.source_value(row));
     return { sources, platforms: discovery_platforms(this.platforms(), rows), tags: this.tags() };
   }
@@ -162,7 +168,7 @@ export class ServiceDiscovery {
     if (!this.object_store || !this.render_catalog || this.catalog_checked && this.catalog_retry_at === null) return;
     let needed;
     try {
-      needed = await this.storage.get("discovery_catalog_dirty") || !await this.object_store.head(DISCOVERY_CATALOG_KEY) || !await this.storage.get("discovery_catalog_lazy_avatars_v1") || !await this.storage.get("discovery_catalog_platforms_v1") || !await this.storage.get("discovery_catalog_script_tags_v1");
+      needed = await this.storage.get("discovery_catalog_dirty") || !await this.object_store.head(DISCOVERY_CATALOG_KEY) || !await this.storage.get("discovery_catalog_lazy_avatars_v1") || !await this.storage.get("discovery_catalog_platforms_v1") || !await this.storage.get("discovery_catalog_script_tags_v1") || !await this.storage.get("discovery_catalog_public_sources_v1") || !await this.storage.get("discovery_catalog_public_avatars_v1");
     } catch (error) {
       this.catalog_retry_at = Date.now() + 60000;
       await this.schedule_alarm?.();
@@ -187,6 +193,8 @@ export class ServiceDiscovery {
         await this.storage.put("discovery_catalog_lazy_avatars_v1", true);
         await this.storage.put("discovery_catalog_platforms_v1", true);
         await this.storage.put("discovery_catalog_script_tags_v1", true);
+        await this.storage.put("discovery_catalog_public_sources_v1", true);
+        await this.storage.put("discovery_catalog_public_avatars_v1", true);
         this.catalog_checked = true;
         this.catalog_retry_at = null;
       } catch (error) {
@@ -213,7 +221,8 @@ export class ServiceDiscovery {
    */
   get_public_discovery_source(id) {
     const row = this.repo.discovery.find_enabled(id);
-    if (row === undefined) {
+    // 非公开源没有公开详情页，按不存在处理，不泄露其存在性。
+    if (row === undefined || Number(row.require_token)) {
       throw do_error("source not found", 404);
     }
     const model = DiscoverySourceModel.fromRow(row);
@@ -223,22 +232,70 @@ export class ServiceDiscovery {
     return { source, related }
   }
 
+  snapshot_concurrency() {
+    const value = this.snapshot_settings()?.max_concurrency;
+    return Number.isInteger(value) && value >= 1 && value <= MAX_SNAPSHOT_CONCURRENCY ? value : DEFAULT_SNAPSHOT_CONCURRENCY;
+  }
+
   next_snapshot_at() {
     if (!this.load_snapshot) return this.catalog_retry_at;
-    if (this.snapshot_refreshing) return Date.now() + 60000;
+    if (this.snapshot_automatic.size >= this.snapshot_concurrency()) return Date.now() + 60000;
     const candidates = this.scheduled_sources();
-    const next = candidates ? candidates[0]?.next_at ?? null : this.repo.discovery.snapshot_next_at(snapshot_interval);
+    const next = candidates ? candidates.find(source => !this.snapshot_automatic.has(source.id) && !this.snapshot_pending.has(source.id))?.next_at ?? null
+      : this.repo.discovery.snapshot_next_at(snapshot_interval);
     const snapshot_at = next === null ? null : Math.max(Number(next), Date.now() + 5000);
     return this.catalog_retry_at === null ? snapshot_at : Math.min(snapshot_at ?? Infinity, this.catalog_retry_at);
   }
 
-  refresh_due_snapshots() {
-    if (this.snapshot_refreshing) return this.snapshot_refreshing;
+  recover_overdue_snapshots() {
+    if (!this.load_snapshot) throw do_error("snapshot service is unavailable", 503);
+    const cutoff = Date.now() - 5 * 3600000;
+    const sources = (this.scheduled_sources() || []).filter(source =>
+      Number(source.next_at || source.created_at || Date.now()) <= cutoff);
+    let queued_count = 0;
+    for (const source of sources) {
+      if (this.snapshot_recovery.has(source.id) || this.snapshot_automatic.has(source.id)
+        || this.snapshot_pending.has(source.id) || this.background_tasks?.is_source_running?.(source.id)) continue;
+      this.snapshot_recovery.add(source.id);
+      queued_count++;
+    }
+    if (this.snapshot_recovery.size) {
+      const pending = this.refresh_due_snapshots({ recovery_only: true });
+      this.wait_until?.(pending);
+    }
+    return { matched_count: sources.length, queued_count, skipped_count: sources.length - queued_count };
+  }
+
+  refresh_due_snapshots({ recovery_only = false } = {}) {
+    const concurrency = this.snapshot_concurrency();
+    const available = concurrency - this.snapshot_automatic.size;
+    if (available <= 0) return this.snapshot_refreshing;
     const candidates = this.scheduled_sources();
-    const sources = candidates ? candidates.filter(source => source.next_at <= Date.now()).slice(0, 4)
-      : this.repo.discovery.snapshot_due(Date.now() - snapshot_interval, 4);
-    this.snapshot_refreshing = Promise.all(sources.map(source => this.refresh_discovery_snapshot(source.id, "", { automatic: true })))
-      .finally(async () => { this.snapshot_refreshing = null; await this.schedule_alarm?.(); });
+    const due = candidates ? candidates.filter(source => source.next_at <= Date.now())
+      : this.repo.discovery.snapshot_due(Date.now() - snapshot_interval, concurrency);
+    const due_ids = new Set(due.map(source => source.id));
+    for (const id of this.snapshot_recovery) if (!due_ids.has(id)) this.snapshot_recovery.delete(id);
+    const sources = due.filter(source => (!recovery_only || this.snapshot_recovery.has(source.id))
+      && !this.snapshot_automatic.has(source.id) && !this.snapshot_pending.has(source.id)
+      && !this.background_tasks?.is_source_running?.(source.id)).slice(0, available);
+    if (!sources.length) return this.snapshot_refreshing || Promise.resolve([]);
+    for (const source of sources) {
+      this.snapshot_recovery.delete(source.id);
+      // 按源释放并发位置，不让同批的一个慢任务挡住后续所有到期源。
+      const pending = Promise.resolve().then(() => this.refresh_discovery_snapshot(source.id, "", { automatic: true }))
+        .finally(async () => {
+          this.snapshot_automatic.delete(source.id);
+          if (!this.snapshot_automatic.size) this.snapshot_refreshing = null;
+          if (this.snapshot_recovery.size) {
+            const next = this.refresh_due_snapshots({ recovery_only: true });
+            this.wait_until?.(next);
+          }
+          await this.schedule_alarm?.();
+        })
+        .catch(error => console.warn("discovery snapshot refresh failed", source.id, error.message));
+      this.snapshot_automatic.set(source.id, pending);
+    }
+    this.snapshot_refreshing = Promise.allSettled([...this.snapshot_automatic.values()]);
     return this.snapshot_refreshing;
   }
 
@@ -277,7 +334,7 @@ export class ServiceDiscovery {
     if (source.require_token && !SourceAddressModel(source.feed_url).is_route()) throw do_error("外部私密源的快照由上游管理", 400);
     if (!this.load_snapshot) throw do_error("snapshot service is unavailable", 503);
     return this.background_tasks.start("discovery:" + source_id + (force ? ":" + crypto.randomUUID() : ""), {
-      kind: "snapshot", title: "刷新快照：" + source.title, target: source.feed_url,
+      kind: "snapshot", title: "刷新快照：" + source.title, target: source.feed_url, source_id,
     }, signal => this.refresh_discovery_snapshot(source_id, public_url, { automatic, signal, force }));
   }
 

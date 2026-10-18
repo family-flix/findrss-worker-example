@@ -61,6 +61,36 @@ test("默认规则加载失败不能保存，保存失败保留草稿重试，�
   assert.equal(writes.at(-1).policy.interval, 1800);
 });
 
+test("并发设置加载回填、非法输入不发送请求、失败保留草稿，成功后重新进入恢复已保存值", async () => {
+  let fail = false;
+  let settings = { policy: { mode: "interval", interval: 3600, timezone: "UTC" }, max_concurrency: 6 };
+  const writes = [];
+  const model = SnapshotSettingsModel({ ui, request_json: async (_, options) => {
+    if (!options) return settings;
+    writes.push(JSON.parse(options.body));
+    if (fail) throw new Error("保存失败");
+    settings = writes.at(-1);
+    return settings;
+  } });
+  await model.methods.start();
+  assert.equal(model.state.max_concurrency.value, "6");
+  for (const invalid of ["", "0", "17", "1.5", "abc"]) {
+    model.methods.set_max_concurrency(invalid);
+    await model.methods.save();
+    assert.equal(writes.length, 0);
+    assert.match(model.state.error.value, /1 至 16/);
+  }
+  model.methods.set_max_concurrency("8"); fail = true;
+  await model.methods.save();
+  assert.equal(model.state.max_concurrency.value, "8");
+  assert.match(model.state.error.value, /保存失败/);
+  fail = false;
+  await model.methods.save();
+  assert.equal(writes.at(-1).max_concurrency, 8);
+  model.methods.leave(); assert.equal(model.state.max_concurrency.value, "4");
+  await model.methods.start(); assert.equal(model.state.max_concurrency.value, "8");
+});
+
 test("保存期间离开再返回，等旧写入结束后重读，迟到写入不覆盖当前页面", async () => {
   let finish, reads = 0;
   let policy = { mode: "interval", interval: 600, timezone: "UTC" };

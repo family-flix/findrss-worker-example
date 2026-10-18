@@ -15,7 +15,7 @@ function model_fixture(fetch, href = "https://discover.example/", catalog = null
     pushState(_state, _title, url) { entries.splice(++position); entries.push(url); location.href = url; },
     replaceState(_state, _title, url) { entries[position] = url; location.href = url; },
   };
-  const context = vm.createContext({ URL, URLSearchParams, fetch, setTimeout, clearTimeout, catalog,
+  const context = vm.createContext({ URL, URLSearchParams, fetch, setTimeout, clearTimeout, catalog, parameters: new URL(href).searchParams,
     window: { Timeless: { DOM: {}, ref }, location, history, addEventListener(name, callback) { listeners.set(name, callback); } },
   });
   const model = initialize_home(context, vm);
@@ -36,17 +36,29 @@ function catalog_fixture(count = 81) {
 
 const ids = model => Array.from(model.state.feeds.value, feed => feed.source_id);
 
-test("标签只展示脚本目录及 URL 中已选标签，空源仍显示脚本标签，不补固定标签或源标签", async () => {
-  const model = model_fixture(() => {}, undefined, { sources: [], tags: ["脚本标签", "脚本标签"] });
+test("hydration 前已按 URL 初始化筛选和页码，挂载后保持同一批结果", async () => {
+  const model = model_fixture(() => { throw Error("不能请求目录"); },
+    "https://discover.example/?page=2&q=日报&source_type=zhihu&tag=科技&tag=文章", catalog_fixture());
+  assert.equal(model.state.query.value, "日报");
+  assert.equal(model.state.selected_platform.value, "zhihu");
+  assert.equal(model.state.page.value, 1);
+  assert.equal(model.state.total_count.value, 61);
+  assert.deepEqual(ids(model), Array.from({ length: 20 }, (_, index) => String(index + 20)));
+  const initial_ids = ids(model);
   await model.methods.init();
-  assert.deepEqual(Array.from(model.state.available_tags.value), ["脚本标签"]);
+  assert.deepEqual(ids(model), initial_ids);
+  assert.equal(model.navigation.entries.length, 1);
+});
+
+test("旧 URL 的标签不参与首页筛选，初始化时清除参数", async () => {
   const restored = model_fixture(() => {}, "https://discover.example/?tag=旧标签", {
     sources: [{ id: "a", feed_url: "https://example.com/feed", tags: ["源标签"] }], tags: [],
   });
+  assert.deepEqual(ids(restored), ["a"]);
   await restored.methods.init();
-  assert.deepEqual(Array.from(restored.state.available_tags.value), ["旧标签"]);
-  await restored.methods.clear_tags();
-  assert.deepEqual(Array.from(restored.state.available_tags.value), []);
+  assert.deepEqual(ids(restored), ["a"]);
+  assert.equal(new URL(restored.navigation.location.href).searchParams.has("tag"), false);
+  assert.equal(restored.navigation.entries.length, 1);
 });
 
 test("平台列表默认网页，空源目录仍展示脚本平台，自定义平台支持 URL 恢复和筛选", async () => {
@@ -84,26 +96,18 @@ test("内嵌完整目录直接呈现首屏，搜索、筛选、分页不发请�
   assert.equal(model.state.feeds.value.length, 20);
   await model.methods.init();
   assert.equal(model.state.total_count.value, 81);
-  assert.ok(model.state.available_tags.value.includes("自定义"));
   await model.methods.select_page(1);
   assert.equal(ids(model)[0], "20");
   await model.methods.select_platform("zhihu");
   assert.equal(model.state.page.value, 0);
   assert.equal(model.state.total_count.value, 61);
-  await model.methods.select_tag("科技");
-  await model.methods.select_tag("文章");
-  assert.equal(model.state.total_count.value, 41);
   await model.methods.select_page(2);
-  assert.deepEqual(ids(model), ["40"]);
+  assert.deepEqual(ids(model), Array.from({ length: 20 }, (_, index) => String(index + 40)));
   await model.methods.submit_search("日报1");
   assert.equal(model.state.page.value, 0);
   assert.equal(model.state.total_count.value, 11);
-  await model.methods.select_tag("科技");
-  assert.deepEqual(Array.from(model.state.selected_tags.value), ["文章"]);
-  await model.methods.clear_tags();
   await model.methods.select_platform("x");
   assert.equal(model.state.total_count.value, 0);
-  assert.ok(model.state.available_tags.value.includes("自定义"));
   await model.methods.submit_search("");
   assert.equal(model.state.total_count.value, 20);
   assert.equal(calls, 0);
@@ -131,7 +135,6 @@ test("没有内嵌目录时只请求一次，加载中筛选共用请求并应�
   assert.equal(model.state.selected_platform.value, "x");
   assert.equal(model.state.total_count.value, 20);
   await model.methods.select_platform("zhihu");
-  await model.methods.select_tag("文章");
   assert.equal(calls, 1);
   assert.equal(model.state.loading.value, false);
 });
@@ -148,6 +151,7 @@ test("URL 恢复页码与筛选，前进后退及刷新恢复本地列表，保�
   const url = new URL(model.navigation.location.href);
   assert.equal(url.searchParams.get("page"), "3");
   assert.equal(url.searchParams.get("from"), "share");
+  assert.equal(url.searchParams.has("tag"), false);
   assert.equal(url.hash, "#list");
   await model.navigation.go(-1);
   assert.equal(model.state.page.value, 1);

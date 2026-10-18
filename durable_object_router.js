@@ -150,7 +150,8 @@ async function dispatch(request, app) {
     throw new DurableObjectError("method not allowed", 405);
   }
   if (url.pathname === "/_admin/background-tasks") {
-    if (request.method === "GET") return app.background_tasks.list();
+    if (request.method === "GET") return app.background_tasks.list(url);
+    if (request.method === "DELETE") return app.background_tasks.cleanup();
     throw new DurableObjectError("method not allowed", 405);
   }
   const cancel_background_task = url.pathname.match(/^\/_admin\/background-tasks\/([A-Za-z0-9-]+)\/cancel$/);
@@ -362,6 +363,10 @@ async function dispatch(request, app) {
   );
   if (public_discovery_source_match && request.method === "GET") {
     return app.discovery.get_public_discovery_source(public_discovery_source_match[1]);
+  }
+  if (url.pathname === "/_admin/discovery/sources/recover-overdue") {
+    if (request.method !== "POST") throw new DurableObjectError("method not allowed", 405);
+    return new DurableObjectResult(app.discovery.recover_overdue_snapshots(), 202);
   }
   const discovery_snapshot_match = url.pathname.match(/^\/_admin\/discovery\/sources\/([A-Za-z0-9-]+)\/snapshot$/);
   if (discovery_snapshot_match && request.method === "POST") {
