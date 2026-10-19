@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { create_memory_bucket } from "@findrss/object-store";
+import { parse } from "node-html-parser";
 import { LITE_ESM, timeless_plugin } from "../../scripts/timeless_plugin.js";
 import { DISCOVERY_CATALOG_KEY, DISCOVERY_CATALOG_ORIGIN } from "../../server/lib/discovery_catalog.js";
 import { gzip_html } from "../../server/infra/discovery_compression.js";
@@ -391,6 +392,55 @@ test("存储读取失败不回退旧数据，API 失败不缓存；Cache API 不
   globalThis.caches = { default: { async match() { throw Error("offline"); }, async put() { throw Error("offline"); } } };
   try { assert.equal((await worker.fetch(request(), { API_STORAGE: bucket })).status, 200); }
   finally { globalThis.caches = old; }
+});
+
+test("首页故障返回带品牌标志的 HTML，保持错误状态、CSP 和 HEAD 语义，恢复后可正常加载", async t => {
+  t.mock.method(console, "warn", () => {});
+  const bucket = create_memory_bucket();
+  const failures = [
+    { env: {}, status: 503 },
+    { env: { API: { fetch() { throw Error("SQL read quota exceeded: internal details"); } } }, status: 503 },
+    { env: { API_STORAGE: bucket }, status: 503, fail_storage: true },
+    ...[502, 503].map(status => ({ status, retry_after: "120", env: { API: { fetch: () => Response.json({ error: "internal details" }, {
+      status, headers: { "Retry-After": "120", "Content-Encoding": "gzip" },
+    }) } } })),
+  ];
+  const cached = [];
+  const previous_caches = globalThis.caches;
+  t.after(() => { globalThis.caches = previous_caches; });
+  globalThis.caches = { default: {
+    match: async () => undefined, put: async (_request, response) => cached.push(response.status),
+  } };
+  for (const { env, status, fail_storage, retry_after = null } of failures) {
+    for (const method of ["GET", "HEAD"]) {
+      if (fail_storage) bucket.fail_next({ op: "get" });
+      const response = await worker.fetch(request("/index.html?q=RSS", { method, headers: { "Accept-Encoding": "gzip" } }), env);
+      assert.equal(response.status, status);
+      assert.equal(response.headers.get("Content-Type"), "text/html; charset=utf-8");
+      assert.equal(response.headers.get("Cache-Control"), "no-store");
+      assert.equal(response.headers.get("Content-Encoding"), null);
+      assert.equal(response.headers.get("Retry-After"), retry_after);
+      const html = await response.text();
+      if (method === "HEAD") { assert.equal(html, ""); continue; }
+      const document = parse(html);
+      assert.equal(document.querySelector("h1").innerHTML, 'FindRSS<br data-n="unavailable-title-break">暂不可用');
+      assert.equal(document.querySelector('img[data-n="unavailable-logo"]').getAttribute("src"), "/brand/logo.svg");
+      assert.equal(document.querySelector('link[rel="icon"]').getAttribute("href"), "/brand/favicon.svg");
+      assert.equal(document.querySelector('a[data-n="unavailable-retry"]').getAttribute("href"), "");
+      assert.equal(document.querySelector('meta[name="robots"]').getAttribute("content"), "noindex");
+      for (const node of document.querySelectorAll("*")) assert.ok(node.getAttribute("data-n"), node.tagName);
+      const hash = createHash("sha256").update(document.querySelector("style").text).digest("base64");
+      assert.ok(response.headers.get("Content-Security-Policy").includes(`'sha256-${hash}'`));
+      assert.doesNotMatch(html, /<script|<link[^>]*rel="stylesheet"|internal details|SQL read quota exceeded/);
+    }
+  }
+  assert.deepEqual(cached, []);
+  const env = { API: { fetch: () => Response.json(catalog) } };
+  assert.equal((await worker.fetch(request(), env)).status, 200);
+  assert.deepEqual(cached, [200]);
+  const api = await worker.fetch(request("/api/catalog"), { API: { fetch: () => Response.json({ error: "offline" }, { status: 503 }) } });
+  assert.equal(api.headers.get("Content-Type"), "application/json");
+  assert.deepEqual(await api.json(), { error: "offline" });
 });
 
 test("静态资源优先，管理与首页路由仍先经过 Worker，直出的静态资源带安全头", () => {

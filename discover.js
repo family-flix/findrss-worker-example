@@ -15,6 +15,7 @@ import {
   inline_home_styles,
   resolve_home_metadata,
   render_embedded_home,
+  render_unavailable_home,
 } from "./server/infra/discovery_home.js";
 import { create_api_object_store } from "./server/infra/object_store.js";
 import {
@@ -88,12 +89,7 @@ async function home_page(request, env, api_fetch) {
         api_fetch,
       );
       if (!response.ok) {
-        const headers = new Headers(response.headers);
-        headers.set("Cache-Control", "no-store");
-        return new Response(request.method === "HEAD" ? null : response.body, {
-          status: response.status,
-          headers,
-        });
+        return unavailable_home_response(request, response.status, response.headers.get("Retry-After"));
       }
       html = render_embedded_home(await response.json(), origin, parameters);
     }
@@ -113,8 +109,19 @@ async function home_page(request, env, api_fetch) {
     return request.method === "HEAD" ? new Response(null, response) : response;
   } catch (error) {
     console.warn("discovery home read failed", error.message);
-    return json_response({ error: "订阅广场暂时不可用，请稍后重试" }, 503);
+    return unavailable_home_response(request);
   }
+}
+
+function unavailable_home_response(request, status = 503, retry_after = null) {
+  return new Response(request.method === "HEAD" ? null : render_unavailable_home(), {
+    status,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      ...(retry_after ? { "Retry-After": retry_after } : {}),
+    },
+  });
 }
 
 /**

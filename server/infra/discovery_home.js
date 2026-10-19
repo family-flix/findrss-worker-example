@@ -1,5 +1,6 @@
 import { renderToString } from "timeless-ssr";
 import template from "../../discover/index.html";
+import unavailable_template from "../../discover/unavailable.html";
 import stylesheet from "../../discover/style.css";
 import base_styles from "../../public/base.css";
 import { HomePage, DiscoveryViewModel } from "../../discover/index.js";
@@ -24,6 +25,11 @@ export function discovery_style_hash() {
 export function inline_home_styles(html) {
   return html.replace(/<link (?:id|data-n)="discovery-stylesheet"[^>]*>|<style (?:id|data-n)="discovery-stylesheet">[^]*?<\/style>/,
     () => `<style id="discovery-stylesheet">${styles}</style>`);
+}
+
+export function render_unavailable_home() {
+  return unavailable_template.replace(/<link data-n="discovery-stylesheet"[^>]*>/,
+    () => `<style data-n="discovery-stylesheet">${styles}</style>`);
 }
 
 export function resolve_home_metadata(html, origin) {

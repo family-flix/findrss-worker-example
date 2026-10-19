@@ -2,6 +2,43 @@
 
 /* RSS 订阅广场首页样式。 */
 
+/* 故障页与首页共用内嵌样式，服务不可用时无需加载 CSS 或脚本。 */
+.unavailable-page {
+  display: grid;
+  place-items: center;
+  min-height: 100svh;
+  padding: 48px 24px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.unavailable-content {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 560px);
+  text-align: center;
+}
+
+.unavailable-logo { display: block; margin: 0 auto 20px; }
+.unavailable-content h1 { margin: 0; font-size: clamp(24px, 5vw, 36px); line-height: 1.4; letter-spacing: -0.03em; }
+.unavailable-description { margin: 16px 0 32px; color: var(--muted); font-size: 16px; }
+
+.unavailable-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 0 28px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--brand);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.unavailable-retry:hover { background: #1d4ed8; }
+
 /* ---------------------------------------------------------------- tokens -- */
 :root {
   /* 墨：底。冷调近黑，不是纯黑 */
