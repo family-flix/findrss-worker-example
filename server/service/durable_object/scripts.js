@@ -948,7 +948,7 @@ export class ServiceScript {
       }
     };
     try {
-      const result = await execute_script(draft.script, metadata, invoke_impl, selected.context, [], "", cookie_access);
+      const result = await execute_script(draft.script, metadata, invoke_impl, selected.context, [], "", cookie_access, undefined, this.ports.puppeteer_navigate);
       Object.assign(debug, { phase: "ok", output: result.output, lines: result.lines,
         cookie_accesses: result.cookie_accesses || [], upstream_requests: result.upstream_requests || [] });
       const returned = JSON.parse(result.output);
@@ -999,7 +999,7 @@ export class ServiceScript {
         spec => this.script_invoke("", spec, "", ""), {
           method: "GET", pathname: target.pathname, params: selected.match.params,
           query: Object.fromEntries(target.searchParams), public_origin: snapshot.public_origin,
-        }, [], "", cookie_access);
+        }, [], "", cookie_access, undefined, this.ports.puppeteer_navigate);
       const returned = JSON.parse(result.output);
       return { route: metadata, descriptor: image_proxy_descriptor(metadata, returned),
         ...(["img", "video", "audio"].includes(returned.kind) ? { kind: returned.kind } : {}) };
@@ -1101,7 +1101,7 @@ export class ServiceScript {
           query,
         },
         this.rss_cookies(),
-        normalized.mock_ctx);
+        normalized.mock_ctx, null, undefined, this.ports.puppeteer_navigate);
       this.record_log({
         ...log_context,
         status: "ok",
@@ -1423,7 +1423,7 @@ export class ServiceScript {
           metadata,
           invoke_impl,
           request_context,
-          [], "", cookie_access, signal);
+          [], "", cookie_access, signal, this.ports.puppeteer_navigate);
         signal?.throwIfAborted();
         assert_current();
         result.assert_current = assert_current;

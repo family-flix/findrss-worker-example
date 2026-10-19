@@ -21,13 +21,36 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-// 区域剪藏：由 Cloudflare Browser Rendering 在已渲染网页中执行。
-// 独立网页脚本，需要实时 DOM；不在 RSS 的 QuickJS 沙箱中执行。
+// 区域剪藏：通过 ctx.puppeteer.navigate 渲染网页，在浏览器内提取 DOM 和计算样式。
 // 样式冻结改编自 dm-extension/src/clip/clip.model.js。
-// API：await FindRSSRegionClip.capture(elementOrSelector, options)。
-// 返回 { ok, html, stats }，宿主负责保存快照与按计划刷新。脚本不会自动运行。
-(() => {
-"use strict";
+// 提取函数不依赖沙箱闭包；参数通过 navigate 的 options.args 传入。
+export const config_schema = {
+  type: "object", required: ["url", "selector"],
+  properties: {
+    url: { type: "string", title: "来源网址", minLength: 1, maxLength: 8192 },
+    selector: { type: "string", title: "CSS 选择器", minLength: 1, maxLength: 1000 },
+    viewport_width: { type: "integer", title: "视口宽度", default: 1440, minimum: 320, maximum: 3840 },
+    viewport_height: { type: "integer", title: "视口高度", default: 900, minimum: 320, maximum: 2160 },
+    wait_ms: { type: "integer", title: "额外等待毫秒", default: 1000, minimum: 0, maximum: 10000 },
+    id_prefix: { type: "string", title: "节点 ID 前缀", default: "" },
+  },
+};
+
+export const route = {
+  path: "/region-clip", name: "区域剪藏", example: "/region-clip",
+  async handler(ctx) {
+    const config = ctx.config;
+    const result = await ctx.puppeteer.navigate(config.url, {
+      viewport: { width: config.viewport_width ?? 1440, height: config.viewport_height ?? 900 },
+      selector: config.selector, wait_ms: config.wait_ms ?? 1000,
+      args: [config.selector, { id_prefix: config.id_prefix }],
+    }, extract_clip);
+    if (result.error) return result;
+    if (!result.data?.ok) return ctx.fail("UPSTREAM_INVALID_RESPONSE", result.data?.error || "节点提取失败");
+    return result;
+  },
+};
+
 async function extract_clip(target, options) {
   const MAX_ELEMENTS = 6000;
   const MAX_DEPTH = 400;
@@ -557,7 +580,3 @@ async function extract_clip(target, options) {
     },
   };
 }
-
-
-globalThis.FindRSSRegionClip = Object.freeze({ capture: extract_clip });
-})();

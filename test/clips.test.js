@@ -1,19 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import vm from "node:vm";
-import { transform } from "esbuild";
-import { readFileSync } from "node:fs";
 import { register } from "node:module";
+import { readFileSync } from "node:fs";
 import { RepositoryClip } from "../server/repository/clip.js";
 import { ServiceClip } from "../server/service/durable_object/clips.js";
 import { ServiceBackgroundTasks } from "../server/service/durable_object/background_tasks.js";
 import { RepositoryBackgroundTasks } from "../server/repository/background_tasks.js";
 import { sanitize_clip_html } from "../server/infra/clip_html.js";
-import { create_clip_loader } from "../server/infra/clip_snapshot.js";
 import { snapshot_store } from "./support/snapshot_store.js";
 import { read_clip_json } from "../server/service/worker/clips.js";
 
 register("./support/quickjs_wasm_hook.js", import.meta.url);
+const { create_clip_loader } = await import("../server/infra/clip_snapshot.js");
 const { route } = await import("../durable_object_router.js");
 const { default: api } = await import("../api.js");
 const { create_worker } = await import("../router.js");
@@ -141,28 +139,30 @@ test("HTML 清理移除脚本、事件、外部资源及交互入口，保留内
   assert.throws(() => sanitize_clip_html("<script>nothing()</script>"), /可显示/);
 });
 
-test("Browser Rendering 使用真实 REST 协议、脚本和选择器；不实际调用浏览器", async () => {
-  const env = { CF_BROWSER_ACCOUNT_ID: "a".repeat(32), CF_BROWSER_API_TOKEN: "fixture-secret" };
-  let request;
-  const loader = create_clip_loader(env, source, async (url, options) => {
-    request = { url, ...options, body: JSON.parse(options.body) };
-    const selector = request.body.elements[0].selector;
-    return Response.json({ success: true, result: [{ selector, results: [{ text: JSON.stringify({ ...snapshot("ok"), ok: true }) }] }] });
-  });
-  assert.equal(create_clip_loader({}, source), null);
-  const result = await loader({ ...input, id: "stable", viewport_width: 1440, viewport_height: 900, wait_ms: 500 });
-  assert.match(result.html, /ok/); assert.match(request.url, /browser-rendering\/scrape\?cacheTTL=0$/);
-  assert.equal(request.headers.Authorization, "Bearer fixture-secret");
-  assert.equal(request.body.url, input.url);
-  assert.deepEqual(request.body.viewport, { width: 1440, height: 900 });
-  assert.equal(request.body.addScriptTag[0].type, "module");
-  assert.equal(request.body.waitForSelector.selector, request.body.elements[0].selector);
-  assert.match(request.body.addScriptTag[0].content, /FindRSSRegionClip.capture/);
-  await transform(request.body.addScriptTag[0].content, { loader: "js" });
-  const context = vm.createContext({}); vm.runInContext(source, context);
-  assert.equal(typeof context.FindRSSRegionClip.capture, "function");
-  const failing = create_clip_loader(env, source, async () => new Response("secret upstream", { status: 403 }));
-  await assert.rejects(failing(input), error => /HTTP 403/.test(error.message) && !/secret/.test(error.message));
+test("区域剪藏脚本通过 ctx.puppeteer.navigate 渲染并提取选区，稳定 ID 与取消信号透传", async () => {
+  assert.equal(create_clip_loader(null, source), null);
+  const record = { ...input, id: "stable", viewport_width: 1440, viewport_height: 900, wait_ms: 500 };
+  const controller = new AbortController();
+  let args;
+  const loader = create_clip_loader(async (...values) => {
+    args = values;
+    return { ...snapshot("渲染后的选区"), ok: true };
+  }, source);
+  const result = await loader(record, controller.signal);
+  assert.match(result.html, /渲染后的选区/); assert.match(result.html, /color:red!important/);
+  assert.equal(args[0], input.url);
+  assert.deepEqual(args[1], { viewport: { width: 1440, height: 900 }, selector: input.selector,
+    wait_ms: 500, args: [input.selector, { id_prefix: "stable" }] });
+  assert.equal(typeof args[2], "string");
+  assert.match(args[2], /getComputedStyle/);
+  assert.equal(args[3], controller.signal);
+  const large_html = "<div>" + "x".repeat(3 * 1024 * 1024) + "</div>";
+  const large_loader = create_clip_loader(async () => ({ ok: true, html: large_html }), source);
+  assert.equal((await large_loader(record)).html, large_html);
+  for (const value of [{ ok: false, error: "未找到页面节点" }, null]) {
+    const failing = create_clip_loader(async () => value, source);
+    await assert.rejects(failing(record), /未找到页面节点|节点提取失败/);
+  }
 });
 
 test("管理 API 要求认证，公开 iframe 经外层路由支持跨站 GET 与 HEAD", async t => {

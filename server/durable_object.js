@@ -78,10 +78,11 @@ import { RepositoryWebhookSettings } from "./repository/webhook_settings.js";
 import { ServiceWebhookSettings } from "./service/durable_object/webhook_settings.js";
 import { seed_default_data } from "./service/durable_object/default_data.js";
 import apple_script from "../examples/scripts/rss/apple.js" with { type: "text" };
-import clip_capture_source from "../examples/scripts/region_clip.js" with { type: "text" };
+import clip_script_source from "../examples/scripts/region_clip.js" with { type: "text" };
 import { RepositoryClip } from "./repository/clip.js";
 import { ServiceClip } from "./service/durable_object/clips.js";
 import { create_clip_loader } from "./infra/clip_snapshot.js";
+import { create_puppeteer_navigate } from "./infra/script_puppeteer.js";
 
 /**
  * @typedef {Object} Env
@@ -95,8 +96,7 @@ import { create_clip_loader } from "./infra/clip_snapshot.js";
  * @property {string} [COOKIE_PUSH_UUID]
  * @property {string} [COOKIE_PUSH_KEY]
  * @property {string} [FINDRSS_HOSTNAME]
- * @property {string} [CF_BROWSER_ACCOUNT_ID]
- * @property {string} [CF_BROWSER_API_TOKEN]
+ * @property {import("@cloudflare/puppeteer").BrowserWorker} [BROWSER]
  */
 
 /** @typedef {"queued" | "assigned" | "running" | "completed" | "failed"} TaskStatus */
@@ -427,6 +427,7 @@ export class APIDurableObject extends DurableObject {
      * `RepositoryRssRouteCache` 的方法名**就是** store 接口，直接注入即可。
      */
     const ports = {
+      puppeteer_navigate: env.BROWSER ? create_puppeteer_navigate(env.BROWSER) : null,
       object_store: create_api_object_store(env),
       transaction: callback => this.ctx.storage.transactionSync(callback),
       sockets: new DeviceSocketHub(ctx),
@@ -455,7 +456,7 @@ export class APIDurableObject extends DurableObject {
       credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || "") });
     this.app.snapshot_settings = new ServiceSnapshotSettings({ repo: this.repo.snapshot_settings, schedule_alarm: ports.schedule_alarm });
     this.app.clips = new ServiceClip({ repo: this.repo.clips, storage: this.ctx.storage,
-      object_store: ports.object_store, load_snapshot: create_clip_loader(env, clip_capture_source),
+      object_store: ports.object_store, load_snapshot: create_clip_loader(ports.puppeteer_navigate, clip_script_source),
       background_tasks: this.app.background_tasks, snapshot_settings: () => this.app.snapshot_settings.settings(),
       schedule_alarm: ports.schedule_alarm });
     this.app.cookie_push_settings = new ServiceCookiePushSettings({ repo: this.repo.cookie_push_settings,

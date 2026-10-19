@@ -39,6 +39,10 @@
     "timeless-ssr": "./public/assets/timeless/0.34.2/timeless.ssr.esm.js"
   },
   "compatibility_date": "2026-05-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "browser": {
+    "binding": "BROWSER"
+  },
   // 脚本执行日志的结构化 console 输出（emit_script_log）需要 Workers Logs 才能查询。
   "observability": {
     "logs": {

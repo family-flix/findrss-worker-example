@@ -50,7 +50,7 @@ export class ServiceClip {
   concurrency() { return this.snapshot_settings()?.max_concurrency || 4; }
   refresh_task(id, { automatic = false } = {}) {
     const row = this.find(id);
-    if (!this.load_snapshot) throw do_error("请配置 CF_BROWSER_ACCOUNT_ID 和 CF_BROWSER_API_TOKEN 后刷新", 503);
+    if (!this.load_snapshot) throw do_error("请配置 Worker 的 BROWSER 绑定后刷新", 503);
     const existing = this.pending.get(id);
     if (existing) return existing;
     if (this.pending.size >= this.concurrency()) throw do_error("剪藏采集任务已满，请稍后重试", 409);

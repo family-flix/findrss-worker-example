@@ -2,11 +2,11 @@
 
 ## 区域剪藏
 
-[region_clip.js](region_clip.js) 是在已渲染网页中执行的 DOM 采集脚本，与下方的 QuickJS RSS 示例运行环境不同。后台「剪藏」通过 Cloudflare Browser Rendering 自动执行它，无需手动安装或发布为 RSS 路由。
+[region_clip.js](region_clip.js) 是可在脚本环境执行的区域剪藏示例。它通过 `ctx.puppeteer.navigate(url, options, extract_clip)` 使用 `@cloudflare/puppeteer` 渲染页面，再在页面内提取 DOM 与计算样式。宿主仅提供渲染与函数执行能力，区域提取逻辑保留在脚本中。部署需提供 `BROWSER` 绑定，无需 REST 账号、Token 或渲染方式开关。
 
-在「剪藏」创建记录，填写来源网址、CSS 选择器、采集视口和刷新规则。选择器取第一个匹配节点，连同子树、计算样式、可读取的图片与背景图一起冻结；`::before` / `::after` 的字符串内容会还原，Canvas 尽量转图片。返回 `{ ok, html, stats }`，由宿主清理并保存快照，公开链接为 `/clips/<记录 ID>`。
+后台「剪藏」直接复用该脚本的 handler。在「剪藏」创建记录，填写来源网址、CSS 选择器、采集视口和刷新规则。也可将示例导入脚本，在配置表单中设置 `url`、`selector`、视口和等待时间。选择器取第一个匹配节点，等待其可见后连同子树、计算样式、可读取的图片与背景图一起冻结；`::before` / `::after` 的字符串内容会还原，Canvas 尽量转图片。提取结果为 `{ ok, html, stats }`；后台剪藏由宿主清理并保存，公开链接为 `/clips/<记录 ID>`，普通脚本仍受 2MB 路由输出上限约束。
 
-配置 `CF_BROWSER_ACCOUNT_ID` 与 secret `CF_BROWSER_API_TOKEN` 后，记录按后台默认抓取策略或单条规则定时更新；也可立即采集、暂停定时。刷新失败保留旧快照，编辑后迟到的结果不会覆盖新规则。嵌入代码从后台「预览与嵌入」复制，iframe 只读取最近一次成功快照，不触发浏览器采集，也不执行 JavaScript。
+记录按后台默认抓取策略或单条规则定时更新；也可立即采集、暂停定时。刷新失败保留旧快照，编辑后迟到的结果不会覆盖新规则。嵌入代码从后台「预览与嵌入」复制，iframe 只读取最近一次成功快照，不触发浏览器采集，也不执行 JavaScript。
 
 产出仅保留静态 HTML 与内联 CSS，图片使用 data URL；外部脚本、样式表、内联事件、音视频、iframe 与交互入口被移除。无法读取的图片占位，自定义字体退回系统字体，部分伪元素和封闭 Shadow DOM 无法完整还原。每条最多 6000 个元素、60 张图片和 8MB HTML；最多保存 100 条记录。iframe 无 JavaScript，不会自动调整高度，可按需要修改嵌入代码的 `height`。
 

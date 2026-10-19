@@ -69,7 +69,7 @@ export function ClipsPage({ view } = {}) {
     onUnmounted() { stop_show?.(); stop_hide?.(); methods.stop(); } }, [
     View({ class: "text-muted text-sm" }, ["按计划采集指定网页节点，保留当前样式、移除脚本，生成可嵌入任意网站的固定链接。更新失败时保留上一次成功快照。"]),
     Show({ when: computed(state.renderer_available, available => !available), ok: () =>
-      View({ class: "text-danger text-sm", attributes: { n: "clips-renderer-warning", role: "status" } }, ["尚未配置 Cloudflare Browser Rendering。配置 Worker 的 CF_BROWSER_ACCOUNT_ID 和 CF_BROWSER_API_TOKEN 后开始定时采集。可先保存剪藏规则。"])
+      View({ class: "text-danger text-sm", attributes: { n: "clips-renderer-warning", role: "status" } }, ["剪藏渲染器尚未配置完成，请检查部署配置。可先保存剪藏规则。"])
     }),
     View({ class: "text-danger text-sm whitespace-pre-wrap", attributes: { n: "clips-error", role: "alert" } }, [state.error]),
     Show({ when: combine({ clips: state.clips, loading: state.loading }, value => !value.clips.length && !value.loading), ok: () =>

@@ -1,11 +1,24 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { beforeEach } from "node:test";
 import { readFile } from "node:fs/promises";
 import { register } from "node:module";
 import { createHash } from "node:crypto";
 import { RssRoutePatternModel } from "../server/domain/rss_route.js";
 import { FeedModel } from "../server/domain/feed_format.js";
 import { ScriptCookieAccess } from "../server/infra/script_cookie_access.js";
+import { mock_tcp_http } from "./support/tcp_socket_fixture.js";
+
+beforeEach(t => {
+  const tcp = mock_tcp_http(t);
+  t.tcp = tcp;
+  t.after(() => {
+    for (const connection of tcp.connections) {
+      assert.deepEqual(connection.address, { hostname: "api.bilibili.com", port: 443 });
+      assert.deepEqual(connection.options, { secureTransport: "on" });
+      assert.equal(connection.closed, true);
+    }
+  });
+});
 
 register("./support/quickjs_wasm_hook.js", import.meta.url);
 const { compile_script_module, execute_script } = await import("../server/infra/script_sandbox.js");
@@ -80,6 +93,7 @@ for (const fixture of fixtures) test("Bilibili QuickJS 保留内容和媒体："
   const params = RssRoutePatternModel(route.path).match(pathname).params;
   const feed = JSON.parse((await run(index, params, index ? { pn: "2", ps: "10" } : { offset: "123456" })).output);
   assert.ok(calls > 0);
+  assert.equal(t.tcp.connections.length, calls, "全部网页 API 请求应使用 TCP");
   assert.equal(feed.link, "https://space.bilibili.com/" + fixture.params.userid + (index ? "/upload/video" : "/dynamic"));
   assert.deepEqual(feed.items.map(item => item.id), fixture.expected_ids);
   if (index) assert.equal(feed.items[0].enclosure.length, 456);

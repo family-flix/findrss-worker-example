@@ -1,4 +1,10 @@
 import { readFile } from "node:fs/promises";
+export async function resolve(specifier, context, next_resolve) {
+  if (specifier === "cloudflare:sockets") return {
+    url: new URL("./tcp_socket_fixture.js", import.meta.url).href, shortCircuit: true,
+  };
+  return next_resolve(specifier, context);
+}
 export async function load(url, context, next_load) {
   if (url.endsWith("/quickjs.wasm")) {
     const bytes = await readFile(new URL(url));

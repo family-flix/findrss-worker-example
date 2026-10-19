@@ -65,7 +65,7 @@ FindRSS Worker QuickJS 脚本 SDK 知识（编译、Mock 调试、真实 Debug �
 一、全局对象与 Result
 全局已注入 RSSScript、HotRankScript、Result、BizError、parseJSON，不需要导入或复制定义。没有 console、DOM、Node.js 或原生 URL 对象。
 Result.Ok(data) 返回 {data,error:null}；Result.Err(message,code?,data?) 返回 {data,code,error:BizError}，error 包含 message/messages/code/data。先检查 result.error，失败 return result，成功取 result.data；不能用 data 的真值判断成功（null/false/0 都可以是成功数据）。
-ctx.fetchText、ctx.invoke、ctx.cookies.get 返回 Promise<Result>；ctx.fail(code,message) 返回失败 Result，必须 return 才会中止当前 handler。基类 fetch/run/timestamp 也使用 Result；脚本自己的请求、解析和校验异常应转成 Result.Err，不用 throw 作为正常失败流程。
+ctx.fetchText、ctx.invoke、ctx.cookies.get、ctx.puppeteer.navigate 返回 Promise<Result>；ctx.fail(code,message) 返回失败 Result，必须 return 才会中止当前 handler。基类 fetch/run/timestamp 也使用 Result；脚本自己的请求、解析和校验异常应转成 Result.Err，不用 throw 作为正常失败流程。
 parseJSON(text,reviver?) 返回 Result 并捕获语法和 reviver 错误。使用 parseJSON 或 utils.parseJSON，不直接 JSON.parse。纯字符串转换无需套 Result。
 路由出口由宿主展开一层 Result，错误映射为 HTTP 响应；不要把 Result 当 feed、items 数组或 HTML 内容。ctx.invoke 是设备调用，真实 Debug 可能调用设备并扣积分，Mock 只使用声明的 invoke；不要虚构设备能力。
 
@@ -78,6 +78,7 @@ absolute_url(value,base) → Result<string>：拼接 HTTP(S) 地址，相对地�
 timestamp(value) → Result<number|undefined>：秒/毫秒/数字字符串/日期转毫秒；缺失为 undefined，无时区的年月日格式按北京时间。RSSScript.timestamp(value) 返回 Result<ISO字符串|undefined>，不能混淆两者的单位和返回类型。
 identity(value) → Result<string>：稳定非空 ID，数字必须是安全整数；不要使用排名、列表下标、随机值或采集时间充当 ID。array_at(value,path='') → Result<Array>：按点分路径读取数组；空数组成功，缺失/类型错误失败。
 request_text(ctx,url,options) / request_json(ctx,url,options) → Promise<Result>：复用 ctx.fetchText，后者再 parseJSON。默认提供基础 Accept、Accept-Language、User-Agent，headers 可覆盖；Referer、Cookie 句柄需显式提供，其它请求 options 透传。错误保留 Result，不猜测网站业务状态字段，脚本自行校验回包。
+transport:'tcp'：ctx.fetchText 和 utils.request_text/request_json 的通用选项，通过宿主 TCP 请求公网 HTTP:80 / HTTPS:443，支持 GET/POST；默认 transport:'fetch'。HTTPS 使用原生 TLS 证书校验和 HTTP/1.1，不是 gRPC，也不模拟浏览器 TLS 指纹。Cookie 仍需显式授权句柄，每跳校验地址并移除跨 origin 凭证；超时预算含连接/读取/解压，正文及解压后均限制 2MB。TCP 请求 identity 编码，兼容 gzip/deflate；受 Cloudflare 出站限制，不能承诺绕过风控。Bilibili RSS 示例沿用网页 API、Cookie 和 WBI 签名，仅改用此传输；已保存脚本需自行更新发布并确认新源码的 Cookie 权限。
 kuaishou_sign:true：仅用于 POST https://www.kuaishou.com/rest/v/profile/feed，宿主以固定版本官方 SDK 为本次 JSON 请求体动态生成 __NS_hxfalcon/caver；配合显式授权的 cookies 句柄使用，不能复用 HAR 中的固定签名。网页 HTTP 200 不代表作品接口成功，需检查 result===1 和 feeds 数组。
 embedded_json(text,marker:RegExp) → Result：扫描 marker 后的 JSON 对象/数组，处理括号和字符串转义，不执行页面脚本。
 document_nodes(text,xml=false) → Result<节点树>：轻量 HTML/XML 解析，XML 拒绝 DOCTYPE。rows(root,selector) → Result<非空节点数组>：必需列表缺失时失败。
@@ -100,6 +101,8 @@ platform 使用 { name: '知乎', icon: '<svg xmlns="http://www.w3.org/2000/svg"
 订阅源配置与脚本声明分开：source_type 使用 get_admin_context.data.source_types 中的来源 ID，tags 使用字符串数组，可选标签见 data.tags；script_routes 提供已发布路由的来源和标签。新增自有 RSS/Atom 源默认带入匹配路由的来源和标签，管理员可以手动修改；修改源的 tags/source_type 不会注册新的脚本标签或来源。需要新增来源或可选标签时，在脚本页编辑 export const platform/tags 或 route.platform/tags 并发布。全局 XiaoxunAgent 可以说明和按授权修改订阅源配置，但没有脚本写入/发布工具，不能声称已更改脚本；三栏编辑器中的脚本助手可修改当前未保存草稿，正式发布仍由管理员操作。
 
 四、显式 Cookie 权限与日志
+ctx.puppeteer.navigate(url, options?, evaluate?) 显式渲染页面，依赖宿主 BROWSER 绑定，无渲染方式配置开关。options 支持 viewport:{width,height}（默认1440×900，宽320–3840、高320–2160）、selector（等待可见）、wait_ms（0–10000，默认1000）、args（数组）。省略 evaluate 返回 {html}；传入函数则返回其在页面中执行的 JSON 结果。函数没有脚本闭包，参数通过 args 传入，可访问 document/getComputedStyle；不能访问 ctx 或 Worker 环境。每次调用匿名新页面，不注入 Cookie，结束/失败/取消关闭会话。Mock 声明 puppeteer:{navigate:async(url,options,evaluate)=>值或Result}；无绑定且无 mock 返回错误 Result。区域内容与样式提取示例见 examples/scripts/region_clip.js。
+
 ctx.fetchText 默认匿名，宿主不按 URL 自动注入 Cookie，不能填写 headers.Cookie。模块导出 permissions.cookies=[{id,origin,path_prefix,names,purpose}]：origin 是完整公网 HTTPS origin，无路径；path_prefix 是规范绝对路径；names 明确列出非空 Cookie 名称，不用通配符；purpose 说明读取用途。
 管理员确认当前源码和权限后，await ctx.cookies.get(id) 得到 Result<句柄>；传入 fetchText(url,{cookies:result.data}) 或 utils.request_text/request_json 的 options。脚本拿不到 Cookie 明文，不能把句柄当字符串或手写 Cookie 头；宿主校验名称、域、路径、有效期和重定向。源码变更要重新确认，撤销后不能继续使用。AI 不能代替用户确认授权。
 ctx.log(...args)/ctx.error(...args) 收集 info/error 日志，自身不抛错；ctx.error 记录日志，不会中止脚本，失败应 return Result.Err。日志不要记录凭证或账户页面正文。Debug 的输出、上下文、日志是三个 Tab，可以查看抓取、解析条目数量和错误的效果。

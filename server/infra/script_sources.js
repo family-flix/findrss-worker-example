@@ -169,6 +169,17 @@ const ctx = {
     try { return Result.Ok(await __getCookies(id)); }
     catch (error) { return Result.Err(error); }
   } }),
+  puppeteer: Object.freeze({ async navigate(url, options = {}, evaluate) {
+    try {
+      if (evaluate !== undefined && typeof evaluate !== "function") throw new Error("navigate 的 evaluate 必须是函数");
+      if (__mockCtx?.puppeteer && typeof __mockCtx.puppeteer.navigate === "function") {
+        const value = await __mockCtx.puppeteer.navigate(url, options, evaluate);
+        return value && typeof value === "object" && "data" in value && "error" in value ? value : Result.Ok(value);
+      }
+      return parseJSON(await __puppeteerNavigate(JSON.stringify({ url, options,
+        ...(evaluate === undefined ? {} : { evaluate: String(evaluate) }) })));
+    } catch (error) { return Result.Err(error); }
+  } }),
   log: (...args) => __logAppend("info", args),
   error: (...args) => __logAppend("error", args),
   fail(code, detail) {

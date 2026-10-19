@@ -9,6 +9,7 @@ import { KUAISHOU_SDK_FILE } from '../server/infra/kuaishou_sdk.js';
 import { ScriptCookieAccess } from '../server/infra/script_cookie_access.js';
 import { FeedModel } from '../server/domain/feed_format.js';
 import { ScriptModel } from '../server/domain/script.js';
+import { mock_tcp_http } from './support/tcp_socket_fixture.js';
 
 register('./support/quickjs_wasm_hook.js', import.meta.url);
 const { compile_script_module, execute_script } = await import('../server/infra/script_sandbox.js');
@@ -59,6 +60,7 @@ test('已保存的 69 个旧示例缺少 kind 和顶部标记时仍按用户分�
 });
 
 for (const fixture of content_cases) test('迁移脚本保留内容与媒体：' + fixture.file + (fixture.route_index ? (fixture.file === 'zhihu' ? ' 回答' : fixture.file === 'bilibili' ? ' 视频' : ' 正文代理') : ''), async t => {
+  if (fixture.file === 'bilibili') mock_tcp_http(t);
   const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });
   const kind = fixture.kind || 'rss';

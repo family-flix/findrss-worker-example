@@ -245,6 +245,10 @@ export const route = {
 
 节点选择器沿用旧示例的轻量实现，只支持标签、ID、class、属性存在/等于/前缀/后缀、后代与直接子节点，属性值不支持空白；不是完整 DOM/CSS 或严格 XML 校验器。请求工具提供基础 Accept、Accept-Language、User-Agent，允许 headers 覆盖，Referer 和 Cookie 句柄需脚本显式提供，Cookie 授权仍由宿主验证。JSON 请求不猜测各网站业务错误字段，脚本需自行校验接口回包。
 
+`ctx.fetchText(url, { transport: "tcp" })` 使用宿主通用 TCP 传输，`utils.request_text/request_json` 同样透传此选项。默认 `transport: "fetch"` 仍使用 Workers Fetch。TCP 模式支持公网 HTTP（80）和 HTTPS（443）的 GET/POST；HTTPS 使用 Workers 原生 TLS 和证书校验，发送 HTTP/1.1，不模拟浏览器 TLS 指纹。脚本不能导入 socket 或读取 Cookie 明文；Cookie 授权、重定向检查、跨 origin 凭证移除和 HTTP 错误仍由宿主处理。连接、读取及解压共用 `timeout_ms`（默认且最大 10000），响应及解压后正文均不超过 2MB。请求声明 `Accept-Encoding: identity`，兼容 gzip/deflate 响应。每一跳都校验公网地址及标准端口，TCP 连接受 Cloudflare 出站限制，不保证改善目标网站风控。Debug 上游记录中的 `transport` 可区分实际传输方式。
+
+Bilibili RSS 示例已显式选用 TCP，网页 API、Cookie、WBI 签名及分页保持原样。已保存的后台脚本不会自动更新，需要更新并发布脚本；源码变化后仍按现有规则确认 Cookie 权限。
+
 [两个类示例](../examples/script-classes/) 已使用这个模块；69 个旧示例已按文件顶部 `/** RSS */` 标记重写到 [examples/rss](../examples/rss/)（17 个）和 [examples/hot](../examples/hot/)（52 个）。旧 `examples/scripts` 保持原样，新目录不会自动导入后台。
 
 ## 内置脚本基类

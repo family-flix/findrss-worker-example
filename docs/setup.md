@@ -177,6 +177,21 @@ export const route = {
 
 RSS / Atom 默认需要访问 Token，可通过 `?token=`、`Authorization: Bearer` 或 `X-FindRSS-Token` 提供。在启用中的自有订阅源上关闭「需要 token 访问」后，该路由公开。公开性按路由 pathname 判断，忽略 query，并对 RSS / Atom 两种前缀同时生效。
 
+需要 JavaScript 渲染的页面使用 `ctx.puppeteer.navigate(url, options?, evaluate?)`，返回 `Promise<Result>`。省略 `evaluate` 时返回 `{ html }`；提供函数时返回函数在页面内的执行结果。函数不能引用脚本闭包中的变量，使用 `options.args` 传参：
+
+```js
+const rendered = await ctx.puppeteer.navigate("https://example.com", {
+  viewport: { width: 1440, height: 900 }, selector: "#weather", wait_ms: 1000,
+  args: ["#weather"],
+}, selector => {
+  const node = document.querySelector(selector);
+  return { text: node.textContent, color: getComputedStyle(node).color };
+});
+if (rendered.error) return rendered;
+```
+
+`selector` 等待节点可见，`wait_ms` 额外等待 0–10000 毫秒；每次调用创建匿名页面，结束、失败或取消后关闭浏览器会话。不会自动注入 Cookie 或向函数暴露 Worker 环境。Mock 运行可提供 `({ puppeteer: { navigate: async () => ({ html: "<div>示例</div>" }) } })`；真实调用需要 `BROWSER` 绑定。区域剪藏完整内容与样式提取见 `examples/scripts/region_clip.js`；脚本路由输出仍受 2MB 上限约束，后台剪藏快照上限为 8MB。
+
 更多完整示例见 [RSS 脚本](../examples/scripts/rss/)、[热榜脚本](../examples/scripts/hot/)和[脚本示例说明](../examples/scripts/README.md)。这些文件不会自动导入后台。
 
 ## 手动部署与配置
@@ -199,13 +214,14 @@ R2 桶只需创建一次，已有同名桶可跳过。`secret put` 命令会提�
 | 配置 | 要求 | 用途 |
 | --- | --- | --- |
 | `ADMIN_PASSWORD` | 必需 secret | 后台登录与管理 API 认证 |
-| `CF_BROWSER_ACCOUNT_ID` | 剪藏可选变量 | Cloudflare 账号 ID，用于 Browser Rendering REST API |
-| `CF_BROWSER_API_TOKEN` | 剪藏可选 secret | 仅授予该账号 Browser Rendering / Browser Run Edit 权限的 API Token |
+| `BROWSER` | Wrangler 已声明的 Browser 绑定 | 为脚本的 `ctx.puppeteer.navigate` 和区域剪藏提供页面渲染能力 |
 | `DEVICE_TOKEN` | 可选旧配置 | 自动导入后台 Device Token 列表，保留原设备接入能力 |
 | `READER_SESSION_SECRET` | 可选 secret | 中央账号会话签名；未配置时依次回退旧 `DEVICE_TOKEN`、`ADMIN_PASSWORD` |
 | `FINDRSS_HOSTNAME` | 可选变量 | 展开 `{{hostname}}`；留空按请求 origin 展开，可指定公开域名 |
 | `COOKIE_PUSH_UUID` / `COOKIE_PUSH_KEY` | 可选旧配置 | 首次启动时自动迁移到后台 Cookie 解密设置；新配置请在后台填写 |
 | `API_STORAGE` | Wrangler 已声明的 R2 绑定 | 存储头像、公开目录、文章预览及自有订阅 JSON/RSS/Atom 快照 |
+
+页面渲染由脚本显式调用 `ctx.puppeteer.navigate`，使用 `@cloudflare/puppeteer` 与 `BROWSER` 绑定。项目已声明 `browser.binding = "BROWSER"` 和 `nodejs_compat`，无需设置渲染方式开关或 REST API 凭证。本地需要使用 Cloudflare 远程浏览器时，在 `browser` 配置中加入 `"remote": true` 并登录 Wrangler。
 
 需要固定订阅域名时，可自行在 `wrangler.jsonc` 中添加 `vars.FINDRSS_HOSTNAME`。本地开发可在项目根目录的 `.env` 或 `.dev.vars` 中设置 `FINDRSS_HOSTNAME=http://127.0.0.1:8787`，修改后重启 `npm run dev`；兼容旧名称 `FEED_HOSTNAME`，同时设置时优先使用 `FINDRSS_HOSTNAME`。存在 `.dev.vars` 时 Wrangler 不读取 `.env`。未配置时，订阅地址和手动快照刷新使用当前访问地址，脚本的 `ctx.public_origin` 也使用该地址生成图片代理等绝对链接；通过 workers.dev 或自定义域名访问均可。发现页的定时快照刷新沿用最近一次访问的域名，该域名会持久化保存。模型厂商与 API Key 可在后台「大模型设置」中配置。
 

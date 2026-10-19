@@ -40,10 +40,11 @@ class BilibiliRSS extends RSSScript {
       if (acquired.error) return acquired;
       return utils.request_text(ctx, url, {
         ...options,
+        transport: "tcp",
         cookies: acquired.data,
       });
     }
-    return utils.request_text(ctx, url, options);
+    return utils.request_text(ctx, url, { ...options, transport: "tcp" });
   }
 }
 export class BilibiliUserDynamicRSS extends BilibiliRSS {

@@ -1,7 +1,2 @@
 # 必填，无默认值；本地开发时复制为 .dev.vars 并填写，生产部署时请设置独立的随机长密码。
 ADMIN_PASSWORD=
-
-# 可选：启用区域剪藏的 Cloudflare Browser Rendering 定时采集。
-# Token 仅需对应账号的 Browser Rendering / Browser Run Edit 权限。
-CF_BROWSER_ACCOUNT_ID=
-CF_BROWSER_API_TOKEN=

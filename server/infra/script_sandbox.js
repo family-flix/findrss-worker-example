@@ -4,11 +4,12 @@ import { rss_fetch_headers, rss_cookie_headers, rss_fetch_request, rss_fetch_tim
 import { create_sandbox_promises } from "./sandbox_promises.js";
 import { public_feed_failure } from "../lib/feed_error.js";
 import { rss_response_text } from "./rss_response_text.js";
+import { tcp_http_fetch } from "./tcp_http.js";
 // QuickJS(wasm) 沙箱：校验 route/routes，执行选中的 handler 并取回 JSON。
 //
 // 所有路由共用 handler(ctx)，返回 JSON、文本响应或代理目标描述。
 // 旧 route 与多路由 routes 均支持；RSS/Atom 包装器在宿主校验 items 并序列化。
-// 沙箱无法访问 Workers 运行时（storage/secret/env），出网只经注入的 fetchText。
+// 沙箱无法访问 Workers 运行时（storage/secret/env），出网经注入的 fetchText / puppeteer.navigate。
 //
 // asyncify 变体在同一 wasm 模块内同时只允许一个异步动作，所有沙箱执行
 // （含编译校验）经 run_in_sandbox_queue 的泳道池调度。
@@ -346,6 +347,7 @@ export function run_in_sandbox_queue(task) {
  * RSS/Atom 包装器校验 items 并序列化，脚本不接触 XML，
  * 也没有 xmlEscape（转义归渲染端，留着会诱导双重转义）。
  * ctx = { route, method, pathname, params, query, fetchText(url, options?),
+ * puppeteer: { navigate(url, options?, evaluate?) },
  * invoke(method, args, options?), log(...args), error(...args) }。
  * invoke 仅在提供 invoke_impl 时可用（真实 RSS 请求），会下发设备任务并扣积分；
  * 测试运行改由 mock_ctx_source 注入 mock ctx（含 mock invoke），不触碰真实设备、
@@ -357,6 +359,10 @@ export function run_in_sandbox_queue(task) {
  * @param {{ method: string, pathname: string, params: Record<string, string>, query: Record<string, string> }} request_context
  * @param {unknown[]} cookies 兼容参数，已取消隐式注入；授权凭据只经 cookie_access 提供
  * @param {string} mock_ctx_source 测试运行用的 mock ctx 片段，空串表示不注入
+ * @param {object | null} cookie_access 已确认的 Cookie 授权
+ * @param {AbortSignal} [signal] 任务取消信号
+ * @param {Function | null} [puppeteer_navigate] 宿主页面渲染能力
+ * @param {number} [output_limit] 宿主输出上限；剪藏允许保存较大的静态片段
  * @returns {Promise<{ output: string, invoked: boolean, lines: { level: string, text: string }[] }>}
  *   路由返回值的 JSON 串、是否调用过设备与 ctx.log/ctx.error 收集到的行
  */
@@ -369,6 +375,8 @@ export function execute_script(
   mock_ctx_source = "",
   cookie_access = null,
   signal,
+  puppeteer_navigate = null,
+  output_limit = SCRIPT_OUTPUT_BYTES,
 ) {
   return run_in_sandbox_queue(() =>
     execute_script_inner(
@@ -380,6 +388,8 @@ export function execute_script(
       mock_ctx_source,
       cookie_access,
       signal,
+      puppeteer_navigate,
+      output_limit,
     ));
 }
 
@@ -392,6 +402,8 @@ export async function execute_script_inner(
   mock_ctx_source,
   cookie_access = null,
   task_signal,
+  puppeteer_navigate = null,
+  output_limit = SCRIPT_OUTPUT_BYTES,
 ) {
   task_signal?.throwIfAborted();
   const QuickJS = await get_quickjs_module();
@@ -411,11 +423,22 @@ export async function execute_script_inner(
     });
     vm.setProp(vm.global, "__getCookies", get_cookies);
     get_cookies.dispose();
+    const navigate = promises.bind("puppeteer.navigate", async spec_handle => {
+      task_signal?.throwIfAborted();
+      if (!puppeteer_navigate) throw new Error("Puppeteer 不可用，请配置 Worker 的 BROWSER 绑定或提供 puppeteer.navigate mock");
+      const { url, options, evaluate } = JSON.parse(vm.getString(spec_handle));
+      const value = await puppeteer_navigate(url, options, evaluate, task_signal);
+      return vm.newString(JSON.stringify(value));
+    });
+    vm.setProp(vm.global, "__puppeteerNavigate", navigate);
+    navigate.dispose();
     const fetch_text = promises.bind("fetchText", async (url_handle, options_handle) => {
       task_signal?.throwIfAborted();
       const url = vm.getString(url_handle);
       const fetch_options = options_handle ? vm.dump(options_handle) : null;
       const headers = rss_fetch_headers(fetch_options);
+      const transport = fetch_options?.transport === undefined ? "fetch" : fetch_options.transport;
+      if (!["fetch", "tcp"].includes(transport)) throw new Error("fetchText transport 只支持 fetch 或 tcp");
       const timeout_ms = rss_fetch_timeout(fetch_options);
       let { method, body } = rss_fetch_request(fetch_options);
       rss_cookie_headers(fetch_options, "");
@@ -460,6 +483,7 @@ export async function execute_script_inner(
       if (!credentials_allowed) for (const name of RSS_FETCH_CREDENTIAL_HEADERS) delete derived_headers[name];
       const trace = route_metadata.debug === true ? {
         method, host: parsed.host, pathname: parsed.pathname.slice(0, 1024), status: null,
+        transport,
         credentials: {
           source: request_cookie ? "script_grant" : "none",
           headers_sent: [
@@ -470,7 +494,7 @@ export async function execute_script_inner(
       } : null;
       if (trace && upstream_requests.length < SCRIPT_LOG_MAX_LINES) upstream_requests.push(trace);
       try {
-      response = await fetch(outgoing_url, {
+      response = await (transport === "tcp" ? tcp_http_fetch : fetch)(outgoing_url, {
         method,
         body,
         redirect: "manual",
@@ -485,6 +509,7 @@ export async function execute_script_inner(
       if (trace) trace.status = response.status;
       } catch (failure) {
         task_signal?.throwIfAborted();
+        if (!signal.aborted && public_feed_failure(failure)) throw failure;
         const timed_out = signal.aborted;
         throw Object.assign(new Error(timed_out ? "脚本上游请求超时，请稍后重试" : "脚本上游连接失败，请稍后重试"), {
           name: "FeedError", code: timed_out ? "UPSTREAM_TIMEOUT" : "UPSTREAM_FETCH_FAILED",
@@ -617,8 +642,8 @@ export async function execute_script_inner(
     if (output.length === 0) {
       throw new ScriptError("output", "脚本返回了空内容");
     }
-    if (output.length > SCRIPT_OUTPUT_BYTES) {
-      throw new ScriptError("output", "脚本输出超过 2MB 限制");
+    if (output.length > output_limit) {
+      throw new ScriptError("output", `脚本输出超过 ${output_limit / 1024 / 1024}MB 限制`);
     }
     // 宿主再次校验响应格式与代理白名单，防止绕过沙箱结果段。
     try {

@@ -17,7 +17,7 @@
 
 非浏览器集成检查：`node --test scripts/admin_realtime_smoke.test.mjs`，使用隔离的本地 SQLite / R2 验证会话、来源校验、变更通知和助手通道复用。
 
-`/admin/clips` 提供区域剪藏管理：来源网址、CSS 选择器、采集视口、刷新策略、预览与 iframe 嵌入。采集通过 Cloudflare Browser Rendering 执行 `examples/scripts/region_clip.js`，按与订阅源相同的默认策略或单条覆盖规则定时更新；任务出现在「任务」页面。暂停仅停止自动刷新，最近快照仍可访问；删除会让公开链接返回 404。公开 `/clips/<ID>` 只输出无脚本的静态 HTML 和内联 CSS，允许跨站 iframe；后台页面自身仍禁止被嵌入。账号与 API Token 使用 Worker 的 `CF_BROWSER_ACCOUNT_ID`、`CF_BROWSER_API_TOKEN` 配置，不经管理 API 回传。
+`/admin/clips` 提供区域剪藏管理：来源网址、CSS 选择器、采集视口、刷新策略、预览与 iframe 嵌入。采集通过 Cloudflare Browser Rendering 执行 `examples/scripts/region_clip.js`，按与订阅源相同的默认策略或单条覆盖规则定时更新；任务出现在「任务」页面。暂停仅停止自动刷新，最近快照仍可访问；删除会让公开链接返回 404。公开 `/clips/<ID>` 只输出无脚本的静态 HTML 和内联 CSS，允许跨站 iframe；后台页面自身仍禁止被嵌入。区域剪藏脚本通过 `ctx.puppeteer.navigate` 显式调用渲染与页面提取函数；宿主使用 `@cloudflare/puppeteer` 与 `BROWSER` 绑定，不需要配置渲染方式开关或 REST API 凭证。普通脚本的 Debug、Mock 和正式执行也提供同一接口，Mock 可声明 `puppeteer.navigate`。
 
 后台公共 Shell 挂载共享的 `Toaster()` 和 `TooltipHost()`。各页点击说明按钮通过 `FindRSSAdminUI.notify(text)` 展示提示，错误提示可传入 `{ error: true }`。通知支持关闭、自动消失，并在切换页面或卸载时清理。脚本实时调试说明和 Field 的 `tooltip` 参数继续使用点击提示。
 
