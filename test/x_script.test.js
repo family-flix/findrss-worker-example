@@ -3,11 +3,15 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { register } from 'node:module';
 import { ScriptCookieAccess } from '../server/infra/script_cookie_access.js';
+import { XMLParser, XMLValidator } from 'fast-xml-parser';
+import { create_feed_parser } from '@findrss/feed-fetch';
+import { FeedModel } from '../server/domain/feed_format.js';
 
 register('./support/quickjs_wasm_hook.js', import.meta.url);
 const { compile_script_module, execute_script } = await import('../server/infra/script_sandbox.js');
 const source = await readFile(new URL('../examples/scripts/rss/x.js', import.meta.url), 'utf8');
 const profile = JSON.parse(await readFile(new URL('./fixtures/x_profile.json', import.meta.url), 'utf8'));
+const quote_chain = JSON.parse(await readFile(new URL('./fixtures/x_quote_chain.json', import.meta.url), 'utf8'));
 const legacy = JSON.parse(await readFile(new URL('./fixtures/script_migration.json', import.meta.url), 'utf8')).find(row => row.file === 'x');
 const compiled = await compile_script_module(source);
 assert.equal(compiled.error, '');
@@ -79,6 +83,45 @@ const timeline_html = tweets => stream({ data: { user_result_by_screen_name: { r
     instructions: [{ entries: tweets.map(result => ({ content: { itemContent: { tweet_results: { result } } } })) }],
   } },
 } } } });
+
+for (const mode of ['embedded', 'graphql']) test('X 真实两层引用保留长正文及作者，RSS/Atom 可还原引用链：' + mode, async t => {
+  const saved = globalThis.fetch;
+  t.after(() => { globalThis.fetch = saved; });
+  const calls = [];
+  globalThis.fetch = async url => {
+    calls.push(url);
+    if (mode === 'embedded') return new Response(timeline_html([quote_chain]));
+    if (url.includes('/UserTweets?')) return Response.json({ data: { user: { result: { timeline: { timeline: {
+      instructions: [{ entries: [{ content: { itemContent: { tweet_results: { result: quote_chain } } } }] }],
+    } } } } } });
+    return new Response(legacy.responses.find(row => url.includes(row.contains)).body);
+  };
+  const feed = JSON.parse((await run('tison1096')).output);
+  assert.equal(calls.length, mode === 'embedded' ? 1 : 4, '两层原帖均已内嵌，无需补取');
+  assert.equal(feed.items.length, 1);
+  const item = feed.items[0], parent = item.references[0].item, grandparent = parent.references[0].item;
+  assert.equal(item.id, 'x:tweet:2112439554942882244');
+  assert.equal(parent.id, 'x:tweet:2112109144086110307');
+  assert.deepEqual([item.kind, parent.kind, grandparent.kind], ['quote', 'quote', 'post']);
+  assert.deepEqual([item.author.name, parent.author.name, grandparent.author.name], ['tison', 'yunjie', 'DHH']);
+  assert.equal(item.description, quote_chain.legacy.full_text);
+  assert.equal(parent.description, quote_chain.quoted_status_result.result.note_tweet.note_tweet_results.result.text);
+  assert.equal(grandparent.id, 'x:tweet:2111795187454296232');
+  assert.equal(grandparent.link, 'https://x.com/dhh/status/2111795187454296232');
+  const { parse_feed_document } = create_feed_parser(XMLParser, XMLValidator);
+  for (const format of ['rss', 'atom']) {
+    const xml = FeedModel(feed).render(format);
+    assert.equal(XMLValidator.validate(xml), true);
+    const articles = parse_feed_document(xml, 'https://feeds.example/x/tison1096').articles;
+    assert.equal(articles.length, 1);
+    const parent_ref = articles[0].references[0], grandparent_ref = parent_ref.item.references[0];
+    assert.equal(parent_ref.relation, 'quote');
+    assert.equal(parent_ref.item.summary, parent.description.replace(/\s+/g, ' ').trim());
+    assert.equal(grandparent_ref.relation, 'quote');
+    assert.equal(grandparent_ref.item.guid, grandparent.id);
+    assert.equal(grandparent_ref.item.summary, grandparent.description);
+  }
+});
 
 test('X 转发、引用与回复保留当前帖与原帖作者和媒体，引用子项不混进时间线', async t => {
   const saved = globalThis.fetch;

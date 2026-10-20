@@ -1,0 +1,140 @@
+{
+  "__typename": "Tweet",
+  "rest_id": "2112439554942882244",
+  "core": {
+    "user_results": {
+      "result": {
+        "core": {
+          "created_at": "Thu Jun 09 05:56:52 +0000 2016",
+          "name": "tison",
+          "screen_name": "tison1096"
+        }
+      }
+    }
+  },
+  "legacy": {
+    "bookmark_count": 3,
+    "bookmarked": false,
+    "conversation_id_str": "2112439554942882244",
+    "created_at": "Tue Oct 20 07:03:31 +0000 2026",
+    "display_text_range": [
+      0,
+      144
+    ],
+    "entities": {},
+    "favorite_count": 22,
+    "favorited": false,
+    "full_text": "以我在拼多多工作的经验来看，我实在受不了拼多多的界面设计，觉得奇丑无比于是除了工作需要几乎都没打开过，现在更是手机上都不安装。\n\n但是必须承认它的 App 非常流畅，启动速度快，下单/开团流程短平快。一不小心就成为病毒传播的源头了。\n\n又有几个人跟我这种神经病一样，开了团还取消了单买呢？",
+    "id_str": "2112439554942882244",
+    "is_quote_status": true,
+    "lang": "zh",
+    "quote_count": 0,
+    "quoted_status_id_str": "2112109144086110307",
+    "quoted_status_permalink": {
+      "display": "x.com/xdanger/status…",
+      "expanded": "https://twitter.com/xdanger/status/2112109144086110307",
+      "url": "https://t.co/RY2TGzaSPg"
+    },
+    "reply_count": 6,
+    "retweet_count": 0,
+    "retweeted": false,
+    "user_id_str": "740784709878288384"
+  },
+  "quoted_status_result": {
+    "result": {
+      "__typename": "Tweet",
+      "rest_id": "2112109144086110307",
+      "core": {
+        "user_results": {
+          "result": {
+            "core": {
+              "created_at": "Wed Mar 14 16:36:20 +0000 2007",
+              "name": "yunjie",
+              "screen_name": "xdanger"
+            }
+          }
+        }
+      },
+      "legacy": {
+        "bookmark_count": 15,
+        "bookmarked": false,
+        "conversation_id_str": "2112109144086110307",
+        "created_at": "Mon Oct 19 09:10:35 +0000 2026",
+        "display_text_range": [
+          0,
+          141
+        ],
+        "entities": {},
+        "favorite_count": 73,
+        "favorited": false,
+        "full_text": "很多人颠倒了因果关系，垄断、14亿人基建、超级 App …… 这些都是结果，不是原因。淘宝、微信、支付宝、滴滴、美团、抖音 …… 从一开始都不是、也没要做超级 App，全都是在极其激烈的竞争中杀出来的。\n\n也没有任何一个老板不重视体验和视觉设计的，谁不想自己的产品又好用又优雅好看？",
+        "id_str": "2112109144086110307",
+        "is_quote_status": true,
+        "lang": "zh",
+        "quote_count": 10,
+        "quoted_status_id_str": "2111795187454296232",
+        "quoted_status_permalink": {
+          "display": "x.com/dhh/status/211…",
+          "expanded": "https://twitter.com/dhh/status/2111795187454296232",
+          "url": "https://t.co/9qG1T2Y4fS"
+        },
+        "reply_count": 24,
+        "retweet_count": 2,
+        "retweeted": false,
+        "user_id_str": "1166571"
+      },
+      "nested_quoted_tweet_results": {
+        "result": {
+          "__typename": "Tweet",
+          "rest_id": "2111795187454296232",
+          "core": {
+            "user_results": {
+              "result": {
+                "core": {
+                  "created_at": "Sun Apr 27 20:19:25 +0000 2008",
+                  "name": "DHH",
+                  "screen_name": "dhh"
+                }
+              }
+            }
+          },
+          "legacy": {
+            "bookmark_count": 665,
+            "bookmarked": false,
+            "conversation_id_str": "2111795187454296232",
+            "created_at": "Sun Oct 18 12:23:02 +0000 2026",
+            "display_text_range": [
+              0,
+              278
+            ],
+            "entities": {},
+            "favorite_count": 5427,
+            "favorited": false,
+            "full_text": "As much as I respect Chinese-made AI models and hardware, I'm equally puzzled by how rough most of the software still is. Whether it's Wechat or Alipay or HarmonyOS. You'd think getting unique aesthetics, perfect fidelity, and great flows would be \"easy\", but clearly it is not.",
+            "id_str": "2111795187454296232",
+            "is_quote_status": false,
+            "lang": "en",
+            "quote_count": 227,
+            "reply_count": 933,
+            "retweet_count": 193,
+            "retweeted": false,
+            "user_id_str": "14561327"
+          }
+        }
+      },
+      "note_tweet": {
+        "note_tweet_results": {
+          "result": {
+            "text": "很多人颠倒了因果关系，垄断、14亿人基建、超级 App …… 这些都是结果，不是原因。淘宝、微信、支付宝、滴滴、美团、抖音 …… 从一开始都不是、也没要做超级 App，全都是在极其激烈的竞争中杀出来的。\n\n也没有任何一个老板不重视体验和视觉设计的，谁不想自己的产品又好用又优雅好看？\n\n我觉得底层原因是中国缺乏足够的对于创新的知识产权保护，抄袭者的法律风险成本太低，导致竞争过度激烈，大家不得不向用户需求做妥协 —— 红点、红包、抽奖、登录奖励。特别是在免费使用的消费互联网市场，不做到第一就没法建立足够强的生态让自己能长期生存下去。\n\n不知道在 AI 时代，维持业务的成本大幅下降之后，会不会出来一批又好看又好用、而且是能长期存活下去的产品。"
+          }
+        }
+      },
+      "quotedRefResult": {
+        "result": {
+          "__typename": "Tweet",
+          "rest_id": "2111795187454296232"
+        }
+      }
+    }
+  }
+}

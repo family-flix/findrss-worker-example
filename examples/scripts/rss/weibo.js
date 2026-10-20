@@ -724,15 +724,27 @@ export class WeiboRSS extends RSSScript {
       .filter(Boolean);
   }
   static valid_id(value) {
-    return /^\d{1,24}$/.test(String(value || "")) && (typeof value !== "number" || Number.isSafeInteger(value));
+    return (
+      /^\d{1,24}$/.test(String(value || "")) &&
+      (typeof value !== "number" || Number.isSafeInteger(value))
+    );
   }
   static status_unavailable(status) {
-    return [true, 1, "1"].includes(status?.deleted) || [7, "7"].includes(status?.state);
+    return (
+      [true, 1, "1"].includes(status?.deleted) ||
+      [7, "7"].includes(status?.state)
+    );
   }
   static has_status_content(status) {
-    return !!status && (typeof status.text_raw === "string" || typeof status.text === "string"
-      || typeof status.longText?.longTextContent === "string" || WeiboRSS.status_images(status).length > 0
-      || status.page_info?.type === "video");
+    return (
+      !!status &&
+      (typeof status.text_raw === "string" ||
+        typeof status.text === "string" ||
+        typeof status.longText?.longTextContent === "string" ||
+        WeiboRSS.status_images(status).length > 0 ||
+        status.page_info?.type === "video" ||
+        status.page_info?.object_type === "video")
+    );
   }
   static parse_feed(status, uid, ancestors = []) {
     const raw_id = status.idstr || status.id;
@@ -740,12 +752,25 @@ export class WeiboRSS extends RSSScript {
     const id = String(raw_id);
     const text = WeiboRSS.status_text(status);
     const images = [...new Set(WeiboRSS.status_images(status))];
-    const page = status.page_info;
+    const page =
+      status.page_info?.object_id &&
+      status.page_info.object_id ===
+        status.retweeted_status?.page_info?.object_id
+        ? undefined
+        : status.page_info;
     const media = page?.media_info || {};
     const urls = page?.urls || {};
-    const video = page?.type === "video" ? WeiboRSS.public_url(
-      urls.mp4_720p_mp4 || urls.mp4_hd_mp4 || media.stream_url_hd || media.mp4_hd_url || media.stream_url || media.mp4_sd_url,
-    ) : "";
+    const video =
+      page?.type === "video" || page?.object_type === "video"
+        ? WeiboRSS.public_url(
+            urls.mp4_720p_mp4 ||
+              urls.mp4_hd_mp4 ||
+              media.stream_url_hd ||
+              media.mp4_hd_url ||
+              media.stream_url ||
+              media.mp4_sd_url,
+          )
+        : "";
     const author_id = status.user?.idstr || status.user?.id || uid;
     const references = [];
     const add = (relation, original, target_id) => {
@@ -753,35 +778,95 @@ export class WeiboRSS extends RSSScript {
       if (!WeiboRSS.valid_id(target_id) || String(target_id) === id) return;
       const original_uid = original?.user?.idstr || original?.user?.id;
       const unavailable = WeiboRSS.status_unavailable(original);
-      const child = !unavailable && WeiboRSS.has_status_content(original) && ancestors.length < 4 && !ancestors.includes(String(target_id))
-        ? WeiboRSS.parse_feed(original, original_uid, [...ancestors, id]) : null;
-      references.push({ relation, id: String(target_id),
+      const child =
+        !unavailable &&
+        WeiboRSS.has_status_content(original) &&
+        ancestors.length < 4 &&
+        !ancestors.includes(String(target_id))
+          ? WeiboRSS.parse_feed(original, original_uid, [...ancestors, id])
+          : null;
+      references.push({
+        relation,
+        id: String(target_id),
         link: child?.link || "https://weibo.com/detail/" + target_id,
-        ...(child ? { item: child } : {}), ...(unavailable ? { unavailable: true } : {}),
+        ...(child ? { item: child } : {}),
+        ...(unavailable ? { unavailable: true } : {}),
       });
     };
-    add("repost", status.retweeted_status,
-      status.retweeted_status_idstr || status.retweeted_status_id_str || status.retweeted_status_id);
-    add("reply", status.in_reply_to_status || status.reply_to_status,
-      status.in_reply_to_status_idstr || status.in_reply_to_status_id_str || status.in_reply_to_status_id
-      || status.reply_to_status_idstr || status.reply_to_status_id_str || status.reply_to_status_id);
-    add("quote", status.quoted_status,
-      status.quoted_status_idstr || status.quoted_status_id_str || status.quoted_status_id);
+    const repost_id =
+      status.retweeted_status?.idstr ||
+      status.retweeted_status?.id ||
+      status.retweeted_status_idstr ||
+      status.retweeted_status_id_str ||
+      status.retweeted_status_id;
+    const parent_id = String(status.analysis_extra || "").match(
+      /(?:^|\|)mblog_parent_id:(\d+)(?:\||$)/,
+    )?.[1];
+    if (parent_id && parent_id !== "0" && parent_id !== String(repost_id))
+      add("repost", null, parent_id);
+    add("repost", status.retweeted_status, repost_id);
+    add(
+      "reply",
+      status.in_reply_to_status || status.reply_to_status,
+      status.in_reply_to_status_idstr ||
+        status.in_reply_to_status_id_str ||
+        status.in_reply_to_status_id ||
+        status.reply_to_status_idstr ||
+        status.reply_to_status_id_str ||
+        status.reply_to_status_id,
+    );
+    add(
+      "quote",
+      status.quoted_status,
+      status.quoted_status_idstr ||
+        status.quoted_status_id_str ||
+        status.quoted_status_id,
+    );
     return {
-      id, kind: references.some(ref => ref.relation === "repost") ? "repost"
-        : references.some(ref => ref.relation === "reply") ? "reply" : references.length ? "quote" : "post",
-      title: Array.from(text || "").slice(0, 100).join("") || "微博 " + id,
+      id,
+      kind: references.some((ref) => ref.relation === "repost")
+        ? "repost"
+        : references.some((ref) => ref.relation === "reply")
+          ? "reply"
+          : references.length
+            ? "quote"
+            : "post",
+      title:
+        Array.from(text || "")
+          .slice(0, 100)
+          .join("") || "微博 " + id,
       description: text,
-      content: "<p>" + WeiboRSS.render_text(text, status.text, status.longText?.longTextContent) + "</p>",
-      link: author_id ? "https://weibo.com/" + author_id + "/" + (status.mblogid || status.bid || id) : "https://weibo.com/detail/" + id,
-      author: status.user?.screen_name || "", published: status.created_at,
-      image: images[0] || WeiboRSS.public_url(typeof page?.page_pic === "string" ? page.page_pic : page?.page_pic?.url) || undefined,
-      images, ...(video ? { enclosure: { url: video, type: "video/mp4" } } : {}),
+      content:
+        "<p>" +
+        WeiboRSS.render_text(
+          text,
+          status.text,
+          status.longText?.longTextContent,
+        ) +
+        "</p>",
+      link: author_id
+        ? "https://weibo.com/" +
+          author_id +
+          "/" +
+          (status.mblogid || status.bid || id)
+        : "https://weibo.com/detail/" + id,
+      author: status.user?.screen_name || "",
+      published: status.created_at,
+      image:
+        images[0] ||
+        WeiboRSS.public_url(
+          typeof page?.page_pic === "string"
+            ? page.page_pic
+            : page?.page_pic?.url,
+        ) ||
+        undefined,
+      images,
+      ...(video ? { enclosure: { url: video, type: "video/mp4" } } : {}),
       ...(references.length ? { references } : {}),
     };
   }
   static async resolve_references(ctx, items, link) {
-    const known = new Map(items.map(item => [item.id, item]));
+    const known = new Map(items.map((item) => [item.id, item]));
     const unavailable = new Set();
     const remember = (item) => {
       for (const reference of item.references || []) {
@@ -799,18 +884,30 @@ export class WeiboRSS extends RSSScript {
       for (const reference of item.references || []) {
         if (path.includes(reference.id) || reference.id === item.id) continue;
         if (!reference.item && !reference.unavailable) {
-          if (WeiboRSS.valid_id(reference.id) && !known.has(reference.id) && !unavailable.has(reference.id) && remaining > 0) {
+          if (
+            WeiboRSS.valid_id(reference.id) &&
+            !known.has(reference.id) &&
+            !unavailable.has(reference.id) &&
+            remaining > 0
+          ) {
             remaining--;
             known.set(reference.id, null);
-            const result = await WeiboRSS.request_text(ctx, "https://weibo.com/ajax/statuses/show?id=" + reference.id, {
-              headers: WeiboRSS.request_headers(link, true), cookie_headers: { "x-xsrf-token": "XSRF-TOKEN" }, timeout_ms: 3000,
-            });
+            const result = await WeiboRSS.request_text(
+              ctx,
+              "https://weibo.com/ajax/statuses/show?id=" + reference.id,
+              {
+                headers: WeiboRSS.request_headers(link, true),
+                cookie_headers: { "x-xsrf-token": "XSRF-TOKEN" },
+                timeout_ms: 3000,
+              },
+            );
             if (!result.error) {
               const parsed = parseJSON(result.data);
               if (!parsed.error) {
                 const status = parsed.data?.data || parsed.data;
                 if (String(status?.idstr || status?.id) === reference.id) {
-                  if (WeiboRSS.status_unavailable(status)) unavailable.add(reference.id);
+                  if (WeiboRSS.status_unavailable(status))
+                    unavailable.add(reference.id);
                   else if (WeiboRSS.has_status_content(status)) {
                     const original = WeiboRSS.parse_feed(status);
                     known.set(reference.id, original);
@@ -828,10 +925,30 @@ export class WeiboRSS extends RSSScript {
           // 拷贝引用子树，避免共享列表对象形成循环或重复改写媒体。
           if (original) {
             const clone = parseJSON(JSON.stringify(original));
-            if (!clone.error) { reference.item = clone.data; reference.link = clone.data.link; }
+            if (!clone.error) {
+              reference.item = clone.data;
+              reference.link = clone.data.link;
+            }
           }
         }
         if (reference.item) await resolve(reference.item, [...path, item.id]);
+      }
+      const repost = item.references?.find(
+        (reference) => reference.relation === "repost",
+      );
+      if (repost?.item) {
+        const marker = repost.item.author
+          ? "//@" + repost.item.author + ":"
+          : "";
+        const offset = marker ? item.description.indexOf(marker) : -1;
+        if (offset >= 0 && offset === item.description.indexOf("//@")) {
+          const text = item.description.slice(0, offset).trim();
+          item.description = text;
+          item.title =
+            Array.from(text).slice(0, 100).join("") || "微博 " + item.id;
+          item.content =
+            "<p>" + WeiboRSS.render_text(text, item.content) + "</p>";
+        }
       }
     };
     for (const item of items) await resolve(item);
@@ -895,35 +1012,98 @@ export class WeiboRSS extends RSSScript {
         const parsed_card = utils.document_nodes(card);
         if (parsed_card.error) throw parsed_card.error;
         const root = parsed_card.data;
-        const forward = utils.first(root, '[node-type="feed_list_forwardContent"]');
-        const inside_forward = node => {
-          for (let parent = node; parent; parent = parent.parent) if (parent === forward) return true;
+        const forward = utils.first(
+          root,
+          '[node-type="feed_list_forwardContent"]',
+        );
+        const inside_forward = (node) => {
+          for (let parent = node; parent; parent = parent.parent)
+            if (parent === forward) return true;
           return false;
         };
-        const links = utils.select(root, "a[date]").filter(node => /^(?:(?:https?:)?\/\/weibo\.com)?\/\d+\/[A-Za-z0-9]+$/.test(node.attrs.href || ""));
-        const link = links.find(node => !inside_forward(node));
-        const absolute_link = value => value ? (value.startsWith("//") ? "https:" + value
-          : value.startsWith("/") ? "https://weibo.com" + value : value) : "";
+        const links = utils
+          .select(root, "a[date]")
+          .filter((node) =>
+            /^(?:(?:https?:)?\/\/weibo\.com)?\/\d+\/[A-Za-z0-9]+$/.test(
+              node.attrs.href || "",
+            ),
+          );
+        const link = links.find((node) => !inside_forward(node));
+        const absolute_link = (value) =>
+          value
+            ? value.startsWith("//")
+              ? "https:" + value
+              : value.startsWith("/")
+                ? "https://weibo.com" + value
+                : value
+            : "";
         const description = utils.plain_text(text);
         const original_url = links.find(inside_forward)?.attrs.href;
         const original_id = card.match(/\b(?:omid|rootmid)=(\d+)/i)?.[1];
-        const original_link = absolute_link(original_url) || (original_id ? "https://weibo.com/detail/" + original_id : "");
-        const original_text = utils.first(forward, '[node-type="feed_list_reason"]') || utils.first(forward, '[node-type="feed_list_content"]');
-        const node_text = node => !node ? "" : node.tag === "img" ? node.attrs.alt || "" : node.tag === "br" ? "\n"
-          : node.text || node.children.map(node_text).join("");
+        const original_link =
+          absolute_link(original_url) ||
+          (original_id ? "https://weibo.com/detail/" + original_id : "");
+        const original_text =
+          utils.first(forward, '[node-type="feed_list_reason"]') ||
+          utils.first(forward, '[node-type="feed_list_content"]');
+        const node_text = (node) =>
+          !node
+            ? ""
+            : node.tag === "img"
+              ? node.attrs.alt || ""
+              : node.tag === "br"
+                ? "\n"
+                : node.text || node.children.map(node_text).join("");
         const original_description = node_text(original_text).trim();
-        const references = forward && (original_id || original_link) ? [{ relation: "repost",
-          ...(original_id ? { id: original_id } : {}), link: original_link,
-          ...(original_text && original_link ? { item: {
-            id: original_id || original_link, kind: "post", title: Array.from(original_description).slice(0, 100).join("") || "原微博",
-            link: original_link, description: original_description,
-            content: "<p>" + WeiboRSS.render_text(original_description, card) + "</p>",
-            author: utils.attribute(forward, "a[nick-name]", "nick-name") || utils.field(forward, "a[usercard]"),
-            published: Number(links.find(inside_forward)?.attrs.date) || undefined,
-            images: utils.select(forward, "img").filter(node => !/^\[[^\[\]]+\]$/.test(node.attrs.alt || ""))
-              .map(node => WeiboRSS.public_url(node.attrs["data-src"] || node.attrs.src)).filter(Boolean),
-          } } : {}),
-        }] : [];
+        const references =
+          forward && (original_id || original_link)
+            ? [
+                {
+                  relation: "repost",
+                  ...(original_id ? { id: original_id } : {}),
+                  link: original_link,
+                  ...(original_text && original_link
+                    ? {
+                        item: {
+                          id: original_id || original_link,
+                          kind: "post",
+                          title:
+                            Array.from(original_description)
+                              .slice(0, 100)
+                              .join("") || "原微博",
+                          link: original_link,
+                          description: original_description,
+                          content:
+                            "<p>" +
+                            WeiboRSS.render_text(original_description, card) +
+                            "</p>",
+                          author:
+                            utils.attribute(
+                              forward,
+                              "a[nick-name]",
+                              "nick-name",
+                            ) || utils.field(forward, "a[usercard]"),
+                          published:
+                            Number(links.find(inside_forward)?.attrs.date) ||
+                            undefined,
+                          images: utils
+                            .select(forward, "img")
+                            .filter(
+                              (node) =>
+                                !/^\[[^\[\]]+\]$/.test(node.attrs.alt || ""),
+                            )
+                            .map((node) =>
+                              WeiboRSS.public_url(
+                                node.attrs["data-src"] || node.attrs.src,
+                              ),
+                            )
+                            .filter(Boolean),
+                        },
+                      }
+                    : {}),
+                },
+              ]
+            : [];
         add({
           id,
           kind: forward ? "repost" : "post",
@@ -931,7 +1111,9 @@ export class WeiboRSS extends RSSScript {
           title: Array.from(description).slice(0, 100).join("") || "微博 " + id,
           description,
           content: "<p>" + WeiboRSS.render_text(description, text) + "</p>",
-          link: absolute_link(link?.attrs.href) || "https://weibo.com/" + uid + "/" + id,
+          link:
+            absolute_link(link?.attrs.href) ||
+            "https://weibo.com/" + uid + "/" + id,
           published: link ? Number(link.attrs.date) : undefined,
           images: [],
         });
@@ -973,7 +1155,14 @@ export class WeiboRSS extends RSSScript {
   static build_channel(ctx, uid, link, items, profile) {
     try {
       const values_21 = items;
-      const proxy_item = function (item) {
+      const contains_item = (item, id, remaining) =>
+        !!item &&
+        (item.id === id ||
+          (remaining > 0 &&
+            (item.references || []).some((reference) =>
+              contains_item(reference.item, id, remaining - 1),
+            )));
+      const proxy_item = function (item, depth = 0) {
         try {
           const values_16 = item.images || [];
           const result_17 = utils.map_results(values_16, function (url) {
@@ -1012,15 +1201,34 @@ export class WeiboRSS extends RSSScript {
             },
           );
           if (result_20.error) return result_20;
-          const references = utils.map_results(item.references || [], function (reference) {
-            if (!reference.item) return Result.Ok(reference);
-            const child = proxy_item(reference.item);
-            return child.error ? child : Result.Ok({ ...reference, item: child.data });
-          });
+          const references = utils.map_results(
+            item.references || [],
+            function (reference) {
+              if (!reference.item) return Result.Ok(reference);
+              const child = proxy_item(reference.item, depth + 1);
+              return child.error
+                ? child
+                : Result.Ok({ ...reference, item: child.data });
+            },
+          );
           if (references.error) return references;
+          const repost = references.data.find(
+            (reference) => reference.relation === "repost",
+          );
+          // 仅在最终四层输出范围内去重，避免深层截断后丢失根帖正文。
+          const visible_references = repost?.item
+            ? references.data.filter(
+                (reference) =>
+                  reference === repost ||
+                  reference.relation !== "repost" ||
+                  !contains_item(repost.item, reference.id, 4 - depth - 1),
+              )
+            : references.data;
           return Result.Ok({
             ...item,
-            ...(references.data.length ? { references: references.data } : {}),
+            ...(visible_references.length
+              ? { references: visible_references }
+              : {}),
             image: result_18.data || undefined,
             images,
             content:
@@ -1039,7 +1247,9 @@ export class WeiboRSS extends RSSScript {
           return Result.Err(error, error?.code ?? "UPSTREAM_INVALID_RESPONSE");
         }
       };
-      const result_22 = utils.map_results(values_21, proxy_item);
+      const result_22 = utils.map_results(values_21, (item) =>
+        proxy_item(item),
+      );
       if (result_22.error) return result_22;
       items = result_22.data;
       const name = profile?.name || items[0]?.author || "微博 · " + uid;

@@ -10,6 +10,7 @@ import { create_feed_parser } from '@findrss/feed-fetch';
 register('./support/quickjs_wasm_hook.js', import.meta.url);
 const { compile_script_module, execute_script } = await import('../server/infra/script_sandbox.js');
 const source = await readFile(new URL('../examples/scripts/rss/weibo.js', import.meta.url), 'utf8');
+const repost_chain = JSON.parse(await readFile(new URL('./fixtures/weibo_repost_chain.json', import.meta.url), 'utf8'));
 const compiled = await compile_script_module(source);
 assert.equal(compiled.error, '');
 const run = () => execute_script(source, { ...compiled.metadata, ...compiled.metadata.routes[0] }, null, {
@@ -19,6 +20,132 @@ const status = (id, text, extra = {}) => ({ idstr: id, mblogid: 'B' + id, text_r
   created_at: 'Sat Oct 17 01:00:00 +0800 2026', user: { idstr: '456', screen_name: '原作者' }, ...extra });
 const html = statuses => '<script type="application/json">' + JSON.stringify(statuses) + '</script>';
 const proxy = url => 'https://feeds.example/img/weibo?url=' + encodeURIComponent(url.replace('/large/', '/orj360/'));
+
+test('微博真实“哇哦”样本补取直接父帖，逐层分离转发语并保留原帖视频', async t => {
+  const saved = globalThis.fetch;
+  t.after(() => { globalThis.fetch = saved; });
+  const calls = [];
+  const original = repost_chain.retweeted_status;
+  // 列表只含直接父帖 ID；以下两层详情响应使用模拟数据。
+  const parents = {
+    '5356058562530194': status('5356058562530194', '超级好看| ᴥ•́ )✧//@M大王叫我来巡山:死得其所了。真的美', {
+      user: { idstr: '501', screen_name: '颜文字君' },
+      analysis_extra: 'mblog_rt_mid:' + original.idstr + '|mblog_parent_id:502|follow:1',
+      retweeted_status: original,
+    }),
+    '502': status('502', '死得其所了。真的美', {
+      user: { idstr: '503', screen_name: 'M大王叫我来巡山' }, retweeted_status: original,
+    }),
+  };
+  globalThis.fetch = async url => {
+    calls.push(url);
+    if (url.includes('/ajax/statuses/mymblog?')) return Response.json({ ok: 1, data: { list: [repost_chain] } });
+    if (url.includes('/ajax/statuses/show?')) return Response.json(parents[new URL(url).searchParams.get('id')]);
+    return Response.json({});
+  };
+  const feed = JSON.parse((await run()).output);
+  assert.deepEqual(calls.filter(url => url.includes('/ajax/statuses/show?')).map(url => new URL(url).searchParams.get('id')), ['5356058562530194', '502']);
+  assert.equal(feed.items.length, 1);
+  const chain = [];
+  for (let item = feed.items[0]; item; item = item.references?.[0]?.item) chain.push(item);
+  assert.deepEqual(chain.map(item => item.id), [repost_chain.idstr, '5356058562530194', '502', original.idstr]);
+  assert.deepEqual(chain.map(item => item.description), ['哇哦[哆啦A梦吃惊]', '超级好看| ᴥ•́ )✧', '死得其所了。真的美', original.text_raw]);
+  for (const item of chain.slice(0, -1)) {
+    assert.equal(item.kind, 'repost');
+    assert.equal(item.references.length, 1, '可达的原帖不重复成为同级引用');
+    assert.equal(item.enclosure, undefined);
+    assert.equal(item.image, undefined);
+    assert.doesNotMatch(item.content, /\/@|超级好看.*死得其所/);
+  }
+  assert.match(chain[0].content, /weibo-emoji/);
+  assert.equal(chain.at(-1).enclosure.url, original.page_info.media_info.stream_url_hd);
+  for (const format of ['rss', 'atom']) {
+    const xml = FeedModel(feed).render(format);
+    assert.equal(XMLValidator.validate(xml), true);
+    const articles = create_feed_parser(XMLParser, XMLValidator).parse_feed_document(xml, 'https://feeds.example/feed').articles;
+    assert.equal(articles.length, 1);
+    assert.equal(articles[0].summary, '哇哦[哆啦A梦吃惊]');
+    assert.equal(articles[0].video_url, '');
+    assert.equal(articles[0].references[0].item.references[0].item.references[0].item.guid, original.idstr);
+  }
+});
+
+for (const deleted of [false, true]) test('微博中间转发' + (deleted ? '已删除' : '补取失败') + '时保留转发文字和已知原帖', async t => {
+  const saved = globalThis.fetch;
+  t.after(() => { globalThis.fetch = saved; });
+  globalThis.fetch = async url => {
+    if (url.includes('/ajax/statuses/mymblog?')) return Response.json({ ok: 1, data: { list: [repost_chain] } });
+    if (url.includes('/ajax/statuses/show?')) return deleted
+      ? Response.json({ idstr: '5356058562530194', deleted: true }) : new Response('denied', { status: 403 });
+    return Response.json({});
+  };
+  const item = JSON.parse((await run()).output).items[0];
+  assert.equal(item.description, repost_chain.text_raw);
+  assert.equal(item.references[0].id, '5356058562530194');
+  assert.equal(item.references[0].item, undefined);
+  assert.equal(item.references[0].unavailable, deleted || undefined);
+  assert.equal(item.references[1].item.id, repost_chain.retweeted_status.idstr);
+  assert.equal(item.references[1].item.description, repost_chain.retweeted_status.text_raw);
+});
+
+test('微博转发超过输出深度时仍保留已知根帖正文和视频，RSS/Atom 不只剩根帖链接', async t => {
+  const saved = globalThis.fetch;
+  t.after(() => { globalThis.fetch = saved; });
+  const original = repost_chain.retweeted_status;
+  const ids = ['5356058562530194', '501', '502', '503', '504'];
+  const parents = Object.fromEntries(ids.slice(0, -1).map((id, index) => [id, status(id, '中间转发 ' + index, {
+    analysis_extra: 'mblog_parent_id:' + ids[index + 1], retweeted_status: original,
+  })]));
+  const calls = [];
+  globalThis.fetch = async url => {
+    calls.push(url);
+    if (url.includes('/ajax/statuses/mymblog?')) return Response.json({ ok: 1, data: { list: [repost_chain] } });
+    if (url.includes('/ajax/statuses/show?')) return Response.json(parents[new URL(url).searchParams.get('id')]);
+    return Response.json({});
+  };
+  const find = (item, id) => item?.id === id || item?.guid === id ? item
+    : (item?.references || []).map(reference => find(reference.item, id)).find(Boolean);
+  const feed = JSON.parse((await run()).output);
+  assert.equal(calls.filter(url => url.includes('/ajax/statuses/show?')).length, 4);
+  const root = find(feed.items[0], original.idstr);
+  assert.ok(root, '深处根帖会被输出深度截断，必须保留可输出的根帖副本');
+  assert.equal(root.description, original.text_raw);
+  assert.equal(root.enclosure.url, original.page_info.media_info.stream_url_hd);
+  for (const format of ['rss', 'atom']) {
+    const xml = FeedModel(feed).render(format);
+    assert.equal(XMLValidator.validate(xml), true);
+    assert.match(xml, /第一次看这种视角的烟花/);
+    const articles = create_feed_parser(XMLParser, XMLValidator).parse_feed_document(xml, 'https://feeds.example/feed').articles;
+    const parsed_root = find(articles[0], original.idstr);
+    assert.ok(parsed_root);
+    assert.match(parsed_root.summary, /第一次看这种视角的烟花/);
+    assert.equal(parsed_root.video_url, original.page_info.media_info.stream_url_hd);
+  }
+});
+
+test('微博忽略无效、自身或重复的父帖 ID，不把未还原的转发文字删掉', async t => {
+  const saved = globalThis.fetch;
+  t.after(() => { globalThis.fetch = saved; });
+  const original = status('100', '原帖');
+  const text = '说明//@其他用户:中间转发语';
+  const calls = [];
+  globalThis.fetch = async url => {
+    calls.push(url);
+    return new Response(url.includes('/ajax/profile/') ? '{}' : html(
+      ['0', '100', '202', '123junk', '9'.repeat(25)].map((parent_id, index) => status(String(200 + index), text, {
+        analysis_extra: 'mblog_parent_id:' + parent_id + '|follow:1', retweeted_status: original,
+      })),
+    ));
+  };
+  const items = JSON.parse((await run()).output).items;
+  assert.equal(calls.length, 2);
+  assert.equal(items.length, 5);
+  for (const item of items) {
+    assert.equal(item.description, text);
+    assert.equal(item.references.length, 1);
+    assert.equal(item.references[0].id, '100');
+  }
+});
 
 test('微博转发、回复和多层引用独立保留正文、作者、链接及代理后的媒体', async t => {
   const saved = globalThis.fetch;

@@ -286,7 +286,7 @@ test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使�
   } finally { root.onUnmounted(); }
 });
 
-test("登录页只显示密码输入框，提交密码后跳转管理后台", async () => {
+test("登录页可切换密码可见性，提交原密码后跳转管理后台", async () => {
   const requests = [], redirects = [];
   const login_context = vm.createContext({
     URL, URLSearchParams,
@@ -309,8 +309,26 @@ test("登录页只显示密码输入框，提交密码后跳转管理后台", as
     assert.equal(form.t, "form");
     assert.equal(find(view, "admin-login-username-field"), null);
     const password = find(view, "admin-login-password-input");
+    password.onMounted({ target: { get$elm: () => ({ setAttribute() {} }) } });
     assert.equal(password.state.attributes.type, "password");
     password.events.onInput({ target: { value: "test-admin-password" } });
+    const visibility = find(view, "admin-login-password-visibility");
+    assert.equal(visibility.state.attributes.type, "button");
+    assert.equal(visibility.state.attributes["aria-label"], "显示密码");
+    assert.equal(visibility.state.attributes["aria-pressed"], "false");
+    assert.ok(find(visibility, "admin-icon-eye"));
+    visibility.events.onClick();
+    assert.equal(password.state.attributes.type, "text");
+    assert.equal(visibility.state.attributes["aria-label"], "隐藏密码");
+    assert.equal(visibility.state.attributes["aria-pressed"], "true");
+    assert.ok(find(visibility, "admin-icon-eye-off"));
+    visibility.events.onClick();
+    assert.equal(password.state.attributes.type, "password");
+    assert.equal(visibility.state.attributes["aria-label"], "显示密码");
+    assert.equal(visibility.state.attributes["aria-pressed"], "false");
+    assert.ok(find(visibility, "admin-icon-eye"));
+    assert.equal(password.state.value, "test-admin-password");
+    assert.equal(requests.length, 0);
     assert.equal(find(view, "admin-login-submit").state.attributes.type, "submit");
     let prevented = false;
     await form.events.onSubmit({ preventDefault() { prevented = true; } });

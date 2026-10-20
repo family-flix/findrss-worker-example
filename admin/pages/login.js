@@ -7,7 +7,7 @@ if (!Timeless || !Timeless.DOM) {
   throw new Error("FindRSS 登录页无法启动：Timeless 运行时未加载");
 }
 
-const { Button, Form, Img, Input, Show, View, computed } = Timeless;
+const { Button, Form, Icon, Img, Input, Show, View, computed } = Timeless;
 
 function LoginView() {
   const vm$ = LoginViewModel();
@@ -85,6 +85,7 @@ function LoginView() {
             [
               Input({
                 class: "box-border",
+                store: vm$.password_input$,
                 value: vm$.state.password,
                 name: "password",
                 placeholder: "",
@@ -100,6 +101,28 @@ function LoginView() {
                   vm$.methods.setPassword(event.target.value);
                 },
                 autoComplete: "current-password",
+                suffix: Button({
+                  variant: "ghost",
+                  style: {
+                    width: "32px",
+                    height: "32px",
+                    "min-height": "32px",
+                    padding: "0",
+                  },
+                  attributes: {
+                    n: "admin-login-password-visibility",
+                    type: "button",
+                    "aria-label": computed(vm$.state.password_visible, (visible) =>
+                      visible ? "隐藏密码" : "显示密码",
+                    ),
+                    "aria-pressed": computed(vm$.state.password_visible, String),
+                    "aria-controls": "admin-login-password",
+                  },
+                  icon: Icon(computed(vm$.state.password_visible, (visible) =>
+                    visible ? "eye-off" : "eye",
+                  )),
+                  onClick: vm$.methods.toggle_password_visibility,
+                }),
               }),
             ],
           ),
