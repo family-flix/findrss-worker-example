@@ -365,10 +365,12 @@ export class ServiceDevice {
    * @param {string} event_type
    * @param {string} message
    * @param {Record<string, unknown>} [options]
-   * @returns {void}
+   * @returns {Promise<void>}
    */
   record_device_log(device_id, category, event_type, message, options = {}) {
-    record_device_log(this.repo, device_id, category, event_type, message, options);
+    const pending = record_device_log(this.repo, device_id, category, event_type, message, options);
+    this.ports.wait_until?.(pending);
+    return pending;
   }
 
   close_unauthorized_connections() {
@@ -384,9 +386,9 @@ export class ServiceDevice {
   /**
    * @param {URL} url
    * @param {string} device_id
-   * @returns {Record<string, unknown>}
+   * @returns {Promise<Record<string, unknown>>}
    */
-  list_device_logs(url, device_id) {
+  async list_device_logs(url, device_id) {
     /** @type {DeviceRegistryRow | undefined} */
     const device = this.repo.devices.find(device_id);
     if (device === undefined) {
@@ -404,7 +406,9 @@ export class ServiceDevice {
     }
 
     /** @type {DeviceLogRow[]} */
-    const rows = this.repo.devices.list_logs(device_id, category, before_id, limit + 1);
+    let rows;
+    try { rows = await this.repo.devices.list_logs(device_id, category, before_id, limit + 1); }
+    catch (error) { throw do_error(error.message, 503); }
     const has_more = rows.length > limit;
     const page = has_more ? rows.slice(0, limit) : rows;
     return {
@@ -416,7 +420,7 @@ export class ServiceDevice {
       logs: page.map((row) => DeviceLogModel.fromRow(row).toValue()),
       has_more,
       next_before_id: has_more && page.length > 0 ? page[page.length - 1].id : null,
-      retention_milliseconds: RETENTION_MILLISECONDS,
+      retention_milliseconds: this.repo.devices.retention_milliseconds ?? RETENTION_MILLISECONDS,
     }
   }
 
@@ -507,6 +511,7 @@ export class ServiceDevice {
     if (device === undefined) {
       throw do_error("device not found", 404);
     }
+    await this.repo.devices.delete_logs_for(device_id);
 
     const { count } = this.app.tasks.fail_device_tasks(
       device_id,
@@ -515,7 +520,6 @@ export class ServiceDevice {
       "task force reset by admin");
     this.close_device_sockets(device_id);
     this.repo.devices.delete(device_id);
-    this.repo.devices.delete_logs_for(device_id);
     await this.ports.schedule_alarm();
     return { device_id, deleted: true, failed_count: count }
   }

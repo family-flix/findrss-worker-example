@@ -38,6 +38,22 @@ DO 的数据库初始化先读取 schema 版本；首次升级才执行补列、
 
 `node --test scripts/sql_read_budget_smoke.test.mjs` 使用隔离的本地 Workers SQLite 和实际 `rowsRead`，校验 100/1000 源、1 万条历史调用下的目录合并发布、计数、冷启动、保留期和对象清理读取预算；不访问线上数据库。
 
+设备日志和脚本执行日志通过结构化 `console` 对象交给 [Cloudflare Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/) 采集、存储和索引，不再读写或清理 DO 的 `device_logs`、`script_logs`，也不在 R2 保存日志正文或索引。日志包含设备、连接、任务、分类、脚本、来源、完整错误堆栈及执行输出；敏感参数先脱敏，整条按 UTF-8 控制在 240 KiB 以内，超大元数据保留截断预览。配置保持 `head_sampling_rate: 1`，关闭额外的 `invocation_logs`，避免每个心跳再产生一条请求日志；实际采集仍受 Cloudflare 套餐额度及保留策略限制。
+
+后台日志查询、分类筛选和 `before_id` 数字分页接口保持不变，服务端通过 [Workers Observability 查询 API](https://developers.cloudflare.com/api/resources/workers/subresources/observability/subresources/telemetry/methods/query/) 获取最近 3 天日志，对应当前 Workers Free 的保留期。官方事件游标用于内部翻页，同毫秒内的日志完整取回后再按业务 ID 排序。最近两分钟的日志在内存合并去重，最多 500 条 / 2 MiB，补齐索引延迟；实例重建后依赖 Cloudflare 索引。Webhook 直接使用本次错误发送，不依赖日志查询授权或索引就绪。
+
+现有 R2 桶仅在 `logs/workers/state.json` 保存编号预留、已读删除边界和设备/脚本删除边界；每次预留 10000 个编号，重启后跳过旧编号段，不按条写入状态。该文件不含日志正文，不应单独删除或修改。删除已读消息或设备/脚本会在应用查询中立即隐藏对应历史日志，Cloudflare 的原始日志仍保留至平台保留期结束。状态存储故障仍输出完整 console 日志并发送 Webhook，但编号分配失败的记录只能在 Cloudflare 控制台查看；后台接口需要状态存储恢复。旧 SQLite 日志和此前的 R2 日志不自动搬运、扫描或删除，保留原数据供离线备份；新日志不会复制回旧表。
+
+配置后台查询时，在 `.dev.vars` 填写以下三项；生产环境可逐项用 `npx wrangler secret put <变量名>` 交互设置，配置中的 Worker 名称与实际部署不同时，添加 `--name <实际 Worker 名称>`：
+
+| 变量 | 内容 |
+| --- | --- |
+| `CLOUDFLARE_ACCOUNT_ID` | Worker 所属账户的 32 位 ID |
+| `CLOUDFLARE_WORKER_NAME` | 实际部署的 Worker 名称，必须与 Cloudflare 一致 |
+| `CLOUDFLARE_API_TOKEN` | 仅授权该账户、具有 **Workers Observability Write** 权限的 API Token |
+
+Wrangler OAuth 登录不等于给 Worker 提供运行时查询凭据。Token 仅在服务端使用，不发送给前端；缺配置、无权限、限流、超时或无效响应时，后台返回明确的 503，不回退扫描 DO。未配置查询凭据时，console 日志采集和业务 Webhook 仍可运行。后台查询继续要求管理员鉴权。可用 `node --test scripts/log_storage_smoke.test.mjs` 在隔离的真实本地 Worker 验证零日志 SQL 写入、仅保存小状态文件、官方 API 协议适配和重建后的查询；该测试模拟官方查询响应，不访问线上日志。
+
 ```bash
 # 本项目根目录，Node.js 22.19+
 npm ci

@@ -6,6 +6,7 @@ export const MAX_BODY_BYTES = 1024 * 1024;
 export const MAX_ATTEMPTS = 10;
 export const LEASE_MILLISECONDS = 120_000;
 export const RETENTION_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
+export const WORKERS_LOG_RETENTION_MILLISECONDS = 3 * 24 * 60 * 60 * 1000;
 export const MAINTENANCE_MILLISECONDS = 24 * 60 * 60 * 1000;
 export const MAX_QUEUED_CALLS = 10_000;
 export const API_OBJECT_NAME = "api";

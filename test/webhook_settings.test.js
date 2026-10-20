@@ -107,7 +107,7 @@ test("新错误消息以 POST、Bearer Token 和替换后的 JSON 模板发送�
   assert.deepEqual(JSON.parse(options.body), { text: '/demo：执行"失败"\n' + error_text, path: "/demo", time: "123",
     nested: [{ value: '执行"失败"' }], enabled: true });
   assert.doesNotMatch(options.body, /private/);
-  f.scripts.delete_read_messages(new URL("https://internal/_admin/messages?read_id=1"));
+  await f.scripts.delete_read_messages(new URL("https://internal/_admin/messages?read_id=1"));
   assert.equal(requests.length, 1);
   await f.webhook_settings.save_settings({ url: "", template: '{"text":"{{message}}"}' });
   f.scripts.record_log({ status: "error", message: "已关闭" });
@@ -134,7 +134,7 @@ test("Webhook 非 2xx、网络失败及密钥失效均不影响消息落库与�
   f.scripts.record_log({ status: "error", message: "third" });
   await Promise.all(f.pending);
   assert.equal(events.length, 3);
-  assert.equal(f.scripts.list_messages(new URL("https://internal/_admin/messages")).messages.length, 3);
+  assert.equal((await f.scripts.list_messages(new URL("https://internal/_admin/messages"))).messages.length, 3);
   assert.equal(warnings.length, 3);
   assert.doesNotMatch(warnings.join("\n"), new RegExp(secret));
 });
@@ -166,7 +166,7 @@ test("无 Token 时不附带 Authorization；超时和日志写入失败不阻�
   assert.equal(events.length, 2);
   t.mock.method(console, "error", () => {});
   t.mock.method(f.scripts.repo.script_logs, "insert", () => { throw new Error("storage failure"); });
-  f.scripts.record_log({ status: "error", message: "写入失败" });
-  assert.equal(calls, 2);
-  assert.equal(events.length, 2);
+  await f.scripts.record_log({ status: "error", message: "写入失败" });
+  assert.equal(calls, 3);
+  assert.equal(events.length, 3);
 });

@@ -17,7 +17,7 @@ export class ServiceMaintenance {
   }
 
   /**
-   * 保留期裁剪：已完成的调用、设备日志、脚本日志各按同一保留期删除。
+   * 清理已完成调用；日志保留期由 Workers Logs 管理。
    * @param {number} now
    * @returns {void}
    */
@@ -25,8 +25,6 @@ export class ServiceMaintenance {
     // 租约和快照会频繁唤醒 alarm，历史记录无需跟着每次扫描。
     if (this.retention_pruned_at === null || now - this.retention_pruned_at >= 3600000) {
       this.repo.calls.delete_completed_before(now - RETENTION_MILLISECONDS);
-      this.repo.devices.delete_logs_before(now - RETENTION_MILLISECONDS);
-      this.repo.script_logs.delete_before(now - RETENTION_MILLISECONDS);
       this.retention_pruned_at = now;
     }
     // route 缓存的 L2 是按绝对过期时间判定的（TTL 只有分钟级，不是保留期），

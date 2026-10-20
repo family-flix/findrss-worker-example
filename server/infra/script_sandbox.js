@@ -26,7 +26,6 @@ import {
   SCRIPT_MODULE_ROUTE_EXPORT,
   SCRIPT_OUTPUT_BYTES,
 } from "../lib/constants.js";
-import { redact_log_value } from "../lib/log_redact.js";
 import { validate_image_proxy_route, validate_script_route_path } from "../lib/image_proxy.js";
 import { script_output } from "../lib/script_output.js";
 import { RssRoutePatternModel } from "../domain/rss_route.js";
@@ -682,44 +681,5 @@ export async function execute_script_inner(
     try {
       runtime.dispose();
     } catch {}
-  }
-}
-
-/**
- * 结构化 console 输出，字段扁平便于 CF Workers Logs 按字段查询；DO 表供管理后台内查看。
- * 成功走 console.log、失败走 console.error；error 只取首行，避免整段 stack 刷屏。
- * @param {Record<string, unknown>} record
- * @returns {void}
- */
-export function emit_script_log(record) {
-  try {
-    const status = record.status === "ok" ? "ok" : "error";
-    const error_line = String(record.error_text ?? record.message ?? "").split("\n", 1)[0];
-    const payload = JSON.stringify({
-      event: "script.exec",
-      route: String(record.route ?? ""),
-      path: String(record.path ?? ""),
-      source: String(record.source ?? ""),
-      status,
-      phase: String(record.phase ?? ""),
-      method: String(record.method ?? ""),
-      pathname: String(record.pathname ?? ""),
-      params: redact_log_value(record.params ?? {}),
-      elapsed_ms: Number(record.elapsed_ms ?? 0),
-      invoked: record.invoked === true,
-      line_count: Array.isArray(record.lines) ? record.lines.length : 0,
-      error: error_line.slice(0, 500),
-    });
-    if (status === "ok") {
-      console.log(payload);
-    } else {
-      console.error(payload);
-    }
-  } catch (error) {
-    console.error("failed to emit script log", {
-      event: "script.exec",
-      route: String(record.route ?? ""),
-      error: error instanceof Error ? error.message : String(error),
-    });
   }
 }

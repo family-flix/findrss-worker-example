@@ -103,26 +103,24 @@ test("未登记源的 RSS 调度复用扫描，尝试时间、排序、删除、
   assert.equal(new RepositoryRssRouteCache(store).public_schedule()[1].attempted_at, 1000);
 });
 
-test("历史记录每小时清理，缓存过期检查继续执行，清理失败可重试", () => {
-  const calls = [], devices = [], scripts = [], cache = [];
+test("历史任务每小时清理且失败可重试，缓存过期检查继续执行，不清理托管日志", () => {
+  const calls = [], cache = [];
   let fail = false;
   const repo = {
-    calls: { delete_completed_before: cutoff => calls.push(cutoff) },
-    devices: { delete_logs_before: cutoff => { if (fail) throw new Error("cleanup failed"); devices.push(cutoff); } },
-    script_logs: { delete_before: cutoff => scripts.push(cutoff) },
+    calls: { delete_completed_before: cutoff => { if (fail) throw new Error("cleanup failed"); calls.push(cutoff); } },
+    devices: { delete_logs_before() { assert.fail("不能清理旧日志表"); } },
+    script_logs: { delete_before() { assert.fail("不能清理旧日志表"); } },
     rss_route_cache: { delete_expired: now => cache.push(now) },
   };
   const service = new ServiceMaintenance({ repo });
   for (const now of [0, 5000, 3599999, 3600000]) service.prune_retention(now);
   assert.deepEqual(calls, [-RETENTION_MILLISECONDS, 3600000 - RETENTION_MILLISECONDS]);
-  assert.deepEqual(devices, calls);
-  assert.deepEqual(scripts, calls);
   assert.equal(cache.length, 4);
   fail = true;
   assert.throws(() => service.prune_retention(7200000), /cleanup failed/);
   fail = false;
   service.prune_retention(7200001);
-  assert.equal(devices.at(-1), 7200001 - RETENTION_MILLISECONDS);
+  assert.equal(calls.at(-1), 7200001 - RETENTION_MILLISECONDS);
 });
 
 test("历史调用清理和普通缓存的过期、计数、淘汰使用对应索引", t => {

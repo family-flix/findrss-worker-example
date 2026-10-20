@@ -51,24 +51,24 @@ test("消息接口要求管理员身份、保留分页参数并拒绝跨站 Basi
   } }), env)).status, 403);
 });
 
-test("错误持久化后推送一次消息，成功不推送，消息参数脱敏且历史可分页", () => {
+test("错误持久化后推送一次消息，成功不推送，消息参数脱敏且历史可分页", async () => {
   const rows = [], events = [];
   const service = new ServiceScript({ repo: { script_logs: {
     insert(row) { rows.push({ ...row, id: rows.length + 1 }); },
     list_errors(before, limit) { return rows.filter(row => row.status === "error" && (before === null || row.id < before)).reverse().slice(0, limit); },
   } }, ports: {}, app: {} });
   service.message_listeners.add(value => events.push(value));
-  service.record_log({ status: "ok" });
-  service.record_log({ status: "error", params: { gh: "gh_1" }, query: { token: "secret" } });
-  service.record_log({ status: "error", params: { gh: "gh_2" } });
+  await service.record_log({ status: "ok" });
+  await service.record_log({ status: "error", params: { gh: "gh_1" }, query: { token: "secret" } });
+  await service.record_log({ status: "error", params: { gh: "gh_2" } });
   assert.equal(events.length, 2);
-  const first = service.list_messages(new URL("https://internal/_admin/messages?limit=1"));
+  const first = await service.list_messages(new URL("https://internal/_admin/messages?limit=1"));
   assert.equal(first.messages[0].params.gh, "gh_2");
   assert.equal(first.has_more, true);
-  const second = service.list_messages(new URL("https://internal/_admin/messages?before_id=" + first.next_before_id));
+  const second = await service.list_messages(new URL("https://internal/_admin/messages?before_id=" + first.next_before_id));
   assert.equal(second.messages[0].query.token, "[redacted]");
   assert.equal(second.has_more, false);
-  assert.throws(() => service.list_messages(new URL("https://internal/_admin/messages?before_id=oops")), /invalid before_id/);
+  await assert.rejects(service.list_messages(new URL("https://internal/_admin/messages?before_id=oops")), /invalid before_id/);
 });
 
 test("删除已读消息要求管理员身份和有效边界，删除全部旧错误并保留未读与成功日志", async t => {

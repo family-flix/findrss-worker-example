@@ -117,12 +117,16 @@ export class ServiceScript {
   }
 
   record_log(record) {
-    if (!record_script_log(this.repo, record) || record.status !== "error") return;
-    for (const send of this.message_listeners) send({ type: "messages.changed" });
-    if (this.app.webhook_settings?.settings().url) {
-      const message = this.list_messages(new URL("https://internal/_admin/messages?limit=1")).messages[0];
-      this.ports.wait_until(this.app.webhook_settings.push_message(message));
-    }
+    const pending = (async () => {
+      const row = await record_script_log(this.repo, record);
+      if (record.status !== "error") return;
+      for (const send of this.message_listeners) send({ type: "messages.changed" });
+      if (this.app.webhook_settings?.settings().url) {
+        await this.app.webhook_settings.push_message(this.message_value(row));
+      }
+    })().catch(error => console.warn("script log notification failed", error.message));
+    this.ports.wait_until?.(pending);
+    return pending;
   }
 
   resolve_public_origin(request) {
@@ -135,30 +139,34 @@ export class ServiceScript {
     return "";
   }
 
-  delete_read_messages(url) {
+  async delete_read_messages(url) {
     const read_id = Number(url.searchParams.get("read_id"));
     if (!Number.isSafeInteger(read_id) || read_id <= 0) throw do_error("invalid read_id", 400);
-    this.repo.script_logs.delete_errors_through(read_id);
+    await this.repo.script_logs.delete_errors_through(read_id);
     for (const send of this.message_listeners) send({ type: "messages.changed" });
     return { ok: true };
   }
 
-  list_messages(url) {
+  async list_messages(url) {
     const parsed = ScriptLogQueryModel.fromQuery(url, { require_route: false });
     if (!parsed.ok) throw do_error(parsed.error.message, parsed.error.status);
     const query = parsed.model;
-    const rows = this.repo.script_logs.list_errors(query.before_id, query.limit + 1);
+    let rows;
+    try { rows = await this.repo.script_logs.list_errors(query.before_id, query.limit + 1); }
+    catch (error) { throw do_error(error.message, 503); }
     const has_more = rows.length > query.limit;
     const page = rows.slice(0, query.limit);
     return {
-      messages: page.map(row => ({
-        ...ScriptLogModel.fromRow(row).toValue(),
-        script_name: ScriptModel.fromRow({ metadata_json: row.script_metadata_json }).toValue().name || row.path || "未保存的脚本",
-      })),
+      messages: page.map(row => this.message_value(row)),
       has_more,
       next_before_id: has_more ? page[page.length - 1].id : null,
-      retention_milliseconds: RETENTION_MILLISECONDS,
+      retention_milliseconds: this.repo.script_logs.retention_milliseconds ?? RETENTION_MILLISECONDS,
     };
+  }
+
+  message_value(row) {
+    return { ...ScriptLogModel.fromRow(row).toValue(),
+      script_name: ScriptModel.fromRow({ metadata_json: row.script_metadata_json ?? this.repo.scripts?.find_config(row.route)?.metadata_json }).toValue().name || row.path || "未保存的脚本" };
   }
 
   /**
@@ -762,6 +770,7 @@ export class ServiceScript {
     if (!this.repo.scripts.exists(script_id)) {
       throw do_error("script not found", 404);
     }
+    await this.repo.script_logs.delete_for_route(script_id);
     this.repo.rss_cookie_grants?.revoke(script_id);
     this.repo.scripts.delete(script_id);
     this.repo.script_releases?.delete_for_script(script_id);
@@ -775,7 +784,6 @@ export class ServiceScript {
       if (this.ports.wait_until) this.ports.wait_until(pending);
       else await pending;
     }
-    this.repo.script_logs.delete_for_route(script_id);
     this.invalidate_routes();
     await this.app.discovery?.publish_catalog();
     return { removed: true, id: script_id }
@@ -1544,25 +1552,24 @@ export class ServiceScript {
   /**
    * 按 route 倒序翻页读取脚本执行日志（id 倒序 + before_id，形状对齐 list_device_logs）。
    * @param {URL} url
-   * @returns {Record<string, unknown>}
+   * @returns {Promise<Record<string, unknown>>}
    */
-  list_script_logs(url) {
+  async list_script_logs(url) {
     const parsed_query = ScriptLogQueryModel.fromQuery(url);
     if (!parsed_query.ok) {
       throw do_error(parsed_query.error.message, parsed_query.error.status);
     }
     const query = parsed_query.model;
-    const rows = this.repo.script_logs.list_by_route(
-      query.route,
-      query.before_id,
-      query.limit + 1);
+    let rows;
+    try { rows = await this.repo.script_logs.list_by_route(query.route, query.before_id, query.limit + 1); }
+    catch (error) { throw do_error(error.message, 503); }
     const has_more = rows.length > query.limit;
     const page = has_more ? rows.slice(0, query.limit) : rows;
     return {
       logs: page.map((row) => ScriptLogModel.fromRow(row).toValue()),
       has_more,
       next_before_id: has_more && page.length > 0 ? page[page.length - 1].id : null,
-      retention_milliseconds: RETENTION_MILLISECONDS,
+      retention_milliseconds: this.repo.script_logs.retention_milliseconds ?? RETENTION_MILLISECONDS,
     }
   }
 }

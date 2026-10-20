@@ -48,6 +48,22 @@ test("只观察实际状态变更，设备心跳和成功日志不触发后台�
   assert.deepEqual(socket.sent[0].events.map(event => event.type), ["device.logs", "messages.changed"]);
 });
 
+test("异步日志写入成功后通知后台，失败时不产生更新事件", async () => {
+  const f = fixture(), socket = f.socket(["device.logs", "messages.changed"]);
+  const repo = { devices: { async insert_log(row) { if (row.fail) throw new Error("R2 failed"); return row; } },
+    script_logs: { async insert(row) { if (row.fail) throw new Error("R2 failed"); return row; } } };
+  observe_admin_changes(repo, f.hub);
+  const pending = repo.devices.insert_log({ device_id: "device" });
+  assert.equal(f.timers.length, 0);
+  assert.deepEqual(await pending, { device_id: "device" });
+  await repo.script_logs.insert({ status: "error" });
+  f.timers.shift()();
+  assert.deepEqual(socket.sent[0].events.map(event => event.type), ["device.logs", "messages.changed"]);
+  await assert.rejects(repo.devices.insert_log({ device_id: "device", fail: true }), /R2 failed/);
+  await assert.rejects(repo.script_logs.insert({ status: "error", fail: true }), /R2 failed/);
+  assert.equal(f.timers.length, 0);
+});
+
 test("两个助手在同一连接运行，关闭一个只取消对应任务，休眠后可重建逻辑通道", async () => {
   const f = fixture(), socket = f.socket(), pending = [], signals = [];
   const run = (_input, emit, signal) => {

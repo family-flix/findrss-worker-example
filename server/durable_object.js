@@ -50,7 +50,8 @@ import { RepositoryScript } from "./repository/script.js";
 import { RepositoryScriptRelease } from "./repository/script_release.js";
 import { RepositoryPlatform } from "./repository/platform.js";
 import { RepositoryTag } from "./repository/tag.js";
-import { RepositoryScriptLog } from "./repository/script_log.js";
+import { RepositoryWorkersLogs } from "./repository/workers_logs.js";
+import { WorkersLogs } from "./infra/workers_logs.js";
 import { RepositoryRssRouteCache } from "./repository/rss_route_cache.js";
 import { RepositoryUser } from "./repository/user.js";
 import { RepositoryScriptAgent } from "./repository/script_agent.js";
@@ -415,7 +416,6 @@ export class APIDurableObject extends DurableObject {
       script_releases: new RepositoryScriptRelease({ sql: this.ctx.storage.sql }),
       platforms: new RepositoryPlatform({ sql: this.ctx.storage.sql }),
       tags: new RepositoryTag({ sql: this.ctx.storage.sql }),
-      script_logs: new RepositoryScriptLog({ sql: this.ctx.storage.sql }),
       rss_route_cache: new RepositoryRssRouteCache({ sql: this.ctx.storage.sql, storage: this.ctx.storage }),
       users: new RepositoryUser({ sql: this.ctx.storage.sql }),
       script_agent: new RepositoryScriptAgent({ sql: this.ctx.storage.sql }),
@@ -440,6 +440,9 @@ export class APIDurableObject extends DurableObject {
         persist_max_bytes: RSS_ROUTE_CACHE_PERSIST_MAX_BYTES,
       }),
     };
+    this.logs = new RepositoryWorkersLogs({ telemetry: new WorkersLogs(env), object_store: ports.object_store });
+    Object.assign(this.repo.devices, this.logs.devices);
+    this.repo.script_logs = this.logs.scripts;
     /** 应用服务注册表：兄弟服务经 `this.app.<svc>.<method>` 互相调用。 */
     this.app = {};
     this.app.events = new AdminSocketHub(ctx);

@@ -1,2 +1,8 @@
 # 必填，无默认值；本地开发时复制为 .dev.vars 并填写，生产部署时请设置独立的随机长密码。
 ADMIN_PASSWORD=
+
+# 后台日志查询；不影响 Workers Logs 的 console 日志采集。
+# API Token 需要目标账户的 Workers Observability Write 权限，仅供服务端使用。
+CLOUDFLARE_ACCOUNT_ID=
+CLOUDFLARE_WORKER_NAME=
+CLOUDFLARE_API_TOKEN=

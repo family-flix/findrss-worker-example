@@ -43,10 +43,12 @@
   "browser": {
     "binding": "BROWSER"
   },
-  // 脚本执行日志的结构化 console 输出（emit_script_log）需要 Workers Logs 才能查询。
+  // 两类业务日志由 Workers Logs 保存；关闭额外请求日志，避免设备心跳重复计数。
   "observability": {
     "logs": {
-      "enabled": true
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": false
     }
   },
   "rules": [

@@ -7,7 +7,9 @@ export function observe_admin_changes(repo, events) {
       if (typeof original !== "function") continue;
       repo[name][method] = function (...args) {
         const result = original.apply(this, args);
-        for (const topic of topics) events.invalidate(topic, id(args));
+        const notify = () => { for (const topic of topics) events.invalidate(topic, id(args)); };
+        if (result?.then) return result.then(value => { notify(); return value; });
+        notify();
         return result;
       };
     }
@@ -24,7 +26,9 @@ export function observe_admin_changes(repo, events) {
   const insert = repo.script_logs?.insert;
   if (insert) repo.script_logs.insert = function (fields) {
     const result = insert.call(this, fields);
-    if (fields.status === "error") events.invalidate("messages.changed");
+    const notify = () => { if (fields.status === "error") events.invalidate("messages.changed"); };
+    if (result?.then) return result.then(value => { notify(); return value; });
+    notify();
     return result;
   };
 }
