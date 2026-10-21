@@ -616,7 +616,11 @@ export class ServiceTask {
       return;
     }
     const now = Date.now();
-    this.repo.calls.set_running(row.id, CallModel.lease_deadline(now), now);
+    if (row.status === "running") {
+      this.repo.calls.set_heartbeat(row.id, CallModel.lease_deadline(now), now);
+    } else {
+      this.repo.calls.set_running(row.id, CallModel.lease_deadline(now), now);
+    }
     socket.send(JSON.stringify({ type: "task.accepted", task_id: row.id }));
     this.app.devices.record_device_log(
       attachment.device_id,

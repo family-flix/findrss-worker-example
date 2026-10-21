@@ -37,7 +37,7 @@ export class ServiceDevice {
       this.close_unauthorized_connections();
       return;
     }
-    this.record_device_activity(attachment);
+    this.record_device_activity(socket, attachment);
 
     const text = typeof message === "string" ? message : new TextDecoder().decode(message);
     if (text.length > MAX_BODY_BYTES) {
@@ -145,11 +145,16 @@ export class ServiceDevice {
   }
 
   /**
+   * @param {WebSocket} socket
    * @param {import("../../infra/device_socket.js").SocketAttachment} attachment
    * @returns {void}
    */
-  record_device_activity(attachment) {
-    this.repo.devices.set_seen(attachment.device_id, attachment.connection_id, Date.now());
+  record_device_activity(socket, attachment) {
+    const now = Date.now();
+    // 附件随 WebSocket 休眠恢复；SQL 只保存检查点，实时状态从附件读取。
+    attachment.last_seen_at = now;
+    socket.serializeAttachment(attachment);
+    this.repo.devices.set_seen(attachment.device_id, attachment.connection_id, now);
   }
 
   /**
@@ -302,7 +307,7 @@ export class ServiceDevice {
       .get_all()
       .map(socket_attachment)
       .filter((item) => item !== null && (!this.app.device_tokens || this.app.device_tokens.is_active(item.device_token_id)));
-    const active_connection_ids = new Set(active_devices.map((device) => device.connection_id));
+    const active_connections = new Map(active_devices.map((device) => [device.connection_id, device]));
     /** @type {DeviceLoadRow[]} */
     const load_rows = this.repo.devices.list_load_counts();
     const active_counts = new Map(
@@ -312,7 +317,8 @@ export class ServiceDevice {
     const now = Date.now();
     const devices = registry_rows.map((row) => {
       const disabled = Number(row.disabled) === 1;
-      const online = !disabled && active_connection_ids.has(row.connection_id);
+      const active_connection = active_connections.get(row.connection_id);
+      const online = !disabled && active_connection !== undefined;
       const active_tasks = active_counts.get(row.device_id) ?? 0;
       const max_concurrency = DeviceModel.normalize_concurrency(row.max_concurrency);
       if (!online && row.status === "online") {
@@ -335,7 +341,7 @@ export class ServiceDevice {
         device_os: row.device_os || "unknown",
         methods: DeviceModel.parse_methods(row.methods_json),
         connected_at: row.connected_at,
-        last_seen_at: row.last_seen_at,
+        last_seen_at: online ? Math.max(row.last_seen_at, active_connection.last_seen_at || 0) : row.last_seen_at,
         disconnected_at: online ? null : row.disconnected_at ?? now,
         active_tasks,
         max_concurrency,

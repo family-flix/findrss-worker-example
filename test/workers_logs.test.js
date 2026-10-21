@@ -115,7 +115,7 @@ test("设备心跳不等待查询，完整错误立即通知与发送 Webhook；
   assert.equal(hooks[0].lines[0].text, "full log");
   assert.equal(f.events[0].source.query_json, '{"token":"[redacted]"}');
   const devices = new ServiceDevice({ repo: { devices: { ...f.logs.devices, set_seen() {} } }, ports: { wait_until: value => pending.push(value) }, app: {} });
-  await devices.webSocketMessage({ deserializeAttachment: () => ({ device_id: "device", connection_id: "connection" }), send: message => sent.push(JSON.parse(message)) }, '{"type":"client.heartbeat"}');
+  await devices.webSocketMessage({ deserializeAttachment: () => ({ device_id: "device", connection_id: "connection" }), serializeAttachment() {}, send: message => sent.push(JSON.parse(message)) }, '{"type":"client.heartbeat"}');
   await Promise.all(pending);
   assert.equal(sent[0].type, "client.heartbeat.ack");
   assert.equal(f.requests.length, 0);

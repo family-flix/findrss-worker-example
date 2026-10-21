@@ -77,7 +77,7 @@ test("DDL 里的每个索引只引用同一份 DDL 里定义过的列", () => {
   }
 });
 
-test("依赖 ALTER 补列的四个索引不得进 API_SCHEMA_SQL", () => {
+test("依赖 ALTER 补列或已停用的索引不得进 API_SCHEMA_SQL", () => {
   for (const name of ["calls_access_token", "calls_coalesce", "access_tokens_user", "scripts_path"]) {
     assert.equal(
       declared_indexes().some((index) => index.name === name),

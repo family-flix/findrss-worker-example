@@ -2,9 +2,8 @@
 // 能在纯 node --test 下静态断言（durable_object.js 依赖 `cloudflare:workers`，Node 加载不了）。
 //
 // **这里只放可以在任何库上先跑的 CREATE**：`CREATE TABLE IF NOT EXISTS` 对已存在的表是
-// no-op，不会补列，所以带 PRAGMA 守卫的 ALTER 与依赖它们的索引（calls_access_token、
-// calls_coalesce、access_tokens_user、scripts_path）必须留在 constructor 里、
-// 按原顺序跑在 ALTER 之后。
+// no-op，不会补列，所以带 PRAGMA 守卫的 ALTER 与依赖它们的索引（calls_coalesce、
+// access_tokens_user、scripts_path）必须留在 constructor 里、按原顺序跑在 ALTER 之后。
 // 本轮之前它们和 CREATE 混在一起；提前 CREATE 是安全的，因为被 ALTER 的表在本 DDL 里
 // 已经带着新列（新库直接建全，老库靠随后的 ALTER 补，索引再其后）。
 
@@ -24,7 +23,7 @@ export function migrate_script_tables(sql) {
 }
 
 // 修改 schema 或启动迁移时递增；已完成的迁移不在每次 DO 唤醒时重跑。
-export const API_SCHEMA_VERSION = 1;
+export const API_SCHEMA_VERSION = 2;
 
 /** 本模块 DDL 里恰好这些表。 @type {readonly string[]} */
 export const API_TABLE_NAMES = Object.freeze([
@@ -259,8 +258,6 @@ export const API_SCHEMA_SQL = `
     status TEXT NOT NULL,
     disabled INTEGER NOT NULL DEFAULT 0
   );
-  CREATE INDEX IF NOT EXISTS devices_status
-    ON devices(status, last_seen_at);
   CREATE TABLE IF NOT EXISTS device_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id TEXT NOT NULL,

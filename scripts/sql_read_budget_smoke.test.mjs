@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
-// Real Workers SQL counters, isolated in-memory SQLite. This measures rows
-// scanned rather than estimating cost from returned rows or query count.
-test("统计冷启动、任务列表、快照目录发布及清理的实际 SQL 读取行数", { timeout: 120000 }, async t => {
+// Real Workers SQL counters, isolated in-memory SQLite. Measure rows read and
+// written (including indexes), rather than returned rows or query count.
+test("统计冷启动、目录调度、设备心跳和任务流转的实际 SQL 读写行数", { timeout: 120000 }, async t => {
   const root = fileURLToPath(new URL("../", import.meta.url));
   const source = await readFile(new URL("../server/durable_object.js", import.meta.url), "utf8");
   const start = source.indexOf('    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS api_schema_version');
@@ -28,6 +28,7 @@ test("统计冷启动、任务列表、快照目录发布及清理的实际 SQL 
     import { RepositoryTag } from "./server/repository/tag.js";
     import { RepositoryScript } from "./server/repository/script.js";
     import { RepositoryCall } from "./server/repository/call.js";
+    import { RepositoryDevice } from "./server/repository/device.js";
     import { RepositoryScriptRelease } from "./server/repository/script_release.js";
     import { ScriptSourceStore } from "./server/infra/script_source_store.js";
     import { ServiceDiscovery } from "./server/service/durable_object/discovery.js";
@@ -52,7 +53,8 @@ test("统计冷启动、任务列表、快照目录发布及清理的实际 SQL 
         const reports = [];
         function record(label) {
           const queries = cursors.map(({query,cursor}) => ({ query: query.replace(/\\s+/g,' ').trim().slice(0,180), rows_read: cursor.rowsRead, rows_written: cursor.rowsWritten }));
-          reports.push({ label, rows_read: queries.reduce((sum,item) => sum + item.rows_read,0), queries: queries.length,
+          reports.push({ label, rows_read: queries.reduce((sum,item) => sum + item.rows_read,0),
+            rows_written: queries.reduce((sum,item) => sum + item.rows_written,0), queries: queries.length,
             expensive: queries.sort((a,b) => b.rows_read - a.rows_read).slice(0,4) });
         }
         function measure(label, run) { cursors.length = 0; run(); record(label); }
@@ -89,6 +91,37 @@ test("统计冷启动、任务列表、快照目录发布及清理的实际 SQL 
           const scripts = new RepositoryScript({sql}).list();
           repo.platforms.import_published(scripts); repo.tags.import_published(scripts);
         });
+        const devices = new RepositoryDevice({sql});
+        devices.upsert_connection({device_id:'device',connection_id:'connection',methods_json:'["test"]',device_name:'Device',device_os:'test',max_concurrency:1,connected_at:1000000,last_seen_at:1000000});
+        native.exec('CREATE INDEX calls_access_token ON calls(access_token_id,created_at)');
+        native.exec('CREATE INDEX devices_status ON devices(status,last_seen_at)');
+        const calls = new RepositoryCall({sql});
+        function task_lifecycle() {
+          calls.insert({id:'write-task',method:'test',publisher_device_id:'publisher',access_token_id:null,credit_cost:0,target_device_id:'device',idempotency_key:null,coalesce_key:null,args_json:'{}',created_at:20000,updated_at:20000});
+          calls.assign('write-task','device','lease',140001,20001);
+          calls.set_running('write-task',140002,20002);
+          calls.set_completed('write-task','{}',20003);
+        }
+        measure('task_create_to_complete_before_upgrade', task_lifecycle);
+        native.exec("DELETE FROM calls WHERE id = 'write-task'");
+        native.exec('DELETE FROM call_status_counts WHERE count = 0');
+        measure('device_180_heartbeats_before_upgrade', () => {
+          for(let i=1;i<=180;i++) sql.exec("UPDATE devices SET last_seen_at = ?,status = 'online',disconnected_at = NULL WHERE device_id = ? AND connection_id = ?",1000000+i*20000,'device','connection');
+        });
+        native.exec("UPDATE devices SET last_seen_at = 1000000 WHERE device_id = 'device'");
+        native.exec('UPDATE api_schema_version SET version = 1');
+        measure('unused_write_indexes_upgrade', () => bootstrap(ctx));
+        if(native.exec("SELECT name FROM sqlite_master WHERE name IN ('calls_access_token','devices_status')").toArray().length) throw new Error('Unused write indexes survived upgrade');
+        measure('write_upgrade_second_run', () => bootstrap(ctx));
+        measure('device_180_heartbeats_one_hour', () => {
+          for(let i=1;i<=180;i++) new RepositoryDevice({sql}).set_seen('device','connection',1000000+i*20000);
+        });
+        measure('device_disconnect_and_duplicate', () => {
+          devices.set_offline('device','connection',4600001);
+          devices.set_offline('device','connection',4600002);
+        });
+        measure('task_create_to_complete', task_lifecycle);
+        native.exec("DELETE FROM calls WHERE id = 'write-task'");
         seed("INSERT INTO script_releases(id,script_id,version,script_hash,bytes,script,metadata_json,created_at) SELECT 'release-'||i,'script-1','1.0.'||i,'hash-'||i,10,'',json_object('source_ref',json_object('key','scripts/script-1/1.0.'||i||'.js')),i FROM n",100);
         const maintenance = new ScriptMaintenance();
         maintenance.repo = { scripts: new RepositoryScript({sql}), script_releases: new RepositoryScriptRelease({sql}) };
@@ -123,6 +156,14 @@ test("统计冷启动、任务列表、快照目录发布及清理的实际 SQL 
     const result = await response.json();
     console.log(JSON.stringify(result));
     const reads = label => result.reports.find(report => report.label === label).rows_read;
+    const writes = label => result.reports.find(report => report.label === label).rows_written;
+    assert.ok(writes('unused_write_indexes_upgrade') <= 3);
+    assert.equal(writes('write_upgrade_second_run'), 0);
+    assert.equal(writes('device_180_heartbeats_before_upgrade'), 360);
+    assert.equal(writes('device_180_heartbeats_one_hour'), 12);
+    assert.equal(writes('device_disconnect_and_duplicate'), 1);
+    assert.equal(writes('task_create_to_complete'), 28);
+    assert.equal(writes('task_create_to_complete_before_upgrade'), 29);
     assert.ok(reads("public_catalog_once") > 0);
     assert.ok(reads("public_catalog_per_source") <= reads("public_catalog_once") + 10);
     assert.ok(reads("calls_status_summary") <= 5);

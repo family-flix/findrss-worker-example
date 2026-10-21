@@ -111,13 +111,16 @@ export class RepositoryDevice {
    * @returns {void}
    */
   set_seen(device_id, connection_id, now) {
+    // 用数据库时间戳限流，DO 休眠或重启后仍不会重新按每条消息落库。
     this.sql.exec(
       `UPDATE devices
        SET last_seen_at = ?, status = 'online', disconnected_at = NULL
-       WHERE device_id = ? AND connection_id = ?`,
+       WHERE device_id = ? AND connection_id = ?
+         AND (last_seen_at <= ? OR status <> 'online' OR disconnected_at IS NOT NULL)`,
       now,
       device_id,
-      connection_id);
+      connection_id,
+      now - 5 * 60 * 1000);
   }
 
   /**
@@ -129,7 +132,8 @@ export class RepositoryDevice {
     this.sql.exec(
       `UPDATE devices
        SET status = 'offline', last_seen_at = ?, disconnected_at = ?
-       WHERE device_id = ? AND connection_id = ?`,
+       WHERE device_id = ? AND connection_id = ?
+         AND (status <> 'offline' OR disconnected_at IS NULL)`,
       now,
       now,
       device_id,
@@ -145,7 +149,7 @@ export class RepositoryDevice {
     this.sql.exec(
       `UPDATE devices
        SET status = 'offline', disconnected_at = ?
-       WHERE device_id = ? AND connection_id = ?`,
+       WHERE device_id = ? AND connection_id = ? AND status = 'online'`,
       now,
       device_id,
       connection_id);

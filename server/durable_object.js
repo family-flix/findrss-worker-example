@@ -223,11 +223,10 @@ export class APIDurableObject extends DurableObject {
         CREATE INDEX IF NOT EXISTS access_tokens_user
           ON access_tokens(user_id, created_at DESC);
       `);
-      // calls_access_token 依赖 calls.access_token_id（上面 ALTER 补的列）：老库上
-      // CREATE TABLE 是 no-op，这个索引必须排在 ALTER 之后，所以不能进 API_SCHEMA_SQL。
-      this.ctx.storage.sql.exec(
-        "CREATE INDEX IF NOT EXISTS calls_access_token ON calls(access_token_id, created_at)");
-      // 同上：calls_coalesce 依赖 calls.coalesce_key（上面 ALTER 补的列），必须排在 ALTER 之后。
+      // 当前查询不使用这两个索引，保留它们会放大任务和设备心跳的写入。
+      this.ctx.storage.sql.exec("DROP INDEX IF EXISTS calls_access_token");
+      this.ctx.storage.sql.exec("DROP INDEX IF EXISTS devices_status");
+      // calls_coalesce 依赖 calls.coalesce_key（上面 ALTER 补的列），必须排在 ALTER 之后。
       // 部分索引——绝大多数行的 coalesce_key 是 NULL，不该进索引。
       this.ctx.storage.sql.exec(
         "CREATE INDEX IF NOT EXISTS calls_coalesce ON calls(coalesce_key) WHERE coalesce_key IS NOT NULL");

@@ -19,6 +19,7 @@ import { DeviceModel } from "../domain/device_capacity.js";
  * @property {string} device_os
  * @property {number} max_concurrency
  * @property {number} [connected_at]
+ * @property {number} [last_seen_at]
  */
 
 /**
