@@ -39,6 +39,44 @@ test("管理 API 保留会话保护，内部转发才注入 secret；Bearer 调�
   assert.deepEqual(calls, ["/admin/api/overview", "/admin/api/overview"]);
 });
 
+test("管理 API 同步异常及异步拒绝均返回 JSON 500，覆盖会话与 Bearer 入口", async t => {
+  const failure = new Error("backend initialization failed: private details");
+  const log = t.mock.method(console, "error", () => {});
+  const { env } = fixture();
+  const api = { fetch() { throw failure; } };
+  const worker = create_worker({ api, admin });
+  const login = await worker.fetch(new Request("https://feeds.example/admin/auth/login", {
+    method: "POST", body: JSON.stringify({ password: env.ADMIN_PASSWORD }),
+  }), env);
+  const Cookie = login.headers.get("Set-Cookie").split(";")[0];
+  for (const fetch of [() => { throw failure; }, async () => { throw failure; }]) {
+    api.fetch = fetch;
+    for (const headers of [{ Cookie }, { Authorization: "Bearer admin-secret" }]) {
+      for (const path of ["/admin/api", "/admin/api/overview", "/admin/api/messages/ws"]) {
+        const response = await worker.fetch(new Request("https://feeds.example" + path + "?token=private", { headers }), env);
+        assert.equal(response.status, 500);
+        assert.match(response.headers.get("Content-Type"), /^application\/json/);
+        assert.equal(response.headers.get("Cache-Control"), "no-store");
+        assert.deepEqual(await response.json(), { error: "internal server error" });
+        assert.deepEqual(log.mock.calls.at(-1).arguments, ["Admin API request failed", "GET", path, failure]);
+      }
+    }
+  }
+  const unauthorized = await worker.fetch(new Request("https://feeds.example/admin/api/overview"), env);
+  assert.equal(unauthorized.status, 401);
+  assert.equal(log.mock.callCount(), 12);
+});
+
+test("管理 API 的错误边界覆盖会话处理且保留其他路由的异常", async t => {
+  const failure = new Error("session validation failed");
+  t.mock.method(console, "error", () => {});
+  const worker = create_worker({ admin: async () => { throw failure; } });
+  const response = await worker.fetch(new Request("https://feeds.example/admin/api/overview"), {});
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), { error: "internal server error" });
+  await assert.rejects(worker.fetch(new Request("https://feeds.example/admin/settings"), {}), error => error === failure);
+});
+
 test("公开目录、RSS、设备、账号接口继续调用同一 API，内部 DO 路径不对外公开", async () => {
   const { worker, env, calls } = fixture();
   for (const path of ["/api/sources", "/rss/demo?token=abc", "/v1/connect", "/reader/auth/session", "/findrss-logo.png"]) await worker.fetch(new Request("https://feeds.example" + path), env);

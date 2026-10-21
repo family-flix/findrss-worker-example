@@ -1,5 +1,6 @@
 // Route both websites and API without exposing internal DO routes.
 import { MCP_OAUTH_PATHS } from "./server/service/worker/mcp_oauth.js";
+import { error_response } from "./server/lib/http.js";
 
 export function create_worker({ api, admin, discovery }) {
   return {
@@ -16,11 +17,16 @@ export function create_worker({ api, admin, discovery }) {
         return Response.redirect(url.href, 302);
       }
       if (path.startsWith("/admin/")) {
-        if (
-          (path === "/admin/api" || path.startsWith("/admin/api/")) &&
-          request.headers.has("Authorization")
-        ) {
-          return api.fetch(request, env, ctx);
+        if (path === "/admin/api" || path.startsWith("/admin/api/")) {
+          try {
+            if (request.headers.has("Authorization")) {
+              return await api.fetch(request, env, ctx);
+            }
+            return await admin(request, env, api_fetch);
+          } catch (error) {
+            console.error("Admin API request failed", request.method, path, error);
+            return error_response("internal server error", 500);
+          }
         }
         return admin(request, env, api_fetch);
       }
