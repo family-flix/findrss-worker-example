@@ -9,6 +9,7 @@ function NetworkTestModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) =
     url: ui.ref("https://m.qidian.com/book/1036526469/catalog/"),
     timeout: ui.ref("10"),
     transport: ui.ref("fetch"),
+    execution: ui.ref("worker"),
     cookie_domains: ui.ref([]), matching_domains: ui.ref([]), selected_domains: ui.ref([]), cookies_loading: ui.ref(false), cookies_error: ui.ref(""),
     headers: ui.ref(Object.entries({
       Referer: "https://m.qidian.com/book/1036526469/",
@@ -43,7 +44,7 @@ function NetworkTestModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) =
   const methods = {
     set(key, value) {
       if (state.busy.value) return;
-      if (["url", "timeout", "transport"].includes(key)) { state[key].as(value); state.copied.as(false); }
+      if (["url", "timeout", "transport", "execution"].includes(key)) { state[key].as(value); state.copied.as(false); }
       if (key === "url") {
         match_cookie_domains();
         let target;
@@ -114,6 +115,7 @@ function NetworkTestModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) =
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error();
     } catch { state.error.as("请输入完整的 HTTP(S) 网址"); return; }
     if (!["fetch", "tcp"].includes(state.transport.value)) { state.error.as("请选择 Fetch 或 TCP 传输方式"); return; }
+    if (!["worker", "script"].includes(state.execution.value)) { state.error.as("请选择有效的执行位置"); return; }
     const timeout_ms = Number(state.timeout.value) * 1000;
     if (!Number.isInteger(timeout_ms) || timeout_ms < 1000 || timeout_ms > 60000) {
       state.error.as("超时须为 1–60 秒"); return;
@@ -135,7 +137,7 @@ function NetworkTestModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) =
     controller = active;
     state.busy.as(true); state.copying.as(export_curl);
     try {
-      const response = await fetch_impl("/admin/api/network-test" + (export_curl ? "/curl" : ""), {
+      const response = await fetch_impl("/admin/api/network-test" + (export_curl ? "/curl" : "") + (state.execution.value === "script" ? "?execution=script" : ""), {
         method: "POST", credentials: "same-origin", cache: "no-store", signal: active.signal,
         headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: url.href, timeout_ms, transport: state.transport.value, headers, cookie_domains: state.selected_domains.value }),
       });

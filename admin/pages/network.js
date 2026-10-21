@@ -31,7 +31,7 @@ function NetworkTestPage({ view } = {}) {
       },
       onUnmounted() { stop_show?.(); stop_hide?.(); methods.leave(); } }, [
       View({ class: "text-muted text-sm", attributes: { n: "network-description" } }, [
-        "由当前 Worker 发起 GET 请求，默认使用起点示例的请求头。可修改网址和请求头，比较不同网站的访问结果。",
+        "可选择入口 Worker 或脚本宿主发起 GET 请求，默认使用起点示例的请求头。可修改网址和请求头，比较访问结果。",
       ]),
       Input({ label: "目标网址", value: state.url, disabled: state.busy, placeholder: "https://example.com/",
         help: "修改网址后会自动填入 Referer，仍可在下方手动编辑。",
@@ -48,6 +48,16 @@ function NetworkTestPage({ view } = {}) {
           onChange: event => methods.set("transport", event.target.value) }),
         View({ class: "text-muted text-sm", attributes: { n: "network-transport-help" } }, [
           "TCP 与 Bilibili 脚本使用相同传输：HTTP/1.1，响应及解压后最多 2MB。复现脚本请求时，请同时填写相同网址、请求头并选择对应 Cookie。",
+        ]),
+      ]),
+      View({ class: "grid min-w-0 gap-space-2", attributes: { n: "network-execution-field" } }, [
+        View({ class: "text-sm", attributes: { n: "network-execution-label", id: "network-execution-label" } }, ["执行位置"]),
+        Select({ value: state.execution, disabled: state.busy,
+          options: [{ value: "worker", label: "入口 Worker（默认）" }, { value: "script", label: "脚本宿主（DO）" }],
+          attributes: { n: "network-execution", "aria-labelledby": "network-execution-label" },
+          onChange: event => methods.set("execution", event.target.value) }),
+        View({ class: "text-muted text-sm", attributes: { n: "network-execution-help" } }, [
+          "选择脚本宿主后，由运行脚本的同一个 Durable Object 发起请求，可对比两个执行位置的访问结果。此模式不运行 QuickJS 脚本。",
         ]),
       ]),
       View({ class: "grid min-w-0 gap-space-2", attributes: { n: "network-cookies" } }, [
@@ -119,6 +129,7 @@ function NetworkTestPage({ view } = {}) {
             return status_badge(result.status, "network-status", result.status == null ? "未收到 HTTP 响应" : `HTTP ${result.status} ${result.status_text || ""}`.trim());
           } }),
           computed(state.result, result => result ? [
+            result.execution ? `执行 ${result.execution === "script" ? "脚本宿主（DO）" : "入口 Worker"}` : "",
             result.transport ? `传输 ${result.transport === "tcp" ? "TCP" : "Fetch"}` : "",
             `总耗时 ${result.elapsed_ms} ms`,
             result.headers_ms == null ? "" : `${result.transport === "tcp" ? "传输完成" : "收到响应头"} ${result.headers_ms} ms`,

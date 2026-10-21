@@ -6,6 +6,7 @@ import { admin_network_test } from "../server/service/worker/network_test.js";
 import { handle_admin_request } from "../admin.js";
 import { create_worker } from "../router.js";
 import { mock_tcp_http } from "./support/tcp_socket_fixture.js";
+import { route } from "../durable_object_router.js";
 
 register("./support/quickjs_wasm_hook.js", import.meta.url);
 const { default: api } = await import("../api.js");
@@ -59,6 +60,55 @@ test("域名列表仅向管理员返回域名及数量，不包含 Cookie 名称
   const result = await response.json();
   assert.deepEqual(result, { domains: [{ domain: ".example.com", count: 2 }, { domain: "z.example", count: 1 }] });
   assert.doesNotMatch(JSON.stringify(result), /secret|private-value/);
+});
+
+test("脚本宿主测试经过管理员鉴权，在同一 DO 内请求并直接读取 Cookie，不转发管理员凭证", async t => {
+  const tcp = mock_tcp_http(t);
+  const forwarded = [];
+  const app = { scripts: { rss_cookies: () => [
+    { name: "SESSDATA", value: "fixture", domain: ".bilibili.com", path: "/", secure: true },
+  ] } };
+  const host = { ...env, API: { getByName(name) {
+    assert.equal(name, "api");
+    return { async fetch(request) {
+      forwarded.push(request.url);
+      assert.equal(request.headers.has("Authorization"), false);
+      assert.equal(request.headers.has("Cookie"), false);
+      return route(request, app);
+    } };
+  } } };
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    assert.equal(url, "https://api.bilibili.com/x/web-interface/nav");
+    assert.equal(options.headers.get("cookie"), "SESSDATA=fixture");
+    return Response.json({ code: 0 });
+  });
+  const make_request = (curl = false, headers = { Authorization: "Bearer test-admin" }) => new Request(
+    "https://app.example/admin/api/network-test" + (curl ? "/curl" : "") + "?execution=script", {
+      method: "POST", headers, body: JSON.stringify({ url: "https://api.bilibili.com/x/web-interface/nav",
+        transport: "tcp", cookie_domains: [".bilibili.com"] }),
+    });
+  assert.equal((await api.fetch(make_request(false, {}), host)).status, 401);
+  assert.equal((await api.fetch(make_request(true, {}), host)).status, 401);
+  assert.equal(forwarded.length, 0);
+  const result = await (await api.fetch(make_request(), host)).json();
+  assert.equal(result.execution, "script");
+  assert.equal(result.error, "");
+  assert.equal(result.body, '{"code":0}');
+  assert.equal(tcp.connections.length, 1);
+  const curl = await (await api.fetch(make_request(true), host)).json();
+  assert.match(curl.command, /cookie: SESSDATA=fixture/);
+  assert.equal(tcp.connections.length, 1, "生成 curl 不请求目标网站");
+  assert.deepEqual(forwarded, ["https://internal/_admin/network-test?execution=script",
+    "https://internal/_admin/network-test/curl?execution=script"]);
+  const worker = create_worker({ api, admin: handle_admin_request });
+  assert.equal((await worker.fetch(new Request("https://app.example/_admin/network-test?execution=script"), host)).status, 404);
+  assert.equal((await api.fetch(new Request("https://app.example/admin/api/network-test?execution=script", {
+    method: "POST", headers: { Authorization: "Bearer test-admin" }, body: JSON.stringify({ url: "http://127.0.0.1/" }),
+  }), host)).status, 400);
+  assert.equal(forwarded.length, 2, "无效请求在转发 DO 前被拒绝");
+  assert.equal((await admin_network_test(new Request("https://app.example/admin/api/network-test?execution=unknown", {
+    method: "POST", body: "{}",
+  }), host)).status, 400);
 });
 
 test("TCP 使用与 Bilibili 脚本相同的传输、请求头和 Cookie，重定向仍校验地址与凭证", async t => {

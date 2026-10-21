@@ -177,7 +177,8 @@ export async function tcp_http_fetch(value, options = {}, connect_fn) {
     return await Promise.race([perform(), aborted]);
   } finally {
     signal.removeEventListener("abort", on_abort);
-    try { await socket.close(); } catch {}
+    // 关闭握手不能延长请求或取消的超时预算。
+    try { void socket.close().catch(() => {}); } catch {}
     try { reader.releaseLock(); } catch {}
     try { writer.releaseLock(); } catch {}
   }

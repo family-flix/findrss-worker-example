@@ -18,7 +18,26 @@ export const permissions = {
       id: "account_0",
       origin: "https://api.bilibili.com",
       path_prefix: "/",
-      names: ["SESSDATA", "bili_jct", "DedeUserID", "buvid3", "buvid4"],
+      names: [
+        "SESSDATA",
+        "bili_jct",
+        "DedeUserID",
+        "DedeUserID__ckMd5",
+        "buvid3",
+        "buvid4",
+        "buvid_fp",
+        "b_nut",
+        "_uuid",
+        "sid",
+        "rpdid",
+        "b_lsid",
+        "theme-tip-show",
+        "theme-avatar-tip-show",
+        "home_feed_column",
+        "browser_resolution",
+        "CURRENT_QUALITY",
+        "CURRENT_FNVAL",
+      ],
       purpose: "读取用户授权的 哔哩哔哩用户动态和视频 页面或接口",
     },
     {
@@ -378,24 +397,13 @@ export class BilibiliUserVideoRSS extends BilibiliRSS {
       })
       .join("");
   }
-  static headers(link) {
+  static headers(url) {
     return {
-      Accept: "*/*",
-      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+      Accept: "text/html,application/xhtml+xml",
+      "Accept-Language": "zh-CN,zh;q=0.9",
       "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
-      Origin: "https://space.bilibili.com",
-      Referer: link,
-      "Cache-Control": "no-cache",
-      Pragma: "no-cache",
-      Priority: "u=1, i",
-      "sec-ch-ua":
-        '"Google Chrome";v="155", "Chromium";v="155", "Not(A:Brand";v="24"',
-      "sec-ch-ua-mobile": "?0",
-      "sec-ch-ua-platform": '"macOS"',
-      "sec-fetch-dest": "empty",
-      "sec-fetch-mode": "cors",
-      "sec-fetch-site": "same-site",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+      Referer: url,
     };
   }
   static integer(value, fallback, max, name) {
@@ -454,32 +462,45 @@ export class BilibiliUserVideoRSS extends BilibiliRSS {
       const link = "https://space.bilibili.com/" + uid + "/upload/video";
       const space = "https://space.bilibili.com/" + uid;
       async function request(url) {
+        const started_at = Date.now();
+        const options = {
+          transport: "tcp",
+          timeout_ms: 10000,
+          headers: BilibiliUserVideoRSS.headers(url),
+        };
         try {
-          try {
-            const result_3 = await BilibiliUserVideoRSS.request_text(ctx, url, {
-              headers: BilibiliUserVideoRSS.headers(link),
-            });
-            if (result_3.error) throw result_3.error;
-            const text = result_3.data;
-            const result_4 = parseJSON(text);
-            if (result_4.error) throw result_4.error;
-            const result = result_4.data;
-            if (!result || typeof result !== "object") {
-              throw new Error("返回值不是 JSON 对象");
-            }
-            return Result.Ok(result);
-          } catch (error) {
-            return Result.Err(
-              new Error(
-                "B 站请求失败：" +
-                  error.message +
-                  "；请在 Cookie 管理同步有效的 .bilibili.com 登录 Cookie，并检查上游风控。",
-              ),
-              "UPSTREAM_INVALID_RESPONSE",
-            );
+          const result_3 = await BilibiliUserVideoRSS.request_text(
+            ctx,
+            url,
+            options,
+          );
+          if (result_3.error) throw result_3.error;
+          const text = result_3.data;
+          const result_4 = parseJSON(text);
+          if (result_4.error) throw result_4.error;
+          const result = result_4.data;
+          if (!result || typeof result !== "object") {
+            throw new Error("返回值不是 JSON 对象");
           }
+          return Result.Ok(result);
         } catch (error) {
-          return Result.Err(error, error?.code ?? "UPSTREAM_INVALID_RESPONSE");
+          if (ctx.route?.debug_request && ctx.log) {
+            ctx.log("B 站 API 请求失败", {
+              url,
+              elapsed_ms: Date.now() - started_at,
+            });
+            ctx.log("B 站 API 请求参数", options);
+          }
+          return Result.Err(
+            "B 站请求失败（" +
+              url.split("?")[0] +
+              "）：" +
+              error.message +
+              (error?.code === "UPSTREAM_TIMEOUT"
+                ? "（请求超时预算 " + options.timeout_ms / 1000 + " 秒）"
+                : ""),
+            error?.code ?? "UPSTREAM_INVALID_RESPONSE",
+          );
         }
       }
       const result_5 = await request(
@@ -575,6 +596,7 @@ export class BilibiliUserVideoRSS extends BilibiliRSS {
       const list_author = String(videos[0]?.author || uid);
       const items = [];
       let playable = 0;
+      let playback_error;
       let snapshot = 0;
       let face = BilibiliUserVideoRSS.avatar_url(videos[0]?.face);
       for (const video of videos) {
@@ -674,6 +696,7 @@ export class BilibiliUserVideoRSS extends BilibiliRSS {
           };
           playable++;
         } catch (error) {
+          playback_error ||= error;
           if (ctx.log) {
             ctx.log("视频地址获取失败", id, error.message);
           }
@@ -687,9 +710,11 @@ export class BilibiliUserVideoRSS extends BilibiliRSS {
       if (items.length > 0 && playable === 0) {
         return Result.Err(
           new Error(
-            "本页所有视频地址获取失败，请检查 Cookie 或播放接口；详情见脚本执行日志",
+            "本页所有视频地址获取失败：" +
+              playback_error.message +
+              "；详情见脚本执行日志",
           ),
-          "UPSTREAM_INVALID_RESPONSE",
+          playback_error?.code ?? "UPSTREAM_INVALID_RESPONSE",
         );
       }
       if (!face) {

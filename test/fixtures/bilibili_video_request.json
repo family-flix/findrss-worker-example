@@ -1,20 +1,15 @@
 {
   "headers": {
-    "accept": "*/*",
-    "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "cache-control": "no-cache",
-    "origin": "https://space.bilibili.com",
-    "pragma": "no-cache",
-    "priority": "u=1, i",
-    "referer": "https://space.bilibili.com/515883687/upload/video",
-    "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": "\"macOS\"",
-    "sec-fetch-dest": "empty",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-site": "same-site",
-    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+    "accept": "text/html,application/xhtml+xml",
+    "accept-language": "zh-CN,zh;q=0.9",
+    "referer": "https://api.bilibili.com/x/web-interface/nav",
+    "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
   },
+  "cookie_names": [
+    "buvid4", "theme-tip-show", "theme-avatar-tip-show", "home_feed_column", "browser_resolution",
+    "SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5", "_uuid", "CURRENT_QUALITY", "sid",
+    "buvid3", "b_nut", "buvid_fp", "CURRENT_FNVAL", "rpdid", "b_lsid"
+  ],
   "params": {
     "tid": "0",
     "special_type": "",

@@ -22,6 +22,7 @@ import { MCP_TOOLS } from "./server/lib/mcp_tools.js";
 import { resolve_discovery_source_feed_urls } from "./server/service/worker/discovery.js";
 import { CLIP_RESPONSE_HEADERS } from "./server/infra/clip_html.js";
 import { read_clip_json } from "./server/service/worker/clips.js";
+import { admin_network_test } from "./server/service/worker/network_test.js";
 
 /**
  * @param {Request} request
@@ -103,6 +104,10 @@ async function mcp_oauth_body(request, json) {
  */
 async function dispatch(request, app) {
   const url = new URL(request.url);
+  if (["/_admin/network-test", "/_admin/network-test/curl"].includes(url.pathname)) {
+    url.searchParams.set("execution", "script");
+    return admin_network_test(new Request(url, request), null, url.pathname.endsWith("/curl"), () => app.scripts.rss_cookies());
+  }
   if (url.pathname === "/_admin/events/ws" && request.method === "GET") return app.events.connect(request);
   if (url.pathname === "/_admin/clips") {
     if (request.method === "GET") return app.clips.list();

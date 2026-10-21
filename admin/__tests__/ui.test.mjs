@@ -199,13 +199,14 @@ test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使�
   Object.assign(context, { AbortController, Blob });
   context.FindRSSAdminShell = { Page: (_, children) => ui.View({ attributes: { n: "network-test-page" } }, children) };
   let status = 200;
-  const submitted = [], copied = [];
+  const submitted = [], copied = [], submitted_urls = [];
   context.navigator = { clipboard: { writeText: async text => copied.push(text) } };
   context.FindRSSAdminAuth = { fetch: async (url, options) => {
     if (url.endsWith("/cookie-domains")) return Response.json({ domains: [
       { domain: ".example.com", count: 2 }, { domain: "other.example", count: 1 },
     ] });
     submitted.push(JSON.parse(options.body));
+    submitted_urls.push(url);
     if (url.endsWith("/curl")) return Response.json({ command: "curl 'https://www.example.com/'" });
     return Response.json({ status, body_kind: "file", elapsed_ms: 10,
       requests: [{ status, url: "https://www.example.com/", elapsed_ms: 10 }] });
@@ -288,6 +289,11 @@ test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使�
     find(root, "network-url").events.onInput({ target: { value: "https://unmatched.example/" } });
     assert.equal(find(root, "network-cookie-domain-.example.com"), null);
     assert.ok(find(root, "network-cookies-no-match"));
+    const execution = find(root, "network-execution");
+    assert.equal(execution.state.attributes["aria-labelledby"], "network-execution-label");
+    for (const key of ["ArrowDown", "ArrowDown", "Enter"]) execution.events.onKeyDown({ key, preventDefault() {}, stopPropagation() {} });
+    await find(root, "network-test-start").events.onClick();
+    assert.equal(submitted_urls.at(-1), "/admin/api/network-test?execution=script");
   } finally { root.onUnmounted(); }
 });
 

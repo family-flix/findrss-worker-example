@@ -8,6 +8,31 @@ const set_headers = (model, headers) => {
   for (const [key, value] of Object.entries(headers)) model.methods.add_header(key, value);
 };
 
+test("执行位置默认 Worker，可切换脚本宿主，测试和 curl 均发送到对应位置", async () => {
+  const calls = [];
+  const model = NetworkTestModel({ ui, clipboard: { writeText: async () => {} }, fetch_impl: async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    model.methods.set("execution", "worker");
+    return Response.json(url.includes("/curl") ? { command: "curl --http1.1" } : { status: 200, execution: "script" });
+  } });
+  assert.equal(model.state.execution.value, "worker");
+  model.methods.set("execution", "script");
+  model.methods.set("transport", "tcp");
+  await model.methods.run();
+  await model.methods.copy_curl();
+  assert.deepEqual(calls.map(call => call.url), ["/admin/api/network-test?execution=script", "/admin/api/network-test/curl?execution=script"]);
+  assert.deepEqual(calls[0].body, calls[1].body);
+  assert.equal(model.state.execution.value, "script");
+  assert.equal(model.state.result.value.execution, "script");
+  assert.equal(model.state.copied.value, true);
+  model.methods.set("execution", "worker");
+  assert.equal(model.state.copied.value, false);
+  model.methods.set("execution", "unknown");
+  await model.methods.run();
+  assert.match(model.state.error.value, /执行位置/);
+  assert.equal(calls.length, 2);
+});
+
 test("传输方式默认 Fetch，可切换 TCP 并同时用于测试和 curl，忙碌时禁止切换", async () => {
   const calls = [];
   const model = NetworkTestModel({ ui, clipboard: { writeText: async () => {} }, fetch_impl: async (url, options) => {

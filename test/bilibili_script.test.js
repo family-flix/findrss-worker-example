@@ -7,6 +7,7 @@ import { RssRoutePatternModel } from "../server/domain/rss_route.js";
 import { FeedModel } from "../server/domain/feed_format.js";
 import { ScriptCookieAccess } from "../server/infra/script_cookie_access.js";
 import { mock_tcp_http } from "./support/tcp_socket_fixture.js";
+import { admin_network_test } from "../server/service/worker/network_test.js";
 
 beforeEach(t => {
   const tcp = mock_tcp_http(t);
@@ -27,15 +28,18 @@ const compiled = await compile_script_module(source);
 assert.equal(compiled.error, "");
 const fixtures = JSON.parse(await readFile(new URL("./fixtures/script_migration.json", import.meta.url)))
   .filter(fixture => fixture.file === "bilibili");
-// upload_video.har 中的成功请求，去掉 Cookie 和可变查询参数。
+// 网络测试成功请求的通用请求头及 Cookie 名称；查询参数沿用 upload_video.har。
 const video_request = JSON.parse(await readFile(new URL("./fixtures/bilibili_video_request.json", import.meta.url)));
+const saved_cookies = video_request.cookie_names.map(name => ({ name, value: name === "SESSDATA" ? "test-cookie" : "fixture-" + name,
+  domain: ".bilibili.com", path: "/", secure: true }));
+const expected_cookie = saved_cookies.map(cookie => cookie.name + "=" + cookie.value).join("; ");
 const cookie_access = new ScriptCookieAccess({
   permissions: compiled.metadata.permissions,
   assert_grant() {},
-  cookies: () => [{ name: "SESSDATA", value: "test-cookie", domain: ".bilibili.com", path: "/", secure: true }],
+  cookies: () => saved_cookies,
 });
-const run = (index, params, query = {}) => execute_script(source,
-  { ...compiled.metadata, ...compiled.metadata.routes[index] }, null,
+const run = (index, params, query = {}, debug = false) => execute_script(source,
+  { ...compiled.metadata, ...compiled.metadata.routes[index], debug_request: debug }, null,
   { method: "GET", pathname: compiled.metadata.routes[index].example, params, query, public_origin: "https://feeds.example" },
   [], "", cookie_access);
 
@@ -58,12 +62,11 @@ for (const fixture of fixtures) test("Bilibili QuickJS 保留内容和媒体："
   globalThis.fetch = async (input, options) => {
     calls++;
     const url = new URL(input);
-    assert.equal(new Headers(options.headers).get("cookie"), "SESSDATA=test-cookie");
+    assert.equal(new Headers(options.headers).get("cookie"), expected_cookie);
     if (index) {
       const headers = new Headers(options.headers);
       for (const [name, value] of Object.entries(video_request.headers)) {
-        assert.equal(headers.get(name), name === "referer"
-          ? "https://space.bilibili.com/" + fixture.params.userid + "/upload/video" : value, name);
+        assert.equal(headers.get(name), name === "referer" ? input : value, name);
       }
     }
     if (url.pathname.includes("/feed/space")) {
@@ -99,6 +102,69 @@ for (const fixture of fixtures) test("Bilibili QuickJS 保留内容和媒体："
   if (index) assert.equal(feed.items[0].enclosure.length, 456);
   else assert.equal(feed.items[0].images.length, 2);
   for (const format of ["rss", "atom"]) assert.ok(FeedModel.fromValue(feed).render(format).includes(fixture.expected_ids[0]));
+});
+
+test("视频脚本对齐网络测试成功请求的 Safari 请求头及通用 Cookie，并逐个 API 比较 TCP 请求", async t => {
+  const fixture = fixtures.find(fixture => fixture.route_index === 1);
+  t.mock.method(globalThis, "fetch", async input => new Response(
+    fixture.responses.find(response => input.includes(response.contains)).body,
+  ));
+  await run(1, { userid: "3707051406527347" }, { ps: "1" });
+  const requests = [...t.tcp.requests];
+  assert.equal(requests.some(request => request.url.startsWith("https://space.bilibili.com/")), false);
+  assert.ok(requests.some(request => request.url.includes("/nav")));
+  assert.ok(requests.some(request => request.url.includes("/arc/search?")));
+  for (const original of requests) {
+    const headers = { ...video_request.headers, referer: original.url };
+    const request = new Request("https://app.example/admin/api/network-test", { method: "POST", body: JSON.stringify({
+      url: original.url, transport: "tcp", headers, timeout_ms: 10000, cookie_domains: [".bilibili.com"],
+    }) });
+    const env = { API: { getByName: () => ({ fetch: async () => Response.json({ cookies: saved_cookies }) }) } };
+    const result = await (await admin_network_test(request, env)).json();
+    assert.equal(result.error, "");
+    const actual = t.tcp.requests.at(-1);
+    assert.equal(actual.url, original.url);
+    assert.equal(actual.method, original.method);
+    assert.deepEqual([...actual.headers], [...original.headers]);
+  }
+});
+
+test("视频脚本保留必需及播放接口的上游错误码，并显示具体失败接口", async t => {
+  const fixture = fixtures.find(fixture => fixture.route_index === 1);
+  for (const path of ["/nav", "/arc/search", "/view", "/playurl"]) {
+    for (const [status, code] of [[500, "UPSTREAM_FETCH_FAILED"], [429, "UPSTREAM_RATE_LIMITED"], [504, "UPSTREAM_TIMEOUT"]]) {
+      t.mock.method(globalThis, "fetch", async input => new URL(input).pathname.endsWith(path)
+        ? new Response(null, { status })
+        : new Response(fixture.responses.find(response => input.includes(response.contains)).body));
+      await assert.rejects(run(1, { userid: "3707051406527347" }, { ps: "1" }, true), error => {
+        assert.equal(error.problem?.code, code);
+        assert.ok(error.message.includes(path), error.message);
+        assert.doesNotMatch(error.message, /test-cookie|w_rid=/);
+        const line = error.lines.find(line => line.text.includes("B 站 API 请求失败"));
+        assert.ok(line, "保留可用于网络测试的请求信息");
+        const diagnostic = JSON.parse(line.text.slice(line.text.indexOf("{")));
+        const parameters = error.lines.find(line => line.text.includes("B 站 API 请求参数"));
+        const options = JSON.parse(parameters.text.slice(parameters.text.indexOf("{")));
+        const outgoing = t.tcp.requests.findLast(request => request.url === diagnostic.url);
+        assert.ok(outgoing);
+        assert.equal(options.transport, "tcp");
+        assert.equal(options.timeout_ms, 10000);
+        assert.ok(diagnostic.elapsed_ms >= 0);
+        for (const [name, value] of Object.entries(options.headers)) assert.equal(outgoing.headers.get(name), value);
+        assert.doesNotMatch(line.text + parameters.text, /test-cookie/);
+        if (status === 504) assert.match(error.message, /超时预算 10 秒/);
+        return true;
+      });
+    }
+  }
+  const connections = t.tcp.connections.length;
+  t.mock.method(AbortSignal, "timeout", ms => {
+    assert.equal(ms, 10000);
+    return AbortSignal.abort(new DOMException("timeout", "TimeoutError"));
+  });
+  await assert.rejects(run(1, { userid: "3707051406527347" }), error =>
+    error.problem?.code === "UPSTREAM_TIMEOUT" && error.message.includes("/nav"));
+  assert.equal(t.tcp.connections.length, connections);
 });
 
 test("Bilibili 两条路由在出站前校验 userid 和分页参数", async t => {

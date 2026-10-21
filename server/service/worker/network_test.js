@@ -56,8 +56,10 @@ export async function admin_network_cookie_domains(env) {
   } catch (failure) { return error_response(failure.message || "读取 Cookie 域名失败", 502); }
 }
 
-export async function admin_network_test(request, env, export_curl = false) {
+export async function admin_network_test(request, env, export_curl = false, load_cookies = () => stored_cookies(env)) {
   if (request.method !== "POST") return error_response("method not allowed", 405, { Allow: "POST" });
+  const execution = new URL(request.url).searchParams.get("execution") ?? "worker";
+  if (!["worker", "script"].includes(execution)) return error_response("执行位置只支持 worker 或 script", 400);
   let body;
   try {
     if (Number(request.headers.get("Content-Length")) > 32768) return error_response("请求体超过 32KB", 413);
@@ -80,9 +82,16 @@ export async function admin_network_test(request, env, export_curl = false) {
   if (!Array.isArray(domains) || domains.length > 5000 || domains.some(domain => typeof domain !== "string" || !domain || domain.length > 255 || /[\s/]/.test(domain))) {
     return error_response("Cookie 域名列表无效", 400);
   }
+  if (execution === "script" && env?.API) {
+    const internal_url = new URL("https://internal/_admin/network-test" + (export_curl ? "/curl" : ""));
+    internal_url.searchParams.set("execution", "script");
+    return env.API.getByName(API_OBJECT_NAME).fetch(new Request(internal_url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: request.signal,
+    }));
+  }
   let cookies = [];
   if (domains.length) {
-    try { cookies = await stored_cookies(env); }
+    try { cookies = await load_cookies(); }
     catch (failure) { return error_response(failure.message || "读取已保存 Cookie 失败", 502); }
     const available = new Set(cookies.map(cookie => cookie.domain));
     if (domains.some(domain => !available.has(domain))) return error_response("已选 Cookie 域名不存在，请刷新域名列表", 400);
@@ -104,7 +113,7 @@ export async function admin_network_test(request, env, export_curl = false) {
 
   const started_at = Date.now();
   const signal = AbortSignal.timeout(timeout_ms);
-  const result = { url, timeout_ms, transport, colo: request.cf?.colo || "", elapsed_ms: 0, headers_ms: null,
+  const result = { url, timeout_ms, transport, execution, colo: request.cf?.colo || "", elapsed_ms: 0, headers_ms: null,
     requests: [], status: null, status_text: "", headers: {}, body: "", body_bytes: 0, truncated: false, error: "", code: "",
     body_kind: "text", content_type: "", file: null, preview_message: "" };
   let current = url;

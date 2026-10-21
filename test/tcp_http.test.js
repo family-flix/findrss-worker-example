@@ -141,3 +141,29 @@ test("TCP HTTP 连接、读取、写入可被取消/超时中断，预先取消�
   clearTimeout(timer);
   assert.equal(f.socket.closed_count, 1);
 });
+
+test("TCP HTTP 成功或取消后不等待连接关闭握手完成", async () => {
+  for (const abort of [false, true]) {
+    const f = socket_fixture("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+    const close = f.socket.close.bind(f.socket);
+    let finish_close;
+    const closing = new Promise(resolve => { finish_close = resolve; });
+    f.socket.close = () => { void close(); return closing; };
+    const controller = new AbortController();
+    const request = tcp_http_fetch("https://api.bilibili.com/x/web-interface/nav", { signal: controller.signal }, f.connect);
+    if (abort) controller.abort(new Error("cancelled"));
+    let immediate;
+    const stalled = new Promise((_, reject) => {
+      immediate = setImmediate(() => reject(new Error("等待 socket.close 导致请求未能返回")));
+    });
+    try {
+      const result = Promise.race([request, stalled]);
+      if (abort) await assert.rejects(result, /cancelled/);
+      else assert.equal(await (await result).text(), "ok");
+      assert.equal(f.socket.closed_count, 1);
+    } finally {
+      clearImmediate(immediate);
+      finish_close();
+    }
+  }
+});
