@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { admin_network_test } from "../server/service/worker/network_test.js";
 import { handle_admin_request } from "../admin.js";
 import { create_worker } from "../router.js";
+import { mock_tcp_http } from "./support/tcp_socket_fixture.js";
 
 register("./support/quickjs_wasm_hook.js", import.meta.url);
 const { default: api } = await import("../api.js");
@@ -58,6 +59,59 @@ test("域名列表仅向管理员返回域名及数量，不包含 Cookie 名称
   const result = await response.json();
   assert.deepEqual(result, { domains: [{ domain: ".example.com", count: 2 }, { domain: "z.example", count: 1 }] });
   assert.doesNotMatch(JSON.stringify(result), /secret|private-value/);
+});
+
+test("TCP 使用与 Bilibili 脚本相同的传输、请求头和 Cookie，重定向仍校验地址与凭证", async t => {
+  const tcp = mock_tcp_http(t);
+  const headers = { Accept: "application/json, text/plain, */*", Referer: "https://space.bilibili.com/123/dynamic",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8", "User-Agent": "bilibili-test", Authorization: "Bearer explicit" };
+  const seen = [];
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    seen.push({ url, headers: options.headers });
+    return seen.length === 1 ? new Response(null, { status: 302, headers: { Location: "https://other.example/next" } })
+      : new Response('{"code":0}', { headers: { "Content-Type": "application/json" } });
+  });
+  const value = await (await admin_network_test(request({ url: "https://api.bilibili.com/x/test?uid=123", transport: "tcp",
+    headers, cookie_domains: [".bilibili.com"] }), cookie_env([
+    { domain: ".bilibili.com", name: "SESSDATA", value: "fixture", path: "/", secure: true },
+  ]))).json();
+  assert.equal(value.transport, "tcp");
+  assert.equal(value.body, '{"code":0}');
+  assert.deepEqual(value.requests.map(entry => entry.status), [302, 200]);
+  for (const [name, header] of Object.entries(headers)) assert.equal(seen[0].headers.get(name), header);
+  assert.equal(seen[0].headers.get("cookie"), "SESSDATA=fixture");
+  assert.equal(seen[0].headers.get("accept-encoding"), "identity");
+  assert.equal(seen[0].headers.get("connection"), "close");
+  assert.equal(seen[1].headers.has("cookie"), false);
+  assert.equal(seen[1].headers.has("authorization"), false);
+  assert.ok(tcp.connections.every(connection => connection.options.secureTransport === "on" && connection.closed));
+
+  t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 302, headers: { Location: "http://127.0.0.1/" } }));
+  const blocked = await (await admin_network_test(request({ transport: "tcp" }))).json();
+  assert.match(blocked.error, /公网/);
+  assert.equal(tcp.connections.length, 3);
+});
+
+test("TCP 沿用脚本响应上限及超时，并保留失败诊断", async t => {
+  const tcp = mock_tcp_http(t);
+  t.mock.method(globalThis, "fetch", async () => new Response("x".repeat(2 * 1024 * 1024 + 1)));
+  const failed = await (await admin_network_test(request({ transport: "tcp" }))).json();
+  assert.equal(failed.code, "UPSTREAM_FETCH_FAILED");
+  assert.match(failed.error, /2MB|大小限制/);
+  assert.ok(tcp.connections[0].closed);
+  t.mock.method(AbortSignal, "timeout", () => AbortSignal.abort(new DOMException("timeout", "TimeoutError")));
+  const timeout = await (await admin_network_test(request({ transport: "tcp" }))).json();
+  assert.equal(timeout.code, "UPSTREAM_TIMEOUT");
+  assert.equal(tcp.connections.length, 1);
+});
+
+test("TCP curl 使用 HTTP/1.1 和相同传输请求头，不出网", async t => {
+  t.mock.method(globalThis, "fetch", () => assert.fail("生成命令不得出网"));
+  const { command } = await (await admin_network_test(request({ transport: "tcp" }), env, true)).json();
+  assert.match(command, /--http1\.1/);
+  assert.match(command, /--header 'accept-encoding: identity'/);
+  assert.match(command, /--header 'connection: close'/);
+  assert.doesNotMatch(command, /--compressed/);
 });
 
 test("复制 curl 仅管理员可用，不出网，匹配已选 Cookie 并安全转义终端参数", async t => {
@@ -142,8 +196,10 @@ test("网络测试在出网前校验地址、请求头、超时和请求体", as
     { headers: [] }, { headers: null }, { headers: { Host: "other.example" } }, { headers: { Referer: "x\r\nCookie: secret" } },
     { headers: { Accept: 1 } }, { headers: { Cookie: "sid=x\r\nX-Injected: secret" } },
     { headers: { Cookie: "sid=x\0" } }, { headers: { Cookie: "x".repeat(4097) } }, { headers: { Cookie: "manual" } },
-    { cookie_domains: "example.com" }, { cookie_domains: [null] }, { cookie_domains: ["example.com/path"] }]) {
+    { cookie_domains: "example.com" }, { cookie_domains: [null] }, { cookie_domains: ["example.com/path"] },
+    { transport: "udp" }, { transport: null }, { transport: {} }]) {
     assert.equal((await admin_network_test(request(body))).status, 400, JSON.stringify(body));
+    assert.equal((await admin_network_test(request(body), env, true)).status, 400, JSON.stringify(body));
   }
   for (const body of ["null", "[]", "invalid"]) {
     assert.equal((await admin_network_test(request({}, { body }))).status, 400);

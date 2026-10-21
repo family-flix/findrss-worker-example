@@ -213,6 +213,9 @@ test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使�
   vm.runInContext(network_bundle.outputFiles[0].text, context);
   const root = context.NetworkTestModule.NetworkTestPage();
   try {
+    assert.equal(find(root, "network-transport").state.attributes["aria-labelledby"], "network-transport-label");
+    const transport = find(root, "network-transport");
+    for (const key of ["ArrowDown", "ArrowDown", "Enter"]) transport.events.onKeyDown({ key, preventDefault() {}, stopPropagation() {} });
     find(root, "network-url").events.onInput({ target: { value: "https://www.example.com/" } });
     await find(root, "network-cookies-refresh").events.onClick();
     await new Promise(setImmediate);
@@ -230,6 +233,7 @@ test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使�
       }
     }
     assert.deepEqual(submitted[0].cookie_domains, [".example.com"]);
+    assert.equal(submitted[0].transport, "tcp");
     assert.equal(submitted[0].headers.Referer, "https://www.example.com/");
     const actions = find(root, "network-actions");
     assert.ok(find(actions, "network-test-start"));
@@ -238,6 +242,7 @@ test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使�
     await copy_button.events.onClick();
     await new Promise(setImmediate);
     assert.deepEqual(copied, ["curl 'https://www.example.com/'"]);
+    assert.equal(submitted.at(-1).transport, "tcp");
     assert.equal(copy_button.state.attributes["aria-label"], "已复制 curl 命令");
     assert.ok(find(root, "network-curl-help"));
     await find(root, "network-header-add").events.onClick();

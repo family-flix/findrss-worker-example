@@ -8,6 +8,7 @@ function NetworkTestModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) =
   const state = {
     url: ui.ref("https://m.qidian.com/book/1036526469/catalog/"),
     timeout: ui.ref("10"),
+    transport: ui.ref("fetch"),
     cookie_domains: ui.ref([]), matching_domains: ui.ref([]), selected_domains: ui.ref([]), cookies_loading: ui.ref(false), cookies_error: ui.ref(""),
     headers: ui.ref(Object.entries({
       Referer: "https://m.qidian.com/book/1036526469/",
@@ -42,7 +43,7 @@ function NetworkTestModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) =
   const methods = {
     set(key, value) {
       if (state.busy.value) return;
-      if (["url", "timeout"].includes(key)) { state[key].as(value); state.copied.as(false); }
+      if (["url", "timeout", "transport"].includes(key)) { state[key].as(value); state.copied.as(false); }
       if (key === "url") {
         match_cookie_domains();
         let target;
@@ -112,6 +113,7 @@ function NetworkTestModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) =
       url = new URL(state.url.value.trim());
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error();
     } catch { state.error.as("请输入完整的 HTTP(S) 网址"); return; }
+    if (!["fetch", "tcp"].includes(state.transport.value)) { state.error.as("请选择 Fetch 或 TCP 传输方式"); return; }
     const timeout_ms = Number(state.timeout.value) * 1000;
     if (!Number.isInteger(timeout_ms) || timeout_ms < 1000 || timeout_ms > 60000) {
       state.error.as("超时须为 1–60 秒"); return;
@@ -135,7 +137,7 @@ function NetworkTestModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) =
     try {
       const response = await fetch_impl("/admin/api/network-test" + (export_curl ? "/curl" : ""), {
         method: "POST", credentials: "same-origin", cache: "no-store", signal: active.signal,
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: url.href, timeout_ms, headers, cookie_domains: state.selected_domains.value }),
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: url.href, timeout_ms, transport: state.transport.value, headers, cookie_domains: state.selected_domains.value }),
       });
       if (export_curl) {
         const result = await response.json();

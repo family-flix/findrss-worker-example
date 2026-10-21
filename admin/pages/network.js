@@ -4,7 +4,7 @@ import { Checkbox } from "../components/frui/checkbox.js";
 import { IconButton } from "../components/frui/icon-button.js";
 import { Popconfirm } from "../components/frui/popconfirm.js";
 
-const { View, Badge, Button, Input, For, Show, CodeEditor, computed, combine } = window.FindRSSAdminUI;
+const { View, Badge, Button, Input, Select, For, Show, CodeEditor, computed, combine } = window.FindRSSAdminUI;
 
 function NetworkTestPage({ view } = {}) {
   const model = NetworkTestModel();
@@ -40,6 +40,16 @@ function NetworkTestPage({ view } = {}) {
       Input({ label: "超时（秒）", value: state.timeout, disabled: state.busy,
         attributes: { n: "network-timeout", type: "number", min: "1", max: "60", step: "1" },
         onInput: event => methods.set("timeout", event.target.value) }),
+      View({ class: "grid min-w-0 gap-space-2", attributes: { n: "network-transport-field" } }, [
+        View({ class: "text-sm", attributes: { n: "network-transport-label", id: "network-transport-label" } }, ["传输方式"]),
+        Select({ value: state.transport, disabled: state.busy,
+          options: [{ value: "fetch", label: "Fetch（默认）" }, { value: "tcp", label: "TCP（与脚本 transport: tcp 相同）" }],
+          attributes: { n: "network-transport", "aria-labelledby": "network-transport-label" },
+          onChange: event => methods.set("transport", event.target.value) }),
+        View({ class: "text-muted text-sm", attributes: { n: "network-transport-help" } }, [
+          "TCP 与 Bilibili 脚本使用相同传输：HTTP/1.1，响应及解压后最多 2MB。复现脚本请求时，请同时填写相同网址、请求头并选择对应 Cookie。",
+        ]),
+      ]),
       View({ class: "grid min-w-0 gap-space-2", attributes: { n: "network-cookies" } }, [
         View({ class: "flex items-center justify-between gap-space-2", attributes: { n: "network-cookies-header" } }, [
           View({ class: "text-sm", attributes: { n: "network-cookies-label", id: "network-cookies-label" } }, ["已有 Cookie 域名（可选）"]),
@@ -99,7 +109,7 @@ function NetworkTestPage({ view } = {}) {
         Button({ disabled: cookie_disabled, attributes: { n: "network-copy-curl", "aria-label": copy_label }, onClick: methods.copy_curl }, [copy_label]),
       ]),
       View({ class: "text-muted text-sm", attributes: { n: "network-curl-help" } }, [
-        "curl 包含当前请求头、超时和匹配的已选 Cookie，可在本机终端运行并查看响应头；仅复现首个请求，不自动跟随重定向。命令含登录凭证，请勿公开分享。",
+        "curl 包含当前请求头、超时和匹配的已选 Cookie，TCP 模式使用 HTTP/1.1；可在本机终端运行并查看响应头，仅复现首个请求，不自动跟随重定向。命令含登录凭证，请勿公开分享。",
       ]),
       View({ class: "text-danger whitespace-pre-wrap break-anywhere", attributes: { n: "network-error", role: "alert" } }, [state.error]),
       Show({ when: computed(state.result, Boolean), ok: () => View({ class: "grid min-w-0 gap-space-3", attributes: { n: "network-result" } }, [
@@ -109,8 +119,9 @@ function NetworkTestPage({ view } = {}) {
             return status_badge(result.status, "network-status", result.status == null ? "未收到 HTTP 响应" : `HTTP ${result.status} ${result.status_text || ""}`.trim());
           } }),
           computed(state.result, result => result ? [
+            result.transport ? `传输 ${result.transport === "tcp" ? "TCP" : "Fetch"}` : "",
             `总耗时 ${result.elapsed_ms} ms`,
-            result.headers_ms == null ? "" : `收到响应头 ${result.headers_ms} ms`,
+            result.headers_ms == null ? "" : `${result.transport === "tcp" ? "传输完成" : "收到响应头"} ${result.headers_ms} ms`,
             result.colo ? `Worker 入口 ${result.colo}` : "",
           ].filter(Boolean).join(" · ") : ""),
         ]),

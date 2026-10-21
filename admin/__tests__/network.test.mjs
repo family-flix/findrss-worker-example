@@ -8,6 +8,28 @@ const set_headers = (model, headers) => {
   for (const [key, value] of Object.entries(headers)) model.methods.add_header(key, value);
 };
 
+test("传输方式默认 Fetch，可切换 TCP 并同时用于测试和 curl，忙碌时禁止切换", async () => {
+  const calls = [];
+  const model = NetworkTestModel({ ui, clipboard: { writeText: async () => {} }, fetch_impl: async (url, options) => {
+    calls.push(JSON.parse(options.body));
+    model.methods.set("transport", "fetch");
+    return Response.json(url.endsWith("/curl") ? { command: "curl --http1.1" } : { status: 200 });
+  } });
+  assert.equal(model.state.transport.value, "fetch");
+  model.methods.set("transport", "tcp");
+  await model.methods.run();
+  await model.methods.copy_curl();
+  assert.equal(model.state.transport.value, "tcp");
+  assert.deepEqual(calls.map(body => body.transport), ["tcp", "tcp"]);
+  assert.equal(model.state.copied.value, true);
+  model.methods.set("transport", "fetch");
+  assert.equal(model.state.copied.value, false);
+  model.methods.set("transport", "udp");
+  await model.methods.run();
+  assert.match(model.state.error.value, /传输方式/);
+  assert.equal(calls.length, 2);
+});
+
 test("请求头支持增删和编辑键值，忽略空白行，空值保留，测试与 curl 使用同一份数据", async () => {
   const calls = [];
   const model = NetworkTestModel({ ui, clipboard: { writeText: async () => {} }, fetch_impl: async (url, options) => {
@@ -96,7 +118,7 @@ test("复制 curl 使用当前参数和所选域名，保留测试结果并显�
   await model.methods.run();
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "/admin/api/network-test/curl");
-  assert.deepEqual(JSON.parse(calls[0].options.body), { url: "https://www.example.com/private", timeout_ms: 15000,
+  assert.deepEqual(JSON.parse(calls[0].options.body), { url: "https://www.example.com/private", timeout_ms: 15000, transport: "fetch",
     headers: { "User-Agent": "local-test" }, cookie_domains: [".example.com"] });
   finish(Response.json({ command: "curl --url 'https://www.example.com/private'" }));
   await pending;
@@ -152,7 +174,7 @@ test("网络测试只调用后台接口，可编辑网址、超时和请求头�
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "/admin/api/network-test");
   assert.deepEqual(JSON.parse(calls[0].options.body), {
-    url: "https://example.com/path", timeout_ms: 60000, headers: { "User-Agent": "my-agent" }, cookie_domains: [],
+    url: "https://example.com/path", timeout_ms: 60000, transport: "fetch", headers: { "User-Agent": "my-agent" }, cookie_domains: [],
   });
   finish(Response.json({ status: 403, body: "WAF 拦截", error: "" }));
   await pending;

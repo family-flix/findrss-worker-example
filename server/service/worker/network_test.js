@@ -2,6 +2,7 @@ import { proxy_target_url } from "@findrss/feed-fetch";
 import { error_response, json_response } from "../../lib/http.js";
 import { rss_fetch_headers, RSS_FETCH_CREDENTIAL_HEADERS } from "../../infra/rss_fetch_headers.js";
 import { rss_response_text } from "../../infra/rss_response_text.js";
+import { tcp_http_fetch } from "../../infra/tcp_http.js";
 import { cookie_header } from "../../infra/rss_cookies.js";
 import { API_OBJECT_NAME } from "../../lib/constants.js";
 
@@ -69,6 +70,8 @@ export async function admin_network_test(request, env, export_curl = false) {
   if (!url) return error_response("请输入公网 HTTP(S) 网址，仅支持 80 / 443 端口", 400);
   const timeout_ms = body.timeout_ms ?? 10000;
   if (!Number.isInteger(timeout_ms) || timeout_ms < 1000 || timeout_ms > 60000) return error_response("超时须为 1–60 秒", 400);
+  const transport = body.transport === undefined ? "fetch" : body.transport;
+  if (!["fetch", "tcp"].includes(transport)) return error_response("transport 只支持 fetch 或 tcp", 400);
   let headers;
   try { headers = rss_fetch_headers({ headers: body.headers }); }
   catch (failure) { return error_response(failure.message.replaceAll("fetchText", "网络测试"), 400); }
@@ -90,9 +93,10 @@ export async function admin_network_test(request, env, export_curl = false) {
   if (export_curl) {
     const request_cookie = cookie_header(cookies, url);
     if (request_cookie) headers.cookie = request_cookie;
+    if (transport === "tcp") { headers.connection = "close"; headers["accept-encoding"] = "identity"; }
     const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
     // shortcut: 只复现首个请求；需要比较重定向链时再逐跳生成命令，避免泄露 Cookie 或认证头。
-    const command = ["curl -q --globoff --silent --show-error --include --compressed --max-time " + timeout_ms / 1000,
+    const command = ["curl -q --globoff --silent --show-error --include " + (transport === "tcp" ? "--http1.1" : "--compressed") + " --max-time " + timeout_ms / 1000,
       ...Object.entries(headers).map(([name, value]) => "  --header " + quote(value ? `${name}: ${value}` : `${name};`)),
       "  --url " + quote(url)].join(" \\\n");
     return json_response({ command });
@@ -100,7 +104,7 @@ export async function admin_network_test(request, env, export_curl = false) {
 
   const started_at = Date.now();
   const signal = AbortSignal.timeout(timeout_ms);
-  const result = { url, timeout_ms, colo: request.cf?.colo || "", elapsed_ms: 0, headers_ms: null,
+  const result = { url, timeout_ms, transport, colo: request.cf?.colo || "", elapsed_ms: 0, headers_ms: null,
     requests: [], status: null, status_text: "", headers: {}, body: "", body_bytes: 0, truncated: false, error: "", code: "",
     body_kind: "text", content_type: "", file: null, preview_message: "" };
   let current = url;
@@ -113,7 +117,7 @@ export async function admin_network_test(request, env, export_curl = false) {
       let response;
       try {
         const request_cookie = cookie_header(cookies, current);
-        response = await fetch(current, { method: "GET", headers: { ...headers, ...(request_cookie ? { Cookie: request_cookie } : {}) }, redirect: "manual", signal });
+        response = await (transport === "tcp" ? tcp_http_fetch : fetch)(current, { method: "GET", headers: { ...headers, ...(request_cookie ? { Cookie: request_cookie } : {}) }, redirect: "manual", signal });
       } finally { trace.elapsed_ms = Date.now() - hop_started_at; }
       trace.status = response.status;
       result.url = current;
