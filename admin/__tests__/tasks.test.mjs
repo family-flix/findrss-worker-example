@@ -4,12 +4,46 @@ import { TasksModel } from "../pages/tasks.model.js";
 import { realtime_fixture } from "./realtime_fixture.mjs";
 
 const ui = {
-  ref: value => ({ value, as(next) { this.value = next; } }),
+  ref: value => ({ value, as(next) { this.value = next; }, set(next) { this.value = next; } }),
   combine: (sources, read) => ({ get value() {
     return read(Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, source.value])));
   } }),
 };
 const task = { id: "one", title: "刷新快照", status: "running", started_at: Date.now() - 2000, finished_at: 0 };
+
+test("任务默认每页 20 条，先筛选再分页，刷新保留页码，清理和取消后回退有效页", async () => {
+  let tasks = Array.from({ length: 41 }, (_, index) => ({ ...task, id: String(index), status: index < 21 ? "running" : "completed" }));
+  let calls = 0;
+  const model = TasksModel({ ui, fetch_impl: async (_url, options) => {
+    calls++;
+    if (options.method === "POST") {
+      tasks = tasks.map(row => row.id === "20" ? { ...row, status: "cancelled" } : row);
+      return Response.json({ task: tasks[20] });
+    }
+    if (options.method === "DELETE") tasks = tasks.filter(row => row.status !== "completed");
+    return Response.json({ tasks });
+  } });
+  await model.methods.load();
+  assert.equal(model.pagination.state.value.page_size, 20);
+  assert.equal(model.state.paged_tasks.value.length, 20);
+  model.pagination.set_page(2);
+  assert.deepEqual(model.state.paged_tasks.value.map(row => row.id), ["40"]);
+  assert.equal(calls, 1);
+  await model.methods.load();
+  assert.equal(model.pagination.state.value.page, 2);
+  await model.methods.cleanup();
+  assert.equal(model.pagination.page.value, 1);
+  model.methods.set_status("running");
+  assert.equal(model.pagination.state.value.page, 0);
+  assert.equal(model.pagination.state.value.total, 21);
+  model.pagination.set_page(1);
+  await model.methods.cancel("20");
+  assert.equal(model.pagination.page.value, 0);
+  assert.equal(model.state.paged_tasks.value.length, 20);
+  model.methods.set_status("failed");
+  assert.deepEqual(model.state.paged_tasks.value, []);
+  assert.equal(model.pagination.state.value.first, 0);
+});
 
 test("后台任务通过共享推送更新，首次连接不重复读取，断线恢复补同步，隐藏后停止读取", async () => {
   const realtime = realtime_fixture(); let calls = 0, status = "running";

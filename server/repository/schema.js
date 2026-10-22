@@ -23,7 +23,7 @@ export function migrate_script_tables(sql) {
 }
 
 // 修改 schema 或启动迁移时递增；已完成的迁移不在每次 DO 唤醒时重跑。
-export const API_SCHEMA_VERSION = 2;
+export const API_SCHEMA_VERSION = 3;
 
 /** 本模块 DDL 里恰好这些表。 @type {readonly string[]} */
 export const API_TABLE_NAMES = Object.freeze([
@@ -239,6 +239,8 @@ export const API_SCHEMA_SQL = `
     WHERE idempotency_key IS NOT NULL;
   CREATE INDEX IF NOT EXISTS calls_dispatch
     ON calls(status, created_at);
+  CREATE INDEX IF NOT EXISTS calls_recent ON calls(created_at DESC);
+  CREATE INDEX IF NOT EXISTS calls_publisher_recent ON calls(publisher_device_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS calls_lease
     ON calls(status, lease_expires_at);
   CREATE INDEX IF NOT EXISTS calls_retention
@@ -407,6 +409,9 @@ export const API_SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS discovery_sources_listing
     ON discovery_sources(enabled, category, sort_order, title);
+  CREATE INDEX IF NOT EXISTS discovery_sources_recent ON discovery_sources(created_at DESC, id);
+  CREATE INDEX IF NOT EXISTS discovery_sources_public_order
+    ON discovery_sources(enabled, sort_order, title COLLATE NOCASE, id);
   -- 头像 R2 指针与旧字节单独存表，列表 SELECT * 不加载图片。
   CREATE TABLE IF NOT EXISTS discovery_source_avatars (
     source_id TEXT PRIMARY KEY,

@@ -1,8 +1,8 @@
 import { format_datetime as format_time } from "../../server/lib/datetime.js";
-import { ListPaginationModel } from "../components/pagination.js";
+import { ListPaginationModel, PaginationModel } from "../components/pagination.js";
 const Timeless = window.FindRSSAdminUI;
 const fetch = window.FindRSSAdminAuth.fetch;
-const { combine, ref, refarr, refobj } = Timeless;
+const { combine, computed, ref, refarr, refobj } = Timeless;
 
 function empty_metrics() {
   return {
@@ -32,6 +32,11 @@ function DashboardViewModel(page_id = "overview") {
   const available_methods_ = refarr([]);
   const metrics_ = refobj(empty_metrics());
   const source_calls_ = refarr([]);
+  const source_calls_pagination = PaginationModel(Timeless, {
+    total: computed(source_calls_, sources => sources.length), loading: loading_,
+  });
+  const paged_source_calls = combine({ sources: source_calls_, page: source_calls_pagination.state },
+    ({ sources, page }) => sources.slice(page.page * page.page_size, (page.page + 1) * page.page_size));
   const generated_at_ = ref(0);
   const refreshed_at_ = ref(0);
   const access_tokens_ = refarr([]);
@@ -1296,6 +1301,7 @@ function DashboardViewModel(page_id = "overview") {
           ),
         );
         source_calls_.assign(normalized_overview.statistics?.sources || []);
+        source_calls_pagination.page.set(source_calls_pagination.state.value.page);
         download_devices_.assign(normalized_overview.download_devices);
         task_counts_.assign(normalized_overview.task_counts);
         available_methods_.assign(normalized_overview.methods);
@@ -1474,7 +1480,7 @@ function DashboardViewModel(page_id = "overview") {
       refreshed_at_.as(Date.now());
     },
   }) : null;
-  return { state, methods, ui: ui_stores, token_pagination };
+  return { state, methods, ui: ui_stores, token_pagination, source_calls_pagination, paged_source_calls };
 }
 
 function DeviceTokensModel() {

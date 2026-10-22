@@ -398,6 +398,13 @@ function SourceCallsView(props) {
           }),
         ],
       ),
+      View({
+        class: "box-border",
+        style: { "padding-inline": "20px" },
+        attributes: { n: "source-statistics-footer" },
+      }, [PaginationView(Timeless, {
+        model: props.pagination, name: "source-calls-pagination", label: "订阅源调用次数分页",
+      })]),
     ],
   );
 }
@@ -3529,7 +3536,7 @@ function DashboardApplicationView(page_id = "overview", embedded = false, route_
               ]
             : [
                 MetricsView({ metrics: vm$.state.metrics }),
-                SourceCallsView({ sources: vm$.state.source_calls }),
+                SourceCallsView({ sources: vm$.paged_source_calls, pagination: vm$.source_calls_pagination }),
                 View(
                   {
                     class: "box-border text-muted text-center",

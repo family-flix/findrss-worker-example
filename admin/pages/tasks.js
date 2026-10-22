@@ -1,9 +1,10 @@
 import { TasksModel, task_status_options } from "./tasks.model.js";
+import { PaginationView } from "../components/pagination.js";
 
 const { View, Button, Badge, Select, Popconfirm, Show, For, computed, combine } = window.FindRSSAdminUI;
 
 export function TasksPage({ view } = {}) {
-  const { state, methods } = TasksModel();
+  const { state, methods, pagination } = TasksModel();
   const busy = combine({ loading: state.loading, cleaning: state.cleaning }, value => value.loading || value.cleaning);
   const cleanup_disabled = combine({ busy, cancelling: state.cancelling }, value => value.busy || value.cancelling.length > 0);
   let stop_show, stop_hide;
@@ -20,7 +21,7 @@ export function TasksPage({ view } = {}) {
     View({ class: "grid min-w-0 gap-space-3", attributes: { n: "tasks-page", "aria-busy": computed(busy, String) },
       onMounted() { stop_show = view?.onShow(methods.start); stop_hide = view?.onBeforeHide(methods.stop); methods.start(); },
       onUnmounted() { stop_show?.(); stop_hide?.(); methods.stop(); } }, [
-      View({ class: "text-muted text-sm", attributes: { n: "tasks-description" } }, ["展示最近 100 条后台任务，任务状态实时更新。清理会从数据库移除全部已完成和失败任务。终止刷新会保留上次成功保存的快照；下次定时刷新仍按原计划执行。"]),
+      View({ class: "text-muted text-sm", attributes: { n: "tasks-description" } }, ["最近 100 条后台任务分页展示，默认每页 20 条，任务状态实时更新。清理会从数据库移除全部已完成和失败任务。终止刷新会保留上次成功保存的快照；下次定时刷新仍按原计划执行。"]),
       View({ class: "flex flex-wrap items-center gap-space-2", attributes: { n: "tasks-filters" } }, [
         View({ class: "text-muted text-sm", attributes: { n: "tasks-status-label", id: "tasks-status-label" } }, ["状态"]),
         Select({ value: state.status, options: task_status_options, style: { width: "10rem" },
@@ -33,7 +34,7 @@ export function TasksPage({ view } = {}) {
           computed(state.status, status => status ? "暂无该状态的后台任务" : "暂无后台任务"),
         ]) }),
       View({ class: "grid min-w-0 gap-space-3", attributes: { n: "tasks-list" } }, [
-        For({ each: state.visible_tasks, render(value) {
+        For({ each: state.paged_tasks, render(value) {
           const task = value?.__is_ref ? value.value : value;
           return View({ class: "grid min-w-0 gap-space-2 bg-surface-raised rounded-card", style: { padding: "var(--frui-space-3)" }, attributes: { n: "tasks-item" } }, [
             View({ class: "flex flex-wrap items-center justify-between gap-space-2", attributes: { n: "tasks-item-heading" } }, [
@@ -49,6 +50,7 @@ export function TasksPage({ view } = {}) {
           ]);
         } }),
       ]),
+      PaginationView(window.FindRSSAdminUI, { model: pagination, name: "tasks-pagination", label: "任务分页" }),
     ]),
   ]);
 }

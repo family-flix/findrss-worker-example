@@ -62,11 +62,23 @@ test("统计冷启动、目录调度、设备心跳和任务流转的实际 SQL 
         const repo = { discovery: new RepositoryDiscoverySource({sql}), platforms: new RepositoryPlatform({sql}), tags: new RepositoryTag({sql}) };
         const discovery = new ServiceDiscovery({repo});
         const tasks = new RepositoryBackgroundTasks({sql});
+        measure('admin_source_page_20_cold', () => discovery.list_discovery_sources(new URL('https://internal/?limit=20&offset=0'), true));
+        measure('admin_source_page_20_warm', () => discovery.list_discovery_sources(new URL('https://internal/?limit=20&offset=0'), true));
+        measure('public_source_page_20_cold', () => discovery.list_discovery_sources(new URL('https://internal/?limit=20&offset=0'), false));
+        measure('public_source_page_20_warm', () => discovery.list_discovery_sources(new URL('https://internal/?limit=20&offset=0'), false));
+        measure('calls_recent_50', () => new RepositoryCall({sql}).list('', '', 50));
+        measure('calls_publisher_recent_50', () => new RepositoryCall({sql}).list('device', '', 50));
         measure('constructor_schema_replay', () => bootstrap(ctx));
         measure('startup_script_scan', () => new RepositoryScript({sql}).list());
         measure('background_tasks_list', () => tasks.list());
         measure('background_tasks_for_source', () => tasks.running_for_sources(['source-1']));
         measure('background_task_insert', () => tasks.insert({id:'new-task',kind:'snapshot',title:'Refresh',target:'target',source_id:'source-1',started_at:101}));
+        measure('background_1000_create_finish', () => {
+          for(let i=0;i<1000;i++) {
+            tasks.insert({id:'batch-'+i,kind:'snapshot',title:'Refresh',target:'target',source_id:'source-1',started_at:30000+i});
+            tasks.finish('batch-'+i,'completed','',40000+i);
+          }
+        });
         measure('public_catalog_once', () => discovery.public_catalog());
         const catalog_state = new Map();
         const catalog = new ServiceDiscovery({repo,
@@ -87,6 +99,15 @@ test("统计冷启动、目录调度、设备心跳和任务流转的实际 SQL 
         measure('cache_cleanup', () => new RepositoryRssRouteCache({sql}).delete_expired(100));
         seed("INSERT INTO rss_route_cache_chunks(key,chunk_index,body) SELECT 'public-snapshot:'||i,0,'{}' FROM n", count);
         measure('cache_cleanup_with_legacy_chunks', () => new RepositoryRssRouteCache({sql}).delete_expired(100));
+        for (const name of ['calls_recent', 'calls_publisher_recent', 'discovery_sources_recent', 'discovery_sources_public_order']) native.exec('DROP INDEX ' + name);
+        native.exec('UPDATE api_schema_version SET version = 2');
+        measure('schema_v3_index_upgrade', () => {
+          // 多语句 exec 的游标只计最后一条，单独执行新索引以统计完整建索引成本。
+          for (const [query] of API_SCHEMA_SQL.matchAll(/CREATE INDEX IF NOT EXISTS (?:calls_recent|calls_publisher_recent|discovery_sources_recent|discovery_sources_public_order)\\b[^;]+;/g)) sql.exec(query);
+          bootstrap(ctx);
+        });
+        if (native.exec("SELECT name FROM sqlite_master WHERE name IN ('calls_recent','calls_publisher_recent','discovery_sources_recent','discovery_sources_public_order')").toArray().length !== 4) throw new Error('Read indexes missing after upgrade');
+        measure('schema_v3_index_upgrade_second_run', () => bootstrap(ctx));
         measure('startup_platform_tag_import', () => {
           const scripts = new RepositoryScript({sql}).list();
           repo.platforms.import_published(scripts); repo.tags.import_published(scripts);
@@ -154,7 +175,7 @@ test("统计冷启动、目录调度、设备心跳和任务流转的实际 SQL 
     const response = await mf.dispatchFetch("https://benchmark.invalid/?sources=" + count);
     assert.equal(response.status, 200, await response.clone().text());
     const result = await response.json();
-    console.log(JSON.stringify(result));
+    for (const report of result.reports) console.log(JSON.stringify({ sources: count, ...report }));
     const reads = label => result.reports.find(report => report.label === label).rows_read;
     const writes = label => result.reports.find(report => report.label === label).rows_written;
     assert.ok(writes('unused_write_indexes_upgrade') <= 3);
@@ -162,8 +183,17 @@ test("统计冷启动、目录调度、设备心跳和任务流转的实际 SQL 
     assert.equal(writes('device_180_heartbeats_before_upgrade'), 360);
     assert.equal(writes('device_180_heartbeats_one_hour'), 12);
     assert.equal(writes('device_disconnect_and_duplicate'), 1);
-    assert.equal(writes('task_create_to_complete'), 28);
-    assert.equal(writes('task_create_to_complete_before_upgrade'), 29);
+    assert.equal(writes('task_create_to_complete'), 30);
+    assert.equal(writes('task_create_to_complete_before_upgrade'), 31);
+    assert.ok(reads('admin_source_page_20_warm') <= 100);
+    assert.ok(reads('public_source_page_20_warm') <= 100);
+    assert.ok(reads('calls_recent_50') <= 50);
+    assert.ok(reads('calls_publisher_recent_50') <= 50);
+    assert.ok(reads('background_1000_create_finish') <= 10000);
+    assert.equal(writes('background_1000_create_finish'), 7999);
+    assert.equal(writes('schema_v3_index_upgrade'), 20005 + count * 2);
+    assert.equal(reads('schema_v3_index_upgrade_second_run'), 1);
+    assert.equal(writes('schema_v3_index_upgrade_second_run'), 0);
     assert.ok(reads("public_catalog_once") > 0);
     assert.ok(reads("public_catalog_per_source") <= reads("public_catalog_once") + 10);
     assert.ok(reads("calls_status_summary") <= 5);

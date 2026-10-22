@@ -79,6 +79,63 @@ test("源增删、公开转私密、停用、地址和社媒变更立即更新�
   assert.deepEqual(repo.snapshot_schedule().map(row => row.id), ["b"]);
 });
 
+test("列表总数和来源类型复用缓存，筛选隔离、写入与外部维护均能刷新", t => {
+  const store = snapshot_store();
+  t.after(() => store.db.close());
+  let now = 1000000, reads = 0;
+  t.mock.method(Date, "now", () => now);
+  const repo = new RepositoryDiscoverySource({ sql: { exec(query, ...args) {
+    if (/SELECT (COUNT\(\*\)|DISTINCT source_type)/.test(query)) reads++;
+    return store.sql.exec(query, ...args);
+  } } });
+  repo.insert(source("a"));
+  const all = { include_disabled: true }, visible = { include_disabled: false };
+  const check = (total, public_count, types) => {
+    assert.equal(repo.count_filtered(all), total);
+    assert.equal(repo.count_filtered(visible), public_count);
+    assert.deepEqual(repo.list_types().map(row => row.source_type), types);
+  };
+  check(1, 1, ["website"]);
+  check(1, 1, ["website"]);
+  assert.equal(reads, 3);
+  repo.list_types()[0].source_type = "mutated";
+  repo.insert(source("b", { require_token: 1, source_type: "weibo" }));
+  check(2, 1, ["website", "weibo"]);
+  repo.update(source("b", { enabled: 0, source_type: "website" }));
+  check(2, 1, ["website"]);
+  repo.delete("b");
+  check(1, 1, ["website"]);
+  store.sql.exec("UPDATE discovery_sources SET enabled = 0 WHERE id = 'a'");
+  check(1, 1, ["website"]);
+  now += 300000;
+  check(1, 0, ["website"]);
+  now = 0;
+  check(1, 0, ["website"]);
+  assert.equal(reads, 18);
+});
+
+test("最近调用及分页订阅源使用匹配排序的索引", t => {
+  const store = snapshot_store();
+  t.after(() => store.db.close());
+  const plans = [];
+  const sql = { exec(query, ...args) {
+    plans.push(store.db.prepare("EXPLAIN QUERY PLAN " + query).all(...args).map(row => row.detail).join("\n"));
+    return store.sql.exec(query, ...args);
+  } };
+  const calls = new RepositoryCall({ sql });
+  calls.list("", "", 50);
+  assert.match(plans.at(-1), /calls_recent/);
+  calls.list("publisher", "", 50);
+  assert.match(plans.at(-1), /calls_publisher_recent/);
+  calls.list("publisher", "completed", 50);
+  assert.match(plans.at(-1), /calls_publisher_recent/);
+  const sources = new RepositoryDiscoverySource({ sql });
+  sources.list({ include_disabled: true, limit: 20 });
+  assert.match(plans.at(-1), /discovery_sources_recent/);
+  sources.list({ include_disabled: false, limit: 20 });
+  assert.match(plans.at(-1), /discovery_sources_public_order/);
+});
+
 test("未登记源的 RSS 调度复用扫描，尝试时间、排序、删除、新登记与重启保持一致", t => {
   const store = snapshot_store();
   t.after(() => store.db.close());

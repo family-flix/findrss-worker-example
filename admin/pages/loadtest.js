@@ -34,46 +34,32 @@ function LoadTestPage() {
   const model = LoadTestModel({ on_change: (next) => state.as(next) });
   state.as({ ...model.state, by_id: new Map() });
   const read = (fn) => computed(state, fn);
-  const node = (name, children, options = {}) =>
-    View(
-      {
-        class: "box-border",
-        ...options,
-        attributes: { ...options.attributes, n: "loadtest-" + name },
-      },
-      children,
-    );
   const busy = read((s) =>
     ["starting", "running", "stopping"].includes(s.run_state),
   );
   const field = (name, label, control) =>
-    node(name + "-field", [node(name + "-label", [label]), control], {
-      class: "box-border grid",
-      style: {
-        gap: "8px",
-        "font-size": "12px",
+    View(
+      {
+        class: "box-border grid",
+        style: {
+          gap: "8px",
+          "font-size": "12px",
+        },
+        attributes: { n: "loadtest-" + name + "-field" },
       },
-    });
-  const metric = (name, label, value) =>
-    node(
-      name,
       [
-        node(name + "-value", [read(value)], {
-          class: "box-border tabular-nums max-750-font-size",
-          style: {
-            "font-size": "24px",
-            "font-weight": "700",
-            "--max-750-font-size": "20px",
+        View(
+          {
+            class: "box-border",
+            attributes: { n: "loadtest-" + name + "-label" },
           },
-        }),
-        node(name + "-label", [label], {
-          class: "box-border text-muted",
-          style: {
-            "font-size": "12px",
-            "line-height": "1.6",
-          },
-        }),
+          [label],
+        ),
+        control,
       ],
+    );
+  const metric = (name, label, value) =>
+    View(
       {
         class: "box-border max-750-padding",
         style: {
@@ -81,30 +67,78 @@ function LoadTestPage() {
           padding: "8px 12px",
           "--max-750-padding": "4px",
         },
+        attributes: { n: "loadtest-" + name },
       },
-    );
-  const selected = read((s) => s.by_id.get(s.selected));
-  const content = node(
-    "content",
-    [
-      node(
-        "connection-line",
-        [
-          node("connection", [read((s) => "WS " + s.connection)], {
+      [
+        View(
+          {
+            class: "box-border tabular-nums max-750-font-size",
             style: {
-              "border-left": "3px solid var(--frui-color-link)",
-              "padding-left": "10px",
-              "font-weight": "650",
+              "font-size": "24px",
+              "font-weight": "700",
+              "--max-750-font-size": "20px",
             },
-            attributes: { role: "status" },
-          }),
-          node("catalog-count", [read((s) => s.sources.length + " 个启用源")], {
+            attributes: { n: "loadtest-" + name + "-value" },
+          },
+          [read(value)],
+        ),
+        View(
+          {
             class: "box-border text-muted",
             style: {
               "font-size": "12px",
               "line-height": "1.6",
             },
-          }),
+            attributes: { n: "loadtest-" + name + "-label" },
+          },
+          [label],
+        ),
+      ],
+    );
+  const selected = read((s) => s.by_id.get(s.selected));
+  const content = View(
+    {
+      class: "box-border grid",
+      style: {
+        gap: "20px",
+      },
+      onMounted: model.methods.connect,
+      onUnmounted: model.methods.dispose,
+      attributes: { n: "loadtest-content" },
+    },
+    [
+      View(
+        {
+          class: "box-border flex items-center flex-wrap",
+          style: {
+            gap: "14px",
+          },
+          attributes: { n: "loadtest-connection-line" },
+        },
+        [
+          View(
+            {
+              class: "box-border",
+              style: {
+                "border-left": "3px solid var(--frui-color-link)",
+                "padding-left": "10px",
+                "font-weight": "650",
+              },
+              attributes: { n: "loadtest-connection", role: "status" },
+            },
+            [read((s) => "WS " + s.connection)],
+          ),
+          View(
+            {
+              class: "box-border text-muted",
+              style: {
+                "font-size": "12px",
+                "line-height": "1.6",
+              },
+              attributes: { n: "loadtest-catalog-count" },
+            },
+            [read((s) => s.sources.length + " 个启用源")],
+          ),
           Button(
             {
               class: "box-border",
@@ -114,15 +148,17 @@ function LoadTestPage() {
             ["重新连接"],
           ),
         ],
-        {
-          class: "box-border flex items-center flex-wrap",
-          style: {
-            gap: "14px",
-          },
-        },
       ),
-      node(
-        "controls",
+      View(
+        {
+          class: "box-border flex items-end flex-wrap rounded-card bg-surface",
+          style: {
+            gap: "12px",
+            padding: "18px",
+            border: "1px solid var(--frui-color-border)",
+          },
+          attributes: { n: "loadtest-controls" },
+        },
         [
           field(
             "scope",
@@ -216,28 +252,31 @@ function LoadTestPage() {
             ["停止发起"],
           ),
         ],
-        {
-          class: "box-border flex items-end flex-wrap rounded-card bg-surface",
-          style: {
-            gap: "12px",
-            padding: "18px",
-            border: "1px solid var(--frui-color-border)",
-          },
-        },
       ),
-      node("error", [read((s) => s.error)], {
-        class: computed(
-          state,
-          (s) =>
-            "box-border " +
-            ("text-danger whitespace-pre-wrap " +
-              (Boolean(s.error) ? "block" : "hidden")),
-        ),
-        style: {},
-        attributes: { role: "alert" },
-      }),
-      node(
-        "metrics",
+      View(
+        {
+          class: computed(
+            state,
+            (s) =>
+              "box-border " +
+              ("text-danger whitespace-pre-wrap " +
+                (Boolean(s.error) ? "block" : "hidden")),
+          ),
+          style: {},
+          attributes: { n: "loadtest-error", role: "alert" },
+        },
+        [read((s) => s.error)],
+      ),
+      View(
+        {
+          class: "box-border grid max-1100-grid-template-columns",
+          style: {
+            "grid-template-columns": "repeat(6, minmax(0, 1fr))",
+            gap: "12px",
+            "--max-1100-grid-template-columns": "repeat(3, minmax(0, 1fr))",
+          },
+          attributes: { n: "loadtest-metrics" },
+        },
         [
           metric(
             "completed",
@@ -254,39 +293,43 @@ function LoadTestPage() {
           metric("p95", "P95 耗时", (s) => seconds(s.summary.p95)),
           metric("hits", "缓存命中", (s) => s.summary.cache_hits || 0),
         ],
+      ),
+      View(
         {
-          class: "box-border grid max-1100-grid-template-columns",
+          class:
+            "box-border rounded-control bg-linear-gradient-to-right-var-frui-color-link-var-progress-var-frui-color-surface-raised-var-progress",
+          attributes: {
+            n: "loadtest-progress",
+            role: "progressbar",
+            "aria-label": "请求完成进度",
+            "aria-valuemin": "0",
+            "aria-valuemax": read((s) => s.summary.total || 0),
+            "aria-valuenow": read((s) => s.summary.completed || 0),
+          },
           style: {
-            "grid-template-columns": "repeat(6, minmax(0, 1fr))",
-            gap: "12px",
-            "--max-1100-grid-template-columns": "repeat(3, minmax(0, 1fr))",
+            height: "6px",
+            "--progress": read(
+              (s) =>
+                (s.summary.total
+                  ? ((s.summary.completed + (s.summary.skipped || 0)) /
+                      s.summary.total) *
+                    100
+                  : 0) + "%",
+            ),
           },
         },
+        [],
       ),
-      node("progress", [], {
-        class:
-          "box-border rounded-control bg-linear-gradient-to-right-var-frui-color-link-var-progress-var-frui-color-surface-raised-var-progress",
-        attributes: {
-          role: "progressbar",
-          "aria-label": "请求完成进度",
-          "aria-valuemin": "0",
-          "aria-valuemax": read((s) => s.summary.total || 0),
-          "aria-valuenow": read((s) => s.summary.completed || 0),
+      View(
+        {
+          class: "box-border text-muted",
+          style: {
+            "font-size": "12px",
+            "line-height": "1.6",
+            "margin-top": "-10px",
+          },
+          attributes: { n: "loadtest-device-status" },
         },
-        style: {
-          height: "6px",
-          "--progress": read(
-            (s) =>
-              (s.summary.total
-                ? ((s.summary.completed + (s.summary.skipped || 0)) /
-                    s.summary.total) *
-                  100
-                : 0) + "%",
-          ),
-        },
-      }),
-      node(
-        "device-status",
         [
           read((s) => {
             const online = (s.summary.devices || []).filter((d) =>
@@ -315,31 +358,52 @@ function LoadTestPage() {
             );
           }),
         ],
-        {
-          class: "box-border text-muted",
-          style: {
-            "font-size": "12px",
-            "line-height": "1.6",
-            "margin-top": "-10px",
-          },
-        },
       ),
-      node(
-        "workspace",
+      View(
+        {
+          class:
+            "box-border grid max-1100-grid-template-columns max-750-grid-template-columns",
+          style: {
+            "grid-template-columns": "minmax(0, 1fr) 320px",
+            gap: "24px",
+            "--max-1100-grid-template-columns": "minmax(0, 1fr) 260px",
+            "--max-750-grid-template-columns": "minmax(0, 1fr)",
+          },
+          attributes: { n: "loadtest-workspace" },
+        },
         [
-          node(
-            "requests",
+          View(
+            {
+              class: "box-border min-w-0 rounded-card bg-surface",
+              style: {
+                padding: "18px",
+                border: "1px solid var(--frui-color-border)",
+              },
+              attributes: { n: "loadtest-requests" },
+            },
             [
-              node(
-                "grid-toolbar",
+              View(
+                {
+                  class: "box-border flex items-center flex-wrap",
+                  style: {
+                    gap: "14px",
+                    "margin-bottom": "10px",
+                  },
+                  attributes: { n: "loadtest-grid-toolbar" },
+                },
                 [
-                  node("grid-heading", ["每个方块代表一个请求"], {
-                    style: {
-                      "margin-right": "auto",
-                      "font-size": "15px",
-                      "font-weight": "650",
+                  View(
+                    {
+                      class: "box-border",
+                      style: {
+                        "margin-right": "auto",
+                        "font-size": "15px",
+                        "font-weight": "650",
+                      },
+                      attributes: { n: "loadtest-grid-heading" },
                     },
-                  }),
+                    ["每个方块代表一个请求"],
+                  ),
                   Select({
                     class: "box-border",
                     value: read((s) => s.filter),
@@ -365,25 +429,8 @@ function LoadTestPage() {
                     ["导出 JSON"],
                   ),
                 ],
-                {
-                  class: "box-border flex items-center flex-wrap",
-                  style: {
-                    gap: "14px",
-                    "margin-bottom": "10px",
-                  },
-                },
               ),
-              node(
-                "legend",
-                [
-                  ["circle", "待发起"],
-                  ["refresh-cw", "请求中"],
-                  ["check", "有效订阅"],
-                  ["circle-alert", "失败"],
-                  ["minus", "跳过"],
-                ].map(([icon, label]) =>
-                  node("legend-" + icon, [Icon(icon, 14), label]),
-                ),
+              View(
                 {
                   class: "box-border text-muted flex items-center flex-wrap",
                   style: {
@@ -391,10 +438,57 @@ function LoadTestPage() {
                     "line-height": "1.6",
                     gap: "16px",
                   },
+                  attributes: { n: "loadtest-legend" },
                 },
+                [
+                  View(
+                    {
+                      class: "box-border",
+                      attributes: { n: "loadtest-legend-circle" },
+                    },
+                    [Icon("circle", 14), "待发起"],
+                  ),
+                  View(
+                    {
+                      class: "box-border",
+                      attributes: { n: "loadtest-legend-refresh-cw" },
+                    },
+                    [Icon("refresh-cw", 14), "请求中"],
+                  ),
+                  View(
+                    {
+                      class: "box-border",
+                      attributes: { n: "loadtest-legend-check" },
+                    },
+                    [Icon("check", 14), "有效订阅"],
+                  ),
+                  View(
+                    {
+                      class: "box-border",
+                      attributes: { n: "loadtest-legend-circle-alert" },
+                    },
+                    [Icon("circle-alert", 14), "失败"],
+                  ),
+                  View(
+                    {
+                      class: "box-border",
+                      attributes: { n: "loadtest-legend-minus" },
+                    },
+                    [Icon("minus", 14), "跳过"],
+                  ),
+                ],
               ),
-              node(
-                "grid",
+              View(
+                {
+                  class: "box-border grid",
+                  style: {
+                    "grid-template-columns":
+                      "repeat(auto-fill, minmax(90px, 1fr))",
+                    gap: "6px",
+                    margin: "14px 0",
+                  },
+                  attributes: { n: "loadtest-grid" },
+                },
                 [
                   For({
                     key: "id",
@@ -453,57 +547,65 @@ function LoadTestPage() {
                           onClick: () => model.methods.set("selected", id),
                         },
                         [
-                          node("cell-status-" + id, [
-                            Icon(
-                              read((s) =>
-                                row(s).state === "done"
-                                  ? row(s).valid_feed
-                                    ? "check"
-                                    : "circle-alert"
-                                  : row(s).state === "running"
-                                    ? "refresh-cw"
-                                    : row(s).state === "skipped"
-                                      ? "minus"
-                                      : "circle",
-                              ),
-                              14,
-                            ),
-                          ]),
-                          node("cell-name-" + id, [read((s) => row(s).title)], {
-                            class:
-                              "box-border overflow-hidden whitespace-nowrap text-ellipsis",
-                            style: {
-                              "font-size": "11px",
-                              margin: "4px 0",
+                          View(
+                            {
+                              class: "box-border",
+                              attributes: { n: "loadtest-cell-status-" + id },
                             },
-                          }),
-                          node(
-                            "cell-time-" + id,
-                            [read((s) => seconds(row(s).display_elapsed_ms))],
+                            [
+                              Icon(
+                                read((s) =>
+                                  row(s).state === "done"
+                                    ? row(s).valid_feed
+                                      ? "check"
+                                      : "circle-alert"
+                                    : row(s).state === "running"
+                                      ? "refresh-cw"
+                                      : row(s).state === "skipped"
+                                        ? "minus"
+                                        : "circle",
+                                ),
+                                14,
+                              ),
+                            ],
+                          ),
+                          View(
+                            {
+                              class:
+                                "box-border overflow-hidden whitespace-nowrap text-ellipsis",
+                              style: {
+                                "font-size": "11px",
+                                margin: "4px 0",
+                              },
+                              attributes: { n: "loadtest-cell-name-" + id },
+                            },
+                            [read((s) => row(s).title)],
+                          ),
+                          View(
                             {
                               class: "box-border tabular-nums",
                               style: {
                                 "font-size": "11px",
                               },
+                              attributes: { n: "loadtest-cell-time-" + id },
                             },
+                            [read((s) => seconds(row(s).display_elapsed_ms))],
                           ),
                         ],
                       );
                     },
                   }),
                 ],
-                {
-                  class: "box-border grid",
-                  style: {
-                    "grid-template-columns":
-                      "repeat(auto-fill, minmax(90px, 1fr))",
-                    gap: "6px",
-                    margin: "14px 0",
-                  },
-                },
               ),
-              node(
-                "empty",
+              View(
+                {
+                  class: "box-border text-muted",
+                  style: {
+                    "font-size": "12px",
+                    "line-height": "1.6",
+                  },
+                  attributes: { n: "loadtest-empty" },
+                },
                 [
                   read((s) =>
                     s.rows.length
@@ -511,38 +613,42 @@ function LoadTestPage() {
                       : "连接成功后点击“开始并发请求”，实时查看每个源的返回情况。",
                   ),
                 ],
-                {
-                  class: "box-border text-muted",
-                  style: {
-                    "font-size": "12px",
-                    "line-height": "1.6",
-                  },
-                },
               ),
             ],
+          ),
+          View(
             {
-              class: "box-border min-w-0 rounded-card bg-surface",
+              class:
+                "box-border min-w-0 rounded-card bg-surface align-self-start sticky grid max-750-position",
               style: {
                 padding: "18px",
                 border: "1px solid var(--frui-color-border)",
+                top: "20px",
+                gap: "12px",
+                "--max-750-position": "static",
               },
+              attributes: { n: "loadtest-detail" },
             },
-          ),
-          node(
-            "detail",
             [
-              node(
-                "detail-title",
-                [computed(selected, (row) => row?.title || "响应详情")],
+              View(
                 {
+                  class: "box-border",
                   style: {
                     "font-size": "15px",
                     "font-weight": "650",
                   },
+                  attributes: { n: "loadtest-detail-title" },
                 },
+                [computed(selected, (row) => row?.title || "响应详情")],
               ),
-              node(
-                "detail-status",
+              View(
+                {
+                  class: "box-border",
+                  style: {
+                    "font-size": "13px",
+                  },
+                  attributes: { n: "loadtest-detail-status" },
+                },
                 [
                   computed(selected, (row) =>
                     row
@@ -554,24 +660,26 @@ function LoadTestPage() {
                       : "点击任一请求查看详情",
                   ),
                 ],
-                {
-                  style: {
-                    "font-size": "13px",
-                  },
-                },
               ),
-              node(
-                "detail-url",
-                [computed(selected, (row) => row?.url || "")],
+              View(
                 {
                   class: "box-border break-anywhere text-muted",
                   style: {
                     "font-size": "11px",
                   },
+                  attributes: { n: "loadtest-detail-url" },
                 },
+                [computed(selected, (row) => row?.url || "")],
               ),
-              node(
-                "detail-feed",
+              View(
+                {
+                  class: "box-border text-muted",
+                  style: {
+                    "font-size": "12px",
+                    "line-height": "1.6",
+                  },
+                  attributes: { n: "loadtest-detail-feed" },
+                },
                 [
                   computed(selected, (row) =>
                     row?.valid_feed
@@ -585,22 +693,8 @@ function LoadTestPage() {
                       : row?.error || "",
                   ),
                 ],
-                {
-                  class: "box-border text-muted",
-                  style: {
-                    "font-size": "12px",
-                    "line-height": "1.6",
-                  },
-                },
               ),
-              node(
-                "detail-body",
-                [
-                  computed(
-                    selected,
-                    (row) => row?.preview || "尚未返回响应内容",
-                  ),
-                ],
+              View(
                 {
                   as: "pre",
                   class:
@@ -611,44 +705,42 @@ function LoadTestPage() {
                     "max-height": "260px",
                     padding: "12px",
                   },
+                  attributes: { n: "loadtest-detail-body" },
                 },
-              ),
-              node(
-                "detail-truncated",
                 [
-                  computed(selected, (row) =>
-                    row?.truncated ? "仅展示响应前 2000 个字符" : "",
+                  computed(
+                    selected,
+                    (row) => row?.preview || "尚未返回响应内容",
                   ),
                 ],
+              ),
+              View(
                 {
                   class: "box-border text-muted",
                   style: {
                     "font-size": "12px",
                     "line-height": "1.6",
                   },
+                  attributes: { n: "loadtest-detail-truncated" },
                 },
-              ),
-              node("events-title", ["WS 事件"], {
-                style: {
-                  "font-size": "15px",
-                  "font-weight": "650",
-                },
-              }),
-              node(
-                "events",
                 [
-                  For({
-                    each: read((s) => s.events),
-                    render(value) {
-                      const event = unwrap(value);
-                      return node("event", [
-                        format_datetime(event.at) +
-                          " " +
-                          event.text,
-                      ]);
-                    },
-                  }),
+                  computed(selected, (row) =>
+                    row?.truncated ? "仅展示响应前 2000 个字符" : "",
+                  ),
                 ],
+              ),
+              View(
+                {
+                  class: "box-border",
+                  style: {
+                    "font-size": "15px",
+                    "font-weight": "650",
+                  },
+                  attributes: { n: "loadtest-events-title" },
+                },
+                ["WS 事件"],
+              ),
+              View(
                 {
                   class: "box-border overflow-auto text-muted break-anywhere",
                   style: {
@@ -656,55 +748,46 @@ function LoadTestPage() {
                     "font-size": "11px",
                     "line-height": "1.8",
                   },
+                  attributes: { n: "loadtest-events" },
                 },
+                [
+                  For({
+                    each: read((s) => s.events),
+                    render(value) {
+                      const event = unwrap(value);
+                      return View(
+                        {
+                          class: "box-border",
+                          attributes: { n: "loadtest-event" },
+                        },
+                        [
+                          format_datetime(event.at) +
+                            " " +
+                            event.text,
+                        ],
+                      );
+                    },
+                  }),
+                ],
               ),
             ],
-            {
-              class:
-                "box-border min-w-0 rounded-card bg-surface align-self-start sticky grid max-750-position",
-              style: {
-                padding: "18px",
-                border: "1px solid var(--frui-color-border)",
-                top: "20px",
-                gap: "12px",
-                "--max-750-position": "static",
-              },
-            },
           ),
         ],
-        {
-          class:
-            "box-border grid max-1100-grid-template-columns max-750-grid-template-columns",
-          style: {
-            "grid-template-columns": "minmax(0, 1fr) 320px",
-            gap: "24px",
-            "--max-1100-grid-template-columns": "minmax(0, 1fr) 260px",
-            "--max-750-grid-template-columns": "minmax(0, 1fr)",
-          },
-        },
       ),
-      node(
-        "stop-note",
-        [
-          "停止后不再发起新请求，已领取的设备任务会继续完成。刷新页面会通过 WS 恢复当前测试状态。",
-        ],
+      View(
         {
           class: "box-border text-muted",
           style: {
             "font-size": "12px",
             "line-height": "1.6",
           },
+          attributes: { n: "loadtest-stop-note" },
         },
+        [
+          "停止后不再发起新请求，已领取的设备任务会继续完成。刷新页面会通过 WS 恢复当前测试状态。",
+        ],
       ),
     ],
-    {
-      class: "box-border grid",
-      style: {
-        gap: "20px",
-      },
-      onMounted: model.methods.connect,
-      onUnmounted: model.methods.dispose,
-    },
   );
   return window.FindRSSAdminShell.Page(
     {

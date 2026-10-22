@@ -1,4 +1,5 @@
 import { format_datetime } from "../../server/lib/datetime.js";
+import { PaginationModel } from "../components/pagination.js";
 
 export const task_status_options = [
   { value: "", label: "全部状态" },
@@ -12,6 +13,12 @@ export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
   const state = { tasks: ui.ref([]), status: ui.ref(""), loading: ui.ref(false), cleaning: ui.ref(false), error: ui.ref(""), cancelling: ui.ref([]) };
   state.visible_tasks = ui.combine({ tasks: state.tasks, status: state.status }, ({ tasks, status }) =>
     status ? tasks.filter(task => task.status === status) : tasks);
+  const pagination = PaginationModel(ui, {
+    total: ui.combine({ tasks: state.visible_tasks }, ({ tasks }) => tasks.length),
+    loading: ui.combine({ loading: state.loading, cleaning: state.cleaning }, value => value.loading || value.cleaning),
+  });
+  state.paged_tasks = ui.combine({ tasks: state.visible_tasks, page: pagination.state }, ({ tasks, page }) =>
+    tasks.slice(page.page * page.page_size, (page.page + 1) * page.page_size));
   let controller = null, stop_realtime = null, visible = false, load_pending = false;
   const status_labels = { running: "进行中", completed: "已完成", failed: "失败", cancelled: "已终止" };
   function task_value(task) {
@@ -20,6 +27,10 @@ export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
       started_label: format_datetime(task.started_at),
       elapsed_label: Math.max(0, Math.round(((task.finished_at || Date.now()) - task.started_at) / 1000)) + " 秒",
       cancellable: task.status === "running" };
+  }
+  function sync_tasks(tasks) {
+    state.tasks.as(tasks.map(task_value));
+    pagination.page.set(pagination.state.value.page);
   }
   async function load() {
     if (controller || state.cleaning.value) { load_pending = true; return; }
@@ -32,7 +43,7 @@ export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
       if (active.signal.aborted) return;
       if (!response.ok) throw new Error(payload.error || "任务加载失败");
       if (!Array.isArray(payload.tasks)) throw new Error("任务接口返回格式不正确");
-      state.tasks.as(payload.tasks.map(task_value));
+      sync_tasks(payload.tasks);
       state.error.as("");
     } catch (error) {
       if (!active.signal.aborted) state.error.as(error.message || "任务加载失败");
@@ -53,7 +64,10 @@ export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
       void load();
     },
     set_status(status) {
-      if (task_status_options.some(option => option.value === status)) state.status.as(status);
+      if (task_status_options.some(option => option.value === status)) {
+        state.status.as(status);
+        pagination.reset();
+      }
     },
     async cleanup() {
       if (state.cleaning.value || state.cancelling.value.length) return;
@@ -65,7 +79,7 @@ export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "清理任务失败");
         if (!Array.isArray(payload.tasks)) throw new Error("任务接口返回格式不正确");
-        state.tasks.as(payload.tasks.map(task_value));
+        sync_tasks(payload.tasks);
       } catch (error) { state.error.as(error.message || "清理任务失败"); }
       finally {
         state.cleaning.as(false);
@@ -82,7 +96,7 @@ export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
         if (!response.ok) throw new Error(payload.error || "终止任务失败");
         if (!payload.task?.id || !status_labels[payload.task.status]) throw new Error("任务接口返回格式不正确");
         controller?.abort(); controller = null; state.loading.as(false);
-        state.tasks.as(state.tasks.value.map(task => task.id === id ? task_value(payload.task) : task));
+        sync_tasks(state.tasks.value.map(task => task.id === id ? payload.task : task));
       } catch (error) { state.error.as(error.message || "终止任务失败"); }
       finally {
         state.cancelling.as(state.cancelling.value.filter(value => value !== id));
@@ -94,5 +108,5 @@ export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
       controller?.abort(); controller = null; state.loading.as(false);
     },
   };
-  return { state, methods };
+  return { state, methods, pagination };
 }

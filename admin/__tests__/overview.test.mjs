@@ -1,5 +1,5 @@
 import { realtime_fixture } from "./realtime_fixture.mjs";
-import { ListPaginationModel, PaginationView } from "../components/pagination.js";
+import { ListPaginationModel, PaginationModel, PaginationView } from "../components/pagination.js";
 import { page_source } from "./page_source.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -14,7 +14,7 @@ function fixture(create_response, page_id = "overview", credit_response, task_re
     script_count: 200, source_count: 700, source_call_count: 1234,
     cookie_count: 3, route_count: 8, platform_count: 4, tag_count: 6,
     sources: [{ id: "a", title: "源", feed_url: "https://feeds.example/rss/a", enabled: true, tracked: true, call_count: 1234 }] };
-  const context = vm.createContext({ ListPaginationModel, PaginationView, URL, URLSearchParams, setTimeout: () => 0, clearTimeout() {},
+  const context = vm.createContext({ ListPaginationModel, PaginationModel, PaginationView, URL, URLSearchParams, setTimeout: () => 0, clearTimeout() {},
     setInterval(callback, milliseconds) { intervals.push({ callback, milliseconds }); return intervals.length; }, clearInterval() {} });
   context.window = context;
   context.FindRSSAdminRealtime = realtime_fixture();
@@ -131,13 +131,48 @@ test("概览 View 渲染全部指标、每源次数、停用与外部源提示�
     assert.ok(metrics.some(node => node.props.attributes?.n === name + "-metric"));
   const sources = f.ui.refarr([...f.statistics.sources,
     { id: "b", title: "外部", feed_url: "https://example.com/feed", enabled: false, tracked: false, call_count: 0 }]);
-  const rows = nodes(f.context.source_view({ sources }));
+  const rows = nodes(f.context.source_view({ sources, pagination: f.model.source_calls_pagination }));
   assert.deepEqual(rows.filter(node => node.props.attributes?.n === "source-statistics-count").map(node => node.children[0]), ["1234", "外部源 · 无法统计"]);
   assert.ok(rows.some(node => node.children?.includes("外部（已停用）")));
   assert.ok(rows.some(node => node.props.attributes?.n === "source-statistics-scroll" && node.props.attributes.tabindex === "0"));
   assert.ok(rows.every(node => node.props.attributes?.n || !node.children.length || !node.props.class));
   sources.assign([]);
-  assert.ok(nodes(f.context.source_view({ sources })).some(node => node.children?.includes("暂无订阅源")));
+  assert.ok(nodes(f.context.source_view({ sources, pagination: f.model.source_calls_pagination })).some(node => node.children?.includes("暂无订阅源")));
+});
+
+test("订阅源调用次数每页默认 20 条，翻页不请求接口，刷新保留或回退有效页", async () => {
+  const f = fixture();
+  f.statistics.sources = Array.from({ length: 41 }, (_, index) => ({ ...f.statistics.sources[0], id: String(index), title: "源 " + index }));
+  await f.model.methods.refresh();
+  const pagination = f.model.source_calls_pagination;
+  const view = f.context.source_view({ sources: f.model.paged_source_calls, pagination });
+  const rows = () => nodes(view).filter(node => node.props.attributes?.n === "source-statistics-row");
+  const control = suffix => nodes(view).find(node => node.props.attributes?.n === "source-calls-pagination-" + suffix);
+  assert.equal(rows().length, 20);
+  assert.equal(pagination.state.value.total, 41);
+  control("next").props.onClick();
+  assert.equal(f.model.paged_source_calls.value[0].id, "20");
+  await f.model.methods.refresh();
+  assert.equal(pagination.state.value.page, 1);
+  control("last").props.onClick();
+  assert.equal(rows().length, 1);
+  assert.equal(control("next").props.disabled.value, true);
+  assert.equal(f.requests.length, 2);
+  f.statistics.sources.pop();
+  await f.model.methods.refresh();
+  assert.equal(pagination.page.value, 1);
+  assert.equal(rows().length, 20);
+  control("size").props.onChange({ target: { value: "10" } });
+  assert.equal(pagination.state.value.page, 0);
+  assert.equal(rows().length, 10);
+  assert.equal(f.model.state.metrics.value.source_call_count, 1234);
+  f.statistics.sources = [];
+  await f.model.methods.refresh();
+  assert.equal(rows().length, 0);
+  assert.equal(pagination.state.value.first, 0);
+  assert.equal(control("prev").props.disabled.value, true);
+  assert.ok(nodes(view).some(node => node.children?.includes("暂无订阅源")));
+  f.model.methods.dispose();
 });
 
 test("概览移除在线方法容器与 Token 抽屉，独立 Token 页面显示列表，创建入口打开弹窗", async () => {

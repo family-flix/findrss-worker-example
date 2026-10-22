@@ -16,6 +16,15 @@ export class RepositoryDiscoverySource {
     this.snapshot_schedule_state = snapshot_schedule_states.get(sql);
   }
 
+  list_metadata() {
+    const now = Date.now();
+    const state = this.snapshot_schedule_state;
+    if (!state.metadata || now - state.metadata.loaded_at >= 300000 || now < state.metadata.loaded_at) {
+      state.metadata = { loaded_at: now, counts: new Map(), types: null };
+    }
+    return state.metadata;
+  }
+
   query_conditions({ include_disabled, category = "", query = "", tags = [], source_type = "", status = "all", visibility = "all" }) {
     const conditions = [];
     const parameters = [];
@@ -68,16 +77,23 @@ export class RepositoryDiscoverySource {
         `SELECT discovery_sources.*, (SELECT object_key FROM discovery_source_avatars WHERE source_id = discovery_sources.id) AS avatar_object_key,
                 snapshots.articles_json, snapshots.saved_at AS snapshot_saved_at,
                 snapshots.attempted_at AS snapshot_attempted_at, snapshots.error AS snapshot_error, snapshots.adaptive_interval
-         FROM discovery_sources LEFT JOIN discovery_source_snapshots AS snapshots
-         ON snapshots.source_id = discovery_sources.id AND snapshots.feed_url = discovery_sources.feed_url ${where}
-         ORDER BY ${order} ${pagination}`,
+         FROM (SELECT * FROM discovery_sources ${where} ORDER BY ${order} ${pagination}) AS discovery_sources
+         LEFT JOIN discovery_source_snapshots AS snapshots
+         ON snapshots.source_id = discovery_sources.id AND snapshots.feed_url = discovery_sources.feed_url
+         ORDER BY ${order}`,
         ...parameters)
       .toArray();
   }
 
   count_filtered(filters) {
     const { where, parameters } = this.query_conditions(filters);
-    return Number(this.sql.exec(`SELECT COUNT(*) AS count FROM discovery_sources ${where}`, ...parameters).toArray()[0]?.count ?? 0);
+    const counts = this.list_metadata().counts;
+    const key = JSON.stringify([where, parameters]);
+    if (!counts.has(key)) {
+      if (counts.size >= 64) counts.clear();
+      counts.set(key, Number(this.sql.exec(`SELECT COUNT(*) AS count FROM discovery_sources ${where}`, ...parameters).toArray()[0]?.count ?? 0));
+    }
+    return counts.get(key);
   }
 
   list_tags() {
@@ -85,7 +101,9 @@ export class RepositoryDiscoverySource {
   }
 
   list_types() {
-    return this.sql.exec("SELECT DISTINCT source_type FROM discovery_sources ORDER BY source_type").toArray();
+    const metadata = this.list_metadata();
+    metadata.types ??= this.sql.exec("SELECT DISTINCT source_type FROM discovery_sources ORDER BY source_type").toArray();
+    return metadata.types.map(row => ({ ...row }));
   }
 
   snapshot_next_at(interval) {
@@ -244,6 +262,7 @@ export class RepositoryDiscoverySource {
    * @returns {void}
    */
   insert(fields) {
+    this.snapshot_schedule_state.metadata = null;
     this.snapshot_schedule_state.rows = null;
     this.sql.exec(
       `INSERT INTO discovery_sources (
@@ -279,6 +298,7 @@ export class RepositoryDiscoverySource {
    * @returns {void}
    */
   update(fields) {
+    this.snapshot_schedule_state.metadata = null;
     this.snapshot_schedule_state.rows = null;
     this.sql.exec(
       `UPDATE discovery_sources
@@ -307,6 +327,7 @@ export class RepositoryDiscoverySource {
 
   /** @param {string} id @returns {void} 连同头像一起删。 */
   delete(id) {
+    this.snapshot_schedule_state.metadata = null;
     this.snapshot_delete(id);
     this.sql.exec("DELETE FROM discovery_source_calls WHERE source_id = ?", id);
     this.sql.exec("DELETE FROM discovery_sources WHERE id = ?", id);

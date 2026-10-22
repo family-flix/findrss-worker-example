@@ -159,6 +159,41 @@ test("任务记录限制最近 100 条，重启后进行中任务标记为中断
   assert.match(f.tasks_repo.find("interrupted").error, /重启/);
 });
 
+test("任务保留边界复用扫描，时间倒退、同毫秒、重启及清理后仍保留正确记录", t => {
+  const f = fixture(t);
+  const expected = [];
+  let scans = 0;
+  const sql = { exec(query, ...args) {
+    if (query.startsWith("SELECT started_at, rowid FROM background_tasks ORDER BY")) scans++;
+    return f.sql.exec(query, ...args);
+  } };
+  let repo = new RepositoryBackgroundTasks({ sql });
+  for (let index = 0; index < 250; index++) {
+    if (index === 125) repo = new RepositoryBackgroundTasks({ sql });
+    const started_at = index % 3 === 0 ? 1 : Math.floor(index / 2);
+    repo.insert({ id: "boundary-" + index, ...descriptor, started_at });
+    const rowid = f.db.prepare("SELECT rowid FROM background_tasks WHERE id = ?").get("boundary-" + index).rowid;
+    expected.push({ id: "boundary-" + index, started_at, rowid, status: "running" });
+    const sorted = [...expected].sort((a, b) => b.started_at - a.started_at || b.rowid - a.rowid);
+    if (sorted.length >= 100) {
+      const keep = new Set(sorted.slice(0, 100).map(row => row.id));
+      for (let i = expected.length - 1; i >= 0; i--) {
+        if (expected[i].status !== "running" && !keep.has(expected[i].id)) expected.splice(i, 1);
+      }
+    }
+    if (index % 4 !== 0) {
+      repo.finish("boundary-" + index, "completed", "", 1000);
+      expected.find(row => row.id === "boundary-" + index).status = "completed";
+    }
+    assert.deepEqual(f.db.prepare("SELECT id FROM background_tasks ORDER BY id").all().map(row => row.id), expected.map(row => row.id).sort());
+  }
+  assert.equal(scans, 2);
+  repo.cleanup();
+  repo.insert({ id: "after-cleanup", ...descriptor, started_at: 0 });
+  assert.equal(scans, 3);
+  assert.equal(repo.find("after-cleanup").status, "running");
+});
+
 test("清理接口从数据库移除所有已完成和失败任务，包括列表之外的记录，保留其他状态", async t => {
   const f = fixture(t);
   for (let index = 0; index < 106; index++) {
