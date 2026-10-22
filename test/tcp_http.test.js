@@ -90,6 +90,49 @@ test("TCP HTTP 支持 gzip/deflate，压缩损坏、编码未知和解压超限�
   }
 });
 
+test("TCP HTTP 连续读取小响应按需分配内存，不为每个响应预留 2MB", async t => {
+  const compressed = gzipSync(Buffer.from("hello"));
+  const cases = [
+    [Buffer.from("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"), false],
+    [Buffer.from("HTTP/1.0 200 OK\r\n\r\nhello"), true],
+    [Buffer.concat([Buffer.from(`HTTP/1.1 200 OK\r\nContent-Length: ${compressed.length}\r\nContent-Encoding: gzip\r\n\r\n`), compressed]), false],
+  ];
+  const original = globalThis.Uint8Array;
+  let allocated = 0;
+  globalThis.Uint8Array = new Proxy(original, {
+    construct(target, args, new_target) {
+      const value = Reflect.construct(target, args, new_target);
+      if (typeof args[0] === "number") allocated += value.byteLength;
+      return value;
+    },
+  });
+  t.after(() => { globalThis.Uint8Array = original; });
+  for (let index = 0; index < 62; index++) {
+    const [raw, eof] = cases[index % cases.length];
+    const f = socket_fixture(raw, { eof });
+    assert.equal(await (await tcp_http_fetch("https://example.com", {}, f.connect)).text(), "hello");
+    assert.equal(f.socket.closed_count, 1);
+  }
+  assert.ok(allocated < SCRIPT_FETCH_BYTES, `小响应累计分配了 ${allocated} 字节`);
+});
+
+test("TCP HTTP 未知长度及压缩响应扩容后保留完整正文，支持恰好 2MB", async () => {
+  for (const length of [70001, SCRIPT_FETCH_BYTES]) {
+    const body = Buffer.alloc(length, 97);
+    const compressed = gzipSync(body);
+    const cases = [
+      [Buffer.concat([Buffer.from(`HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n${length.toString(16)}\r\n`), body, Buffer.from("\r\n0\r\n\r\n")]), false],
+      [Buffer.concat([Buffer.from("HTTP/1.0 200 OK\r\n\r\n"), body]), true],
+      [Buffer.concat([Buffer.from(`HTTP/1.1 200 OK\r\nContent-Length: ${compressed.length}\r\nContent-Encoding: gzip\r\n\r\n`), compressed]), false],
+    ];
+    for (const [raw, eof] of cases) {
+      const f = socket_fixture(raw, { eof, split: 4093 });
+      assert.deepEqual(Buffer.from(await (await tcp_http_fetch("https://example.com", {}, f.connect)).arrayBuffer()), body);
+      assert.equal(f.socket.closed_count, 1);
+    }
+  }
+});
+
 test("TCP HTTP 拒绝截断、冲突分帧、畸形响应及头部/响应体超限，并关闭连接", async () => {
   const cases = [
     "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nshort".slice(0, -1),

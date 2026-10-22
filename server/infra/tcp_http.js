@@ -12,6 +12,14 @@ function invalid_response(message) {
   });
 }
 
+// 未知长度和解压响应按需扩容，避免连续小 API 响应各自占用 2MB。
+function grow_buffer(bytes, required) {
+  if (required <= bytes.length) return bytes;
+  const expanded = new Uint8Array(Math.min(SCRIPT_FETCH_BYTES, Math.max(required, bytes.length * 2, 4096)));
+  expanded.set(bytes);
+  return expanded;
+}
+
 // 按 HTTP 消息边界读取，不能等待 keep-alive 连接关闭才返回。
 class HttpReader {
   constructor(reader) {
@@ -62,15 +70,17 @@ class HttpReader {
     const declared = headers.get("content-length");
     if (transfer && (transfer.toLowerCase() !== "chunked" || declared !== null)) throw invalid_response("不支持或冲突的响应分帧");
     if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > SCRIPT_FETCH_BYTES)) throw invalid_response("Content-Length 无效或超过 2MB");
-    const bytes = new Uint8Array(declared === null ? SCRIPT_FETCH_BYTES : Number(declared));
+    let bytes = new Uint8Array(declared === null ? 0 : Number(declared));
+    const limit = declared === null ? SCRIPT_FETCH_BYTES : Number(declared);
     let total = 0;
     const append = part => {
-      if (total + part.length > bytes.length) throw invalid_response("响应超过 2MB 限制");
+      if (total + part.length > limit) throw invalid_response("响应超过 2MB 限制");
+      bytes = grow_buffer(bytes, total + part.length);
       bytes.set(part, total);
       total += part.length;
     };
     const exact = async length => {
-      if (length > bytes.length - total) throw invalid_response("响应超过 2MB 限制");
+      if (length > limit - total) throw invalid_response("响应超过 2MB 限制");
       while (length > 0) {
         const part = await this.take(length);
         if (!part.length) throw invalid_response("响应体被截断");
@@ -104,13 +114,14 @@ async function decode_body(bytes, encoding) {
   if (!encoding || encoding === "identity") return bytes;
   if (!["gzip", "deflate"].includes(encoding)) throw invalid_response("不支持的 Content-Encoding");
   const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream(encoding)).getReader();
-  const output = new Uint8Array(SCRIPT_FETCH_BYTES);
+  let output = new Uint8Array();
   let length = 0;
   try {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) return output.subarray(0, length);
-      if (length + value.length > output.length) throw invalid_response("解压后超过 2MB 限制");
+      if (length + value.length > SCRIPT_FETCH_BYTES) throw invalid_response("解压后超过 2MB 限制");
+      output = grow_buffer(output, length + value.length);
       output.set(value, length);
       length += value.length;
     }
