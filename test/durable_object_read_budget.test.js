@@ -157,7 +157,35 @@ test("未登记源的 RSS 调度复用扫描，尝试时间、排序、删除、
   assert.deepEqual(repo.public_schedule().map(row => row.key), ["a"]);
   repo.register_public("c", "/c", [], "https://example.com/rss/c", 100);
   assert.deepEqual(repo.public_schedule().map(row => row.key), ["c", "a"]);
+  assert.equal(reads, 2); // 新登记直接补充缓存，不重读已有源。
   assert.equal(new RepositoryRssRouteCache(store).public_schedule()[1].attempted_at, 1000);
+});
+
+test("冷启动重新登记已有 RSS 只点查，不计数、不重载调度，满额仍可访问旧源", t => {
+  const store = snapshot_store();
+  t.after(() => store.db.close());
+  const original = new RepositoryRssRouteCache(store);
+  for (let index = 0; index < 100; index++) original.register_public(String(index), "/" + index, [], "original", 100);
+  original.public_attempt("0", 123);
+  const queries = [];
+  const restarted = new RepositoryRssRouteCache({ sql: { exec(query, ...args) {
+    queries.push(query);
+    return store.sql.exec(query, ...args);
+  } } });
+  restarted.public_schedule();
+  for (let index = 0; index < 100; index++) {
+    assert.equal(restarted.register_public(String(index), "/changed", [], "changed", 100), true);
+    assert.equal(restarted.public_schedule().length, 100);
+  }
+  assert.equal(queries.filter(query => query.includes("ORDER BY attempted_at")).length, 1);
+  assert.equal(queries.some(query => query.includes("COUNT(*)")), false);
+  assert.equal(queries.some(query => query.startsWith("INSERT")), false);
+  assert.equal(restarted.register_public("overflow", "/overflow", [], "", 100), false);
+  assert.equal(restarted.public_schedule().length, 100);
+  const row = restarted.public_schedule().find(row => row.key === "0");
+  assert.equal(row.pathname, "/0");
+  assert.equal(row.self_url, "original");
+  assert.equal(row.attempted_at, 123);
 });
 
 test("历史任务每小时清理且失败可重试，缓存过期检查继续执行，不清理托管日志", () => {

@@ -91,6 +91,16 @@ test("统计冷启动、目录调度、设备心跳和任务流转的实际 SQL 
           await catalog.ensure_catalog();
         });
         measure('scheduler_1000_calls', () => { for(let i=0;i<1000;i++) repo.discovery.snapshot_schedule(); });
+        seed("INSERT INTO rss_public_feeds(key,pathname,query_json,self_url) SELECT 'feed-'||i,'/feed/'||i,'[]','https://example.com/rss/feed/'||i FROM n", count);
+        measure('rss_registration_existing_after_restart', () => {
+          const feeds = new RepositoryRssRouteCache({sql});
+          feeds.public_schedule();
+          for(let i=1;i<=count;i++) {
+            feeds.register_public('feed-'+i,'/feed/'+i,[],'https://example.com/rss/feed/'+i,1024);
+            // serve_rss_route 紧接着 schedule_alarm，后者重新读取调度表。
+            feeds.public_schedule();
+          }
+        });
         measure('calls_status_summary', () => new RepositoryCall({sql}).count_by_status());
         measure('statistics_core_queries', () => {
           const stats = new RepositoryStatistics({sql});
@@ -189,6 +199,8 @@ test("统计冷启动、目录调度、设备心跳和任务流转的实际 SQL 
     assert.ok(reads('public_source_page_20_warm') <= 100);
     assert.ok(reads('calls_recent_50') <= 50);
     assert.ok(reads('calls_publisher_recent_50') <= 50);
+    assert.ok(reads('rss_registration_existing_after_restart') <= count * 3 + 5);
+    assert.equal(writes('rss_registration_existing_after_restart'), 0);
     assert.ok(reads('background_1000_create_finish') <= 10000);
     assert.equal(writes('background_1000_create_finish'), 7999);
     assert.equal(writes('schema_v3_index_upgrade'), 20005 + count * 2);

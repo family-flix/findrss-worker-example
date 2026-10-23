@@ -137,11 +137,15 @@ export class RepositoryRssRouteCache {
   }
 
   register_public(key, pathname, query, self_url, max_entries) {
-    this.public_schedule_state.rows = null;
+    // 冷启动会重新登记已有源；不能为每个源重新计数并使整张调度缓存失效。
+    if (this.sql.exec("SELECT key FROM rss_public_feeds WHERE key = ?", key).toArray().length) return true;
     this.sql.exec(`INSERT INTO rss_public_feeds (key, pathname, query_json, self_url)
       SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM rss_public_feeds) < ? ON CONFLICT(key) DO NOTHING`,
       key, pathname, JSON.stringify([...query]), self_url, max_entries);
-    return this.sql.exec("SELECT key FROM rss_public_feeds WHERE key = ?", key).toArray().length > 0;
+    const row = this.sql.exec("SELECT * FROM rss_public_feeds WHERE key = ?", key).toArray()[0];
+    if (!row) return false;
+    this.public_schedule_state.rows?.set(key, row);
+    return true;
   }
 
   public_next_at(interval) {
