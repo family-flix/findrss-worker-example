@@ -488,7 +488,7 @@ test("创建设备 Token 期间离开页面，迟到的创建或明文响应不�
   }
 });
 
-test("后台使用真实阅读器组件，操作按钮带 SVG 并响应禁用状态", () => {
+test("后台使用真实阅读器组件，显式设置按钮图标并响应禁用状态", () => {
   assert.equal(context.vm, context.Timeless.vm);
   assert.equal(context.kit, context.Timeless.kit);
   assert.equal(context.ui, context.Timeless.ui);
@@ -496,12 +496,49 @@ test("后台使用真实阅读器组件，操作按钮带 SVG 并响应禁用状
   assert.ok(Object.keys(bundle.metafile.inputs).some(path => path.endsWith("frui/button.js")));
   assert.ok(Object.keys(bundle.metafile.inputs).some(path => path.endsWith("frui/select.js")));
   const disabled = context.Timeless.ref(false);
-  const button = ui.Button({ disabled, attributes: { n: "cookie-save-button" } }, ["保存"]);
+  const button = ui.Button({ disabled, icon: ui.Icon("save"), attributes: { n: "cookie-save-button" } }, ["保存"]);
   assert.ok(button.state.styleSet.includes("display-inline-flex"));
   assert.ok(find(button, "admin-icon-save"));
   disabled.set(true);
   assert.equal(button.state.attributes.disabled, true);
   button.onUnmounted();
+});
+
+test("Button 默认不按语义名称添加图标", () => {
+  for (const action of ["reset", "save", "refresh", "delete", "remove", "submit", "new"]) {
+    const button = ui.Button({ attributes: { n: `test-${action}-button` } }, [action]);
+    try {
+      assert.equal(find(button, "button-icon"), null, action);
+      assert.equal(find(button, "button-loading"), null, action);
+    } finally { button.onUnmounted(); }
+  }
+});
+
+test("Button 默认隐藏加载图标，loading 切换时同步图标和禁用状态", () => {
+  for (const href of [undefined, "/admin/scripts"]) {
+    for (const props of [{}, { disabled: true }, { loading: false }, { loading: true }]) {
+      const plain = ui.Button({ ...props, href }, ["新对话"]);
+      assert.equal(Boolean(find(plain, "button-loading")), props.loading === true);
+      plain.onUnmounted();
+    }
+
+    const loading = ui.ref(false);
+    const button = ui.Button({ href, loading, icon: ui.Icon("settings") }, ["设置"]);
+    try {
+      for (const value of [false, true, false, true]) {
+        loading.set(value);
+        const spinner = find(button, "button-loading");
+        if (value) {
+          assert.ok(spinner);
+          assert.ok(spinner.state.styleSet.includes("display-inline-flex"));
+        } else assert.equal(spinner, null);
+        assert.equal(find(button, "button-icon").state.style.display, value ? "none" : "inline-flex");
+        assert.equal(button.state.attributes["aria-busy"], value ? "true" : undefined);
+        assert.equal(href ? button.state.attributes["aria-disabled"] : button.state.attributes.disabled,
+          value ? (href ? "true" : true) : undefined);
+      }
+    } finally { button.onUnmounted(); }
+  }
 });
 
 test("厂商 logo 使用真实图片或主题遮罩，厂商列表和旧草稿不再包含 Workers AI", () => {
@@ -1481,6 +1518,10 @@ test("脚本助手复用阅读器对话和输入框，左下模型菜单的选�
   const panel = ScriptAgentPanelView({ ui, agent });
   try {
     assert.ok(find(panel, "xiaoxun-composer-editor"));
+    const new_chat = find(panel, "script-agent-reset-button");
+    assert.ok(new_chat);
+    assert.equal(find(new_chat, "button-icon"), null);
+    assert.equal(find(new_chat, "admin-icon-rotate-ccw"), null);
     assert.ok(find(panel, "xiaoxun-dialogue-composer-footer"));
     find(panel, "xiaoxun-model-trigger").events.onClick();
     const key = JSON.stringify(["two", "m"]);

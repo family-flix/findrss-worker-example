@@ -104,7 +104,6 @@ export function PaginationView(ui, { model, name, label }) {
   const { View, Button, Select, computed } = ui;
   const read = map => computed(model.state, map);
   const button = (suffix, text, target, disabled) => Button({
-    icon: false,
     class: "box-border flex-none justify-self-center", attributes: { n: name + "-" + suffix, type: "button" },
     disabled: read(state => state.loading || disabled(state)),
     onClick() { return model.set_page(target(model.state.value)); },

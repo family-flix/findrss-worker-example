@@ -43,16 +43,6 @@ configure_frui({
   },
 });
 
-const action_icons = [
-  ["delete", "trash"], ["remove", "trash"], ["revoke", "circle-x"], ["logout", "log-out"],
-  ["login", "log-in"], ["save", "save"], ["submit", "save"], ["create", "plus"], ["add", "plus"], ["new", "plus"],
-  ["refresh", "refresh-cw"], ["reconnect", "refresh-cw"], ["search", "search"], ["copy", "copy"],
-  ["edit", "pen-line"], ["cancel", "x"], ["close", "x"], ["test", "play"], ["start", "play"],
-  ["stop", "square"], ["logs", "scroll-text"], ["export", "download"], ["download", "download"],
-  ["preview", "eye"], ["template", "file-code"], ["reset", "rotate-ccw"], ["toggle", "settings"],
-  ["token", "lock"], ["read", "check"],
-];
-
 function Icon(name, size = 18) {
   if (name?.__is_ref) {
     return Timeless.For({ each: Timeless.computed(name, name => [{ name }]), key: "name",
@@ -63,9 +53,8 @@ function Icon(name, size = 18) {
 
 function Button(props = {}, children = []) {
   const name = props.attributes?.n || "";
-  const action = action_icons.find(([action]) => name.split("-").includes(action));
-  const variant = props.variant || (action?.[0] === "delete" || action?.[0] === "remove" ? "danger" : "default");
-  return ReaderButton({ ...props, variant, icon: props.icon === false ? undefined : props.icon ?? (action ? Icon(action[1], 16) : undefined) }, children);
+  const variant = props.variant || (name.split("-").some(action => action === "delete" || action === "remove") ? "danger" : "default");
+  return ReaderButton({ ...props, variant, icon: props.icon === false ? undefined : props.icon }, children);
 }
 
 // 保留后台原有事件形状；业务状态和提交仍由各页 Model 维护。

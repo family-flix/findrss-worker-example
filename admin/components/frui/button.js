@@ -2,6 +2,7 @@ import {
   atomic_classes
 } from "./atomic.js";
 const {
+  Show,
   View,
   computed,
   refobj
@@ -67,10 +68,9 @@ function Button(props = {}, children = []) {
   });
   const state_ = refobj(model.store.state);
   const unlisten = model.store.onStateChange((state) => state_.as(state));
-  const loading_node = ui.ButtonPrimitive.Loading({
-    store: model.store
-  }, [
-    View({
+  const loading_node = Show({
+    when: computed(state_, state => state.loading),
+    ok: () => View({
       class: "display-inline-flex align-items-center",
       attributes: {
         n: "button-loading",
@@ -84,8 +84,8 @@ function Button(props = {}, children = []) {
           "aria-hidden": "true"
         }
       }, [Timeless.Icon({ name: "loader-circle", size: 16 })]),
-    ]),
-  ]);
+    ])
+  });
   const icon_node = icon === undefined ?
     null :
     View({

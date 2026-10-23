@@ -2044,7 +2044,6 @@ function SourceBulkActionsView({ store: vm$ }) {
               Button(
                 {
                   ...props,
-                  size: "small",
                   variant: "danger",
                   disabled,
                   attributes: {

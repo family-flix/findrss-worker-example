@@ -152,7 +152,6 @@ function LoginView() {
                 padding: "12px 16px",
               },
               variant: "primary",
-              icon: false,
               disabled: computed(
                 vm$.state.loading,
                 (loading) => loading || undefined,
