@@ -115,10 +115,10 @@ function DropdownMenuSessionModel(floating, parent) {
     },
   };
   parent?.add(model);
-  const remove_branch = parent ? layer.addBranch(() => floating.open.value ? floating.popper.floating?.getRect() : null) : null;
+  const remove_branch = parent ? layer.addBranch(() => floating.open.value ? floating.popper.floating?.getViewportRect() : null) : null;
   if (!parent) {
-    layer.setRect(() => floating.popper.floating?.getRect());
-    layer.addBranch(() => floating.popper.reference?.getRect());
+    layer.setRect(() => floating.popper.floating?.getViewportRect());
+    layer.addBranch(() => floating.popper.reference?.getViewportRect());
     layer.onDismiss(() => floating.close());
   }
   const unlisten = subscribe_source(floating.open, open => {

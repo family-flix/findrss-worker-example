@@ -32,6 +32,7 @@ import { configure_frui } from "./frui/platform.js";
 
 configure_frui({
   floating_style: { "z-index": "10003" },
+  floating_root: () => window.document?.body,
   viewport: () => ({ width: window.innerWidth, height: window.innerHeight }),
   get_computed_style: element => window.getComputedStyle(element),
   request_frame: callback => window.requestAnimationFrame(callback),

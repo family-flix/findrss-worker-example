@@ -19,6 +19,23 @@ import {
   destroy_on_unmount
 } from "./lifecycle.js";
 
+function floating_root() {
+  const root = frui_host.floating_root?.();
+  return root?.ownerDocument && root !== root.ownerDocument.body ? root : null;
+}
+
+function floating_rect(rect) {
+  const root = floating_root();
+  if (!root) return rect;
+  const origin = root.getBoundingClientRect();
+  const scale_x = origin.width / root.offsetWidth || 1;
+  const scale_y = origin.height / root.offsetHeight || 1;
+  const x = ((rect.x ?? rect.left) - origin.left) / scale_x - (root.clientLeft || 0) + (root.scrollLeft || 0);
+  const y = ((rect.y ?? rect.top) - origin.top) / scale_y - (root.clientTop || 0) + (root.scrollTop || 0);
+  const width = rect.width / scale_x, height = rect.height / scale_y;
+  return { x, y, left: x, top: y, right: x + width, bottom: y + height, width, height };
+}
+
 function FloatingModel({
   store,
   side = "bottom",
@@ -37,6 +54,27 @@ function FloatingModel({
   });
   const popper = store.popper || store.popper$;
   const presence = store.presence || store.presence$;
+  // 画板将 Portal 的 body 重定向到局部容器，几何和边界检测统一使用该容器的 CSS 坐标。
+  const platform = popper.platform;
+  popper.platform = {
+    ...platform,
+    getClippingRect(options) {
+      const root = floating_root();
+      return root ? {
+        x: root.scrollLeft || 0, y: root.scrollTop || 0,
+        width: root.clientWidth, height: root.clientHeight,
+      } : platform.getClippingRect(options);
+    },
+    getScale(element) {
+      return floating_root() ? { x: 1, y: 1 } : platform.getScale?.(element);
+    },
+  };
+  const set_floating = popper.setFloating.bind(popper);
+  popper.setFloating = element => set_floating(element && {
+    ...element,
+    getViewportRect: () => element.getRect(),
+    getRect: () => floating_rect(element.getRect()),
+  });
   popper.setConfig({
     strategy: "fixed",
     placement: `${side}-${align}`
@@ -52,11 +90,13 @@ function FloatingModel({
       if (destroyed) return null;
       throw error;
     }
-    if (destroyed) return null;
-    const viewport = frui_host.viewport?.();
+    if (destroyed || !popper.floating) return null;
+    const root = floating_root();
+    const viewport = root ? { x: root.scrollLeft || 0, width: root.clientWidth } : frui_host.viewport?.();
     if (!position || !viewport || !popper.floating) return position;
     // 当前 Timeless shift 只约束放置轴，补齐横向视口边界。
-    position.x = Math.max(8, Math.min(position.x, viewport.width - popper.floating.getRect().width - 8));
+    const left = (viewport.x || 0) + 8;
+    position.x = Math.max(left, Math.min(position.x, (viewport.x || 0) + viewport.width - popper.floating.getRect().width - 8));
     return position;
   };
   const open = ref(Boolean(store.visible ?? store.open ?? store.state.open));
@@ -82,6 +122,7 @@ function FloatingModel({
     open.as(next);
     // 当前浮层没有退出动画，关闭时立即卸载，Presence 不保留可点击的旧内容。
     if (!owned && !next && !(store instanceof vm.MenuCore) && presence.mounted) presence.unmount();
+    if (next) popper.place();
     onOpenChange?.(next);
   }
   const unlistens = [store.onStateChange(update), store.onShow?.(update), store.onHide?.(() => {
@@ -98,9 +139,11 @@ function FloatingModel({
     const virtual = typeof element.getRect === "function";
     if (!virtual && !element.getBoundingClientRect) return;
     reference = virtual ? element.$el : element;
-    popper.setReference(virtual ? element : {
-      $el: element,
-      getRect: () => element.getBoundingClientRect()
+    const get_viewport_rect = () => virtual ? element.getRect() : element.getBoundingClientRect();
+    popper.setReference({
+      ...(virtual ? element : { $el: element }),
+      getViewportRect: get_viewport_rect,
+      getRect: () => floating_rect(get_viewport_rect())
     }, {
       force: true
     });
@@ -198,6 +241,14 @@ function FloatingContent({
   onDismiss = () => model.close(),
   ...rest
 }) {
+  // Primitive 的点击区域使用 clientX/clientY，触发器分支须保留视口坐标。
+  const content_popper = new Proxy(model.popper, {
+    get(target, key) {
+      const value = Reflect.get(target, key, target);
+      if (key === "reference" && value) return { ...value, getRect: value.getViewportRect };
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
   const render_content = () => destroy_on_unmount(ui.PopperPrimitive.Content({
     ...rest,
     style: {
@@ -210,7 +261,7 @@ function FloatingContent({
         ...rest.style
       })
     },
-    store: model.popper,
+    store: content_popper,
     class: atomic_classes([
       "box-sizing-border-box width-max-content max-width-calc-100-vw-16-pixels max-height-75-dynamic-vh overflow-auto right-auto bottom-auto",
       custom_class
