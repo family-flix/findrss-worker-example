@@ -46,14 +46,12 @@ const {
   Popconfirm,
   Select,
   Show,
-  Switch,
   TableField,
   Tabs,
   Textarea,
   View,
   combine,
   computed,
-  notify,
 } = Timeless;
 
 /** @param {unknown} value */
@@ -745,13 +743,6 @@ function ScriptDebugRouteView({ store: vm$, route, panel_id }) {
           attributes: { n: "script-debug-toolbar" },
         },
         [
-          View(
-            {
-              class: "box-border text-muted text-sm break-anywhere",
-              attributes: { n: "script-debug-route-path" },
-            },
-            [route.path],
-          ),
           View(
             {
               class: "box-border grid items-center gap-space-2",
@@ -1733,51 +1724,6 @@ function ScriptFormView({ store: vm$ }) {
               },
             }),
           ],
-        ),
-        View(
-          {
-            class: "box-border flex items-center gap-space-2 whitespace-nowrap",
-            attributes: { n: "script-debug-actions" },
-          },
-          [
-            Switch({
-              class: "box-border",
-              checked: vm$.state.live_debug,
-              label: "实时调试",
-              disabled: vm$.state.saving,
-              attributes: {
-                n: "script-live-debug",
-                "aria-label": "实时调试",
-              },
-              onChange: vm$.methods.set_live_debug,
-            }),
-            View(
-              {
-                class: "box-border",
-                as: "button",
-                onClick: () =>
-                  notify(
-                    "首次运行后，修改代码或链接会自动调试。使用真实抓取、Cookie 和在线设备；无需保存，不扣积分。",
-                  ),
-                attributes: {
-                  n: "script-live-debug-help",
-                  type: "button",
-                  "aria-label": "实时调试说明",
-                },
-              },
-              [Icon("circle-help", 16)],
-            ),
-          ],
-        ),
-        Button(
-          {
-            class: "box-border",
-            variant: "secondary",
-            attributes: { n: "script-cancel-button" },
-            disabled: busy,
-            onClick: vm$.methods.close_form,
-          },
-          ["取消"],
         ),
         Button(
           {

@@ -19,7 +19,7 @@
 
 `/admin/clips` 提供区域剪藏管理：来源网址、CSS 选择器、采集视口、刷新策略、预览与 iframe 嵌入。采集通过 Cloudflare Browser Rendering 执行 `examples/scripts/region_clip.js`，按与订阅源相同的默认策略或单条覆盖规则定时更新；任务出现在「任务」页面。暂停仅停止自动刷新，最近快照仍可访问；删除会让公开链接返回 404。公开 `/clips/<ID>` 只输出无脚本的静态 HTML 和内联 CSS，允许跨站 iframe；后台页面自身仍禁止被嵌入。区域剪藏脚本通过 `ctx.puppeteer.navigate` 显式调用渲染与页面提取函数；宿主使用 `@cloudflare/puppeteer` 与 `BROWSER` 绑定，不需要配置渲染方式开关或 REST API 凭证。普通脚本的 Debug、Mock 和正式执行也提供同一接口，Mock 可声明 `puppeteer.navigate`。
 
-后台公共 Shell 挂载共享的 `Toaster()` 和 `TooltipHost()`。各页点击说明按钮通过 `FindRSSAdminUI.notify(text)` 展示提示，错误提示可传入 `{ error: true }`。通知支持关闭、自动消失，并在切换页面或卸载时清理。脚本实时调试说明和 Field 的 `tooltip` 参数继续使用点击提示。
+后台公共 Shell 挂载共享的 `Toaster()` 和 `TooltipHost()`。各页点击说明按钮通过 `FindRSSAdminUI.notify(text)` 展示提示，错误提示可传入 `{ error: true }`。通知支持关闭、自动消失，并在切换页面或卸载时清理。Field 的 `tooltip` 参数继续使用点击提示。
 
 `/admin/discovery`「抓取与快照」列中，XML 抓取和广场快照失败时间旁的 `info-circle` 图标，以及「下次抓取」旁的 `circle-help` 图标，均使用 `Tooltip` 组件。实现参考小讯阅读器的共享会话、Portal 和 Popper，悬停或键盘聚焦显示完整错误原因或抓取规则（含继承后的有效规则），点击或 Esc 收起，通过 `aria-describedby` 关联提示内容，不触发 Toaster，也不叠加原生 `title` 提示。浮层沿用 `--frui-color-surface-raised`、`--frui-color-text`、`--frui-radius-sm` 和 `--frui-shadow-card`。
 
@@ -141,7 +141,7 @@ Cookie 全量推送请求统一使用 `data` 字符串，替代请求顶层的 `
 
 绑定 `API_STORAGE` 后，正式源码和草稿保存在 R2，列表只加载元数据，打开编辑器时再读取源码。点击脚本卡片右上角的版本号按钮打开「版本历史」，查看历史源码或回退正式版，回退保留未发布草稿，校验旧版配置、路由及 Cookie 权限，并刷新关联订阅源快照。下一次发布的版本号仍须高于历史最高发布版本。旧 SQLite 脚本启动后分批迁入 R2；历史记录从迁移时仍保留的版本开始。
 
-Debug 以路由作为一级 Tab，每条路由独立保留调试地址、输出、上下文和日志，切换时取消尚未完成的请求。二级 Tab 根据 handler 实际返回值的 `kind` 更新：`rss` 提供「XML 预览 / 预览」，`img`、`video`、`audio` 提供「预览」，分别渲染图片、MP4 视频和音频播放器；各类型均保留「输出 / 上下文 / 日志」。修改源码会把各条路由的旧结果标记为待重新调试，实时调试跟随当前选中的路由。仅填写或修改版本号保留已有调试结果，取消等待中及进行中的调试，不自动调试或弹出 Cookie 授权；点击「发布正式」时检查新版本授权并按需确认。主动运行调试仍按当前版本检查 Cookie 授权。
+Debug 以路由作为一级 Tab，每条路由独立保留调试地址、输出、上下文和日志，切换时取消尚未完成的请求。二级 Tab 根据 handler 实际返回值的 `kind` 更新：`rss` 提供「XML 预览 / 预览」，`img`、`video`、`audio` 提供「预览」，分别渲染图片、MP4 视频和音频播放器；各类型均保留「输出 / 上下文 / 日志」。修改源码会把各条路由的旧结果标记为待重新调试。新增和编辑脚本时实时调试默认关闭，页面不提供实时调试开关；修改代码或调试地址后，点击「运行」手动调试当前路由。仅填写或修改版本号保留已有调试结果，取消等待中及进行中的调试，不自动调试或弹出 Cookie 授权；点击「发布正式」时检查新版本授权并按需确认。主动运行调试仍按当前版本检查 Cookie 授权。
 
 Debug 的卡片预览支持同一草稿内尚未发布的图片代理路由（需声明 `allowed_hosts`）。成功调试后，图标和封面通过管理员专用的短期预览入口读取，使用本次 Debug 的源码和 Cookie 授权；XML 与原始输出保留正式地址。预览不会发布脚本或写入公开图片缓存。草稿快照在当前 DO 内最多保留 16 份、有效期 15 分钟；过期、被淘汰或服务重启后，重新运行 Debug 即可。
 

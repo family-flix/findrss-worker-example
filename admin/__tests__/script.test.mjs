@@ -291,7 +291,7 @@ test("R2 脚本编辑按需加载源码，版本历史支持查看、取消和�
   await find_node(root, "script-edit-button").props.onClick();
   assert.match(calls[0].url, /id=r2-script/);
   assert.equal(find_node(root, "script-code-textarea").props.value.value, "// 编辑时加载的源码");
-  find_node(root, "script-cancel-button").props.onClick();
+  find_node(root, "script-form-close-button").props.onClick();
   assert.equal(find_node(root, "script-history-button"), undefined);
   const version_button = find_node(find_node(root, "script-card-release"), "script-status");
   assert.equal(version_button.type, "button");
@@ -630,7 +630,7 @@ test("RSS/Hot Tabs 按 RSS 优先排序，各自筛选列表与计数，新增�
   find_node(root, "script-create-button").props.onClick();
   assert.equal(find_node(root, "script-code-textarea").props.value.value, DEFAULT_HOT_SCRIPT);
   assert.equal(find_node(root, "script-debug-url").props.value.value, "/baidu/hot");
-  find_node(root, "script-cancel-button").props.onClick();
+  find_node(root, "script-form-close-button").props.onClick();
   await tabs.props.onChange("rss");
   assert.deepEqual(names(), ["RSS 一", "RSS 二"]);
   assert.equal(find_node(root, "script-copy-rss-button"), undefined);
@@ -757,7 +757,7 @@ test("预览 Tabs 按正在编辑的草稿 kind 显示，Hot 不显示 XML 和�
   find_node(root, "script-type-tabs").props.onChange("hot");
   find_node(root, "script-create-button").props.onClick();
   assert.deepEqual(find_node(root, "script-debug-tabs").props.items.map(item => item.id), ["output", "context", "logs"]);
-  find_node(root, "script-cancel-button").props.onClick();
+  find_node(root, "script-form-close-button").props.onClick();
   find_node(root, "script-edit-button").props.onClick();
   find_node(root, "script-type-tabs").props.onChange("rss");
   assert.deepEqual(find_node(root, "script-debug-tabs").props.items.map(item => item.id), ["output", "context", "logs"]);
@@ -851,6 +851,7 @@ for (const editing of [false, true]) {
     assert.deepEqual(tabs().props.items.map(item => [item.id, item.label]), routes.map(route => [route.path, route.name]));
     assert.equal(find_node(root, "script-debug-url").props.value.value, routes[0].example);
     assert.equal(find_node(root, "script-debug-url-field"), undefined);
+    assert.equal(find_node(root, "script-debug-route-path"), undefined);
     for (const row of rows()) assert.deepEqual(row.children.map(node => node.props.attributes.n),
       ["script-debug-url", "script-debug-run-button"]);
     await find_node(root, "script-debug-run-button").props.onClick();
@@ -868,12 +869,9 @@ for (const editing of [false, true]) {
     assert.equal(find_node(root, "script-debug-output-content").props.value.value, "/debug/qidian/book/1036526469");
     select(routes[1].path);
     assert.equal(find_node(root, "script-debug-output-content").props.value.value, "/debug/qidian/chapter/123/456?full=1");
-    find_node(root, "script-live-debug").props.onChange(true);
     t.mock.timers.tick(800);
     await new Promise(setImmediate);
-    assert.equal(requests.length, 3);
-    assert.equal(requests[2].request_url, "/debug/qidian/chapter/123/456?full=1", "实时调试跟随当前路由");
-    find_node(root, "script-live-debug").props.onChange(false);
+    assert.equal(requests.length, 2, "切换路由不会自动调试");
     routes = [routes[1], { path: "/qidian/latest", name: "最新", example: "/qidian/latest" }];
     code.props.onInput({ target: { value: source } });
     t.mock.timers.tick(400);
@@ -915,7 +913,6 @@ test("RSS 和图片代理各自调试并保留输出、上下文与日志，修�
   const root = build_page({ ...script_fixture, id: "multi", routes }, false);
   t.after(() => find_node(root, "scripts-content").props.onUnmounted());
   find_node(root, "script-edit-button").props.onClick();
-  find_node(root, "script-live-debug").props.onChange(false);
   const tabs = () => find_node(root, "script-debug-route-tabs");
   const select = path => tabs().props.onChange(path);
   assert.deepEqual(tabs().props.items.map(item => item.label), ["RSS 订阅", "图片代理"]);
@@ -954,7 +951,6 @@ test("切换路由会取消原调试，迟到结果不能覆盖当前路由；�
   const root = build_page({ ...script_fixture, id: "multi", routes }, false);
   t.after(() => find_node(root, "scripts-content").props.onUnmounted());
   find_node(root, "script-edit-button").props.onClick();
-  find_node(root, "script-live-debug").props.onChange(false);
   const tabs = () => find_node(root, "script-debug-route-tabs");
   const select = path => tabs().props.onChange(path);
   const first = find_node(root, "script-debug-run-button").props.onClick();
@@ -1127,7 +1123,6 @@ test("调试期间可继续编辑，迟到结果不覆盖新草稿；关闭表�
   };
   const root = build_page();
   t.after(() => find_node(root, "scripts-content").props.onUnmounted());
-  find_node(root, "script-live-debug").props.onChange(false);
   find_node(root, "script-code-textarea").props.onInput({ target: { value: "旧代码" } });
   find_node(root, "script-debug-url").props.onInput({ target: { value: "/debug/sample/a" } });
   const run = find_node(root, "script-debug-run-button");
@@ -1148,6 +1143,42 @@ test("调试期间可继续编辑，迟到结果不覆盖新草稿；关闭表�
   assert.equal(find_node(root, "script-debug-stack-content"), undefined);
 });
 
+test("新增、编辑和重新打开脚本时实时调试默认关闭，运行后修改代码和地址也不会自动调试", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const original = fetch_handler;
+  t.after(() => { fetch_handler = original; });
+  let calls = 0;
+  fetch_handler = async () => {
+    calls++;
+    return Response.json({ status: 200, rss_debug: { output: "结果" } });
+  };
+  refarr_seeds = [[normalize_fixture(script_fixture)]];
+  const model = ScriptViewModel();
+  t.after(() => model.methods.destroy());
+  assert.equal(model.state.live_debug.value, false);
+  for (const editing of [false, true, false]) {
+    if (editing) model.methods.edit_script(script_fixture.id);
+    else model.methods.create_script();
+    assert.equal(model.state.live_debug.value, false);
+    const pending = model.methods.debug_script();
+    model.methods.set_draft("script", "修改后的草稿");
+    model.methods.set_debug_url("/sample/changed");
+    await pending;
+    t.mock.timers.tick(2000);
+    await new Promise(setImmediate);
+    assert.equal(calls, 1, "修改进行中调试的输入不补跑");
+    await model.methods.debug_script();
+    model.methods.set_draft("script", "再次修改草稿");
+    model.methods.set_debug_url("/sample/changed-again");
+    t.mock.timers.tick(2000);
+    await new Promise(setImmediate);
+    assert.equal(calls, 2, "手动运行完成后也不自动调试");
+    model.methods.set_live_debug(true);
+    model.methods.close_form();
+    calls = 0;
+  }
+});
+
 test("实时调试合并连续编辑，执行期间仅补跑最后一份草稿，关闭后清理定时器", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const original = fetch_handler;
@@ -1158,13 +1189,17 @@ test("实时调试合并连续编辑，执行期间仅补跑最后一份草稿�
     calls.push(JSON.parse(options.body));
     return new Promise(resolve => { finish = resolve; });
   };
-  const root = build_page();
-  const edit = value => find_node(root, "script-code-textarea").props.onInput({ target: { value } });
+  refarr_seeds = [];
+  const model = ScriptViewModel();
+  t.after(() => model.methods.destroy());
+  model.methods.create_script();
+  model.methods.set_live_debug(true);
+  const edit = value => model.methods.set_draft("script", value);
   edit("初始草稿");
-  find_node(root, "script-debug-url").props.onInput({ target: { value: "/debug/sample/a" } });
+  model.methods.set_debug_url("/debug/sample/a");
   t.mock.timers.tick(1000);
   assert.equal(calls.length, 0, "首次调试须点击运行");
-  const pending = find_node(root, "script-debug-run-button").props.onClick();
+  const pending = model.methods.debug_script();
   edit("中途草稿");
   t.mock.timers.tick(800);
   edit("最后草稿");
@@ -1177,7 +1212,7 @@ test("实时调试合并连续编辑，执行期间仅补跑最后一份草稿�
   t.mock.timers.tick(1);
   assert.equal(calls.length, 2);
   assert.equal(calls[1].script, "最后草稿");
-  find_node(root, "script-form-close-button").props.onClick();
+  model.methods.close_form();
   finish(Response.json({ ok: true, status: 200, rss_debug: { output: "已关闭输出" } }));
   await new Promise(resolve => queueMicrotask(resolve));
   t.mock.timers.tick(5000);
@@ -1360,7 +1395,7 @@ test("添加脚本 Frame 预览直接打开弹窗，关闭后可重新打开并�
     const dialog = find_node(root, "script-form-dialog");
     assert.equal(dialog.props.title.value, "新增脚本");
     assert.equal(find_node(dialog, "script-code-textarea").props.value.value, DEFAULT_RSS_SCRIPT);
-    find_node(root, "script-cancel-button").props.onClick();
+    find_node(root, "script-form-close-button").props.onClick();
     assert.equal(find_node(root, "script-form-dialog"), undefined);
     find_node(root, "preview-script-create-open").props.onClick();
     assert.ok(find_node(root, "script-form-dialog"));
@@ -1369,18 +1404,19 @@ test("添加脚本 Frame 预览直接打开弹窗，关闭后可重新打开并�
   }
 });
 
-test("脚本表单默认隐藏，新增/编辑打开 Modal，取消清空草稿", () => {
+test("脚本表单默认隐藏，新增/编辑打开 Modal，关闭清空草稿", () => {
   const root = build_page({ ...script_fixture, id: "one" }, false);
   assert.equal(find_node(root, "script-form-dialog"), undefined);
   const create = find_node(root, "script-create-button");
   assert.deepEqual(child_texts(create), ["新增脚本"]);
   create.props.onClick();
   let dialog = find_node(root, "script-form-dialog");
+  assert.equal(find_node(dialog, "script-cancel-button"), undefined);
   assert.equal(dialog.props.title.value, "新增脚本");
   assert.equal(find_node(dialog, "script-code-textarea").props.value.value, DEFAULT_RSS_SCRIPT);
   assert.equal(find_node(dialog, "script-debug-url").props.value.value, "/solidot");
   find_node(dialog, "script-code-textarea").props.onInput({ target: { value: "草稿" } });
-  find_node(dialog, "script-cancel-button").props.onClick();
+  find_node(dialog, "script-form-close-button").props.onClick();
   assert.equal(dialog.props.open.value, false);
   assert.equal(find_node(root, "script-form-dialog"), undefined);
   create.props.onClick();
@@ -1433,7 +1469,7 @@ test("Diff 按钮位于编辑表单底部左侧，无变更提示，关闭与 Es
   assert.equal(input.props.value.value, changed);
   assert.equal(form.props.open.value, true);
   find_node(root, "script-diff-button").props.onClick();
-  find_node(root, "script-cancel-button").props.onClick();
+  find_node(root, "script-form-close-button").props.onClick();
   assert.equal(find_node(root, "script-diff-dialog"), undefined);
 });
 
@@ -1604,7 +1640,7 @@ test("Modal 保存期间编辑器只读而不禁用，鼠标保存不抢焦点�
   const pending = save_button.props.onClick();
   assert.equal(input.props.disabled, undefined);
   assert.equal(input.props.readOnly.value, true);
-  find_node(dialog, "script-cancel-button").props.onClick();
+  find_node(dialog, "script-form-close-button").props.onClick();
   find_node(root, "script-create-button").props.onClick();
   assert.equal(dialog.props.open.value, true);
   assert.equal(dialog.props.title.value, `编辑脚本：${script_fixture.name}`);
@@ -1859,7 +1895,7 @@ test("Hot/RSS 卡片保留路径和管理操作，主路由及附加路由移除
 });
 
 for (const editing of [false, true]) {
-  test(`${editing ? "编辑" : "新增"}脚本移除 Mock 路由序号，footer 保留实时调试及说明`, () => {
+  test(`${editing ? "编辑" : "新增"}脚本移除 Mock 路由序号和实时调试控件`, () => {
     const root = build_page();
     if (editing) find_node(root, "script-edit-button").props.onClick();
     const form = find_node(root, "script-form");
@@ -1876,16 +1912,10 @@ for (const editing of [false, true]) {
     assert.equal(find_node(dialog, "script-test-route-index-field"), undefined);
     assert.ok(find_node(form, "script-agent-pane"));
     assert.ok(find_node(form, "script-debug-pane"));
-    const actions = find_node(dialog, "script-debug-actions");
-    assert.equal(find_node(form, "script-debug-actions"), undefined);
-    assert.equal(dialog.props.footer[5], actions);
-    assert.equal(find_node(dialog, "script-draft-debug"), undefined);
-    assert.deepEqual(actions.children.map(node => node.props.attributes.n),
-      ["script-live-debug", "script-live-debug-help"]);
+    for (const name of ["script-debug-actions", "script-live-debug", "script-live-debug-help", "script-draft-debug"])
+      assert.equal(find_node(dialog, name), undefined, name);
     assert.equal(find_node(form, "script-debug-url-field"), undefined);
     assert.equal(walk(form).filter(node => node.props?.attributes?.n === "script-debug-route-row").length, 1);
-    find_node(actions, "script-live-debug-help").props.onClick();
-    assert.match(notification, /^首次运行后/);
     assert.equal(find_node(root, "tooltip-host"), undefined);
   });
 }
@@ -1911,14 +1941,14 @@ test("卡片和表单没有 Debug 开关，新建默认关闭，编辑保留已�
   }
 });
 
-test("脚本卡片移除启用 Switch，编辑器保留实时调试 Switch", () => {
+test("脚本卡片和编辑器均不显示 Switch", () => {
   const root = build_page(script_fixture, false);
   const release = find_node(root, "script-card-release");
   assert.equal(find_node(release, "script-enabled"), undefined);
   assert.equal(walk(find_node(root, "script-card")).some(node => node.type === "switch"), false);
   assert.equal(find_node(root, "script-toggle-button"), undefined);
   find_node(root, "script-create-button").props.onClick();
-  assert.equal(find_node(root, "script-live-debug").type, "switch");
+  assert.equal(walk(find_node(root, "script-form-dialog")).some(node => node.type === "switch"), false);
 });
 
 test("路由参数使用 TableField，以 key/value 列对齐并保持每条路由独立", () => {
@@ -1974,7 +2004,7 @@ for (const editing of [false, true]) {
     assert.equal(find_node(root, "script-form-dialog").props.open.value, true);
     assert.equal(find_node(root, "script-code-textarea").props.value.value, changed);
 
-    find_node(root, "script-cancel-button").props.onClick();
+    find_node(root, "script-form-close-button").props.onClick();
     assert.equal(find_node(root, "script-form-dialog"), undefined);
     find_node(root, "script-create-button").props.onClick();
     find_node(root, "script-code-textarea").props.onInput({ target: { value: changed } });
@@ -2157,7 +2187,7 @@ test("填写版本号不触发实时调试或 Cookie 确认，点击发布才确
   assert.equal(calls[0].body.version, "");
   assert.equal(find_node(root, "script-cookie-consent").props.open.value, false);
 
-  // 已启用实时调试，并且有一次等待执行的调试；输入版本号应取消它。
+  // 修改调试地址和版本号后保持手动调试，不自动发出请求。
   find_node(root, "script-debug-url").props.onInput({ target: { value: "/solidot?limit=5" } });
   const input = find_node(root, "script-version-input");
   for (const value of ["1", "1.0", "1.0.0"]) {

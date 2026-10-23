@@ -205,7 +205,7 @@ function ScriptViewModel() {
   const debug_route_path_ = ref("");
   let routes_timer = null;
   let routes_generation = 0;
-  const live_debug_ = ref(true);
+  const live_debug_ = ref(false);
   const debugging_ = ref(false);
   const debug_result_ = refobj({
     status: 0,
@@ -438,7 +438,7 @@ function ScriptViewModel() {
     debug_armed = false;
     debugging_.set(false);
     debug_url_.set("");
-    live_debug_.set(true);
+    live_debug_.set(false);
     debug_result_.as({ status: 0, rss_debug: null, error: "", stale: false });
   }
 
