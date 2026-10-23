@@ -88,7 +88,7 @@ function LoginView() {
                 store: vm$.password_input$,
                 value: vm$.state.password,
                 name: "password",
-                placeholder: "",
+                placeholder: "请输入密码",
                 attributes: {
                   n: "admin-login-password-input",
                   id: "admin-login-password",
