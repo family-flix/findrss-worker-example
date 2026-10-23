@@ -191,6 +191,32 @@ test("存储文件树使用虚拟窗口，目录可展开且只提供预览", as
   find(root, "storage-page").onUnmounted();
 });
 
+test("存储列表通过 ListViewV2 empty 展示 EmptyCard，加载及有文件时隐藏", async () => {
+  const storage_bundle = await build({
+    entryPoints: [fileURLToPath(new URL("../components/storage_tree.js", import.meta.url))],
+    bundle: true, format: "iife", globalName: "StorageTreeModule", write: false,
+  });
+  vm.runInContext(storage_bundle.outputFiles[0].text, context);
+  const rows = ui.refarr([]), busy = ui.ref(false), active_key = ui.ref("");
+  const root = context.StorageTreeModule.StorageTreeView({ model: {
+    state: { rows, busy, active_key }, methods: {},
+  } });
+  try {
+    const tree = find(root, "storage-tree");
+    assert.equal(find(root, "storage-empty"), find(tree, "storage-empty"));
+    assert.ok(find(tree, "storage-empty-illustration"));
+    assert.equal(find(tree, "storage-empty-title").children[0].state.value, "暂无文件");
+    busy.as(true);
+    assert.equal(find(root, "storage-empty"), null);
+    busy.as(false);
+    assert.ok(find(tree, "storage-empty"));
+    rows.push({ id: "file", key: "file", title: "file", depth: 0 });
+    assert.equal(find(root, "storage-empty"), null);
+    rows.clear();
+    assert.ok(find(tree, "storage-empty"));
+  } finally { root.destroy(); rows.destroy(); busy.destroy(); active_key.destroy(); }
+});
+
 test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使用对应颜色的标签", async () => {
   const network_bundle = await build({
     entryPoints: [fileURLToPath(new URL("../pages/network.js", import.meta.url))],

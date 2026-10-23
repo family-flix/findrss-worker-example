@@ -6,6 +6,10 @@ export function StorageTreeView({ model }) {
     each: state.rows, key: "id", itemHeight: 40, buffer: 6,
     class: "flex-1 min-w-0 min-h-0 overflow-auto",
     style: { "overflow-anchor": "none" },
+    empty: () => Show({ when: computed(state.busy, busy => !busy), ok: () => EmptyCard({
+      name: "storage-empty", variant: "inline", title: "暂无文件",
+      description: "R2 存储中暂时没有文件。",
+    }) }),
     attributes: { n: "storage-tree", role: "tree", tabindex: "0", "aria-label": "R2 文件树",
       "aria-activedescendant": computed(state.active_key, key => key ? "storage-row-" + encodeURIComponent(key) : undefined),
     },
@@ -43,8 +47,6 @@ export function StorageTreeView({ model }) {
   return View({ class: "box-border flex flex-col min-w-0 min-h-0 overflow-hidden rounded-card bg-surface-raised gap-space-2",
     style: { padding: "var(--frui-space-2)" }, attributes: { n: "storage-tree-panel" } }, [
     tree,
-    Show({ when: combine({ rows: state.rows, busy: state.busy }, value => !value.busy && !value.rows.length),
-      ok: () => View({ class: "text-muted text-sm", attributes: { n: "storage-empty" } }, ["暂无文件"]) }),
   ]);
 }
 
