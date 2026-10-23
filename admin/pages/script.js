@@ -198,40 +198,72 @@ function ScriptCookieConsentView({ store: vm$ }) {
       ),
       View(
         {
-          class: "box-border",
-          style: {
-            margin: "0",
-            padding: "10px 24px",
-            "overflow-wrap": "anywhere",
-            "white-space": "pre-wrap",
-          },
-          as: "pre",
+          class: "box-border grid gap-space-3",
+          style: { padding: "10px 24px" },
           attributes: { n: "script-cookie-permissions" },
         },
         [
-          read((value) =>
-            JSON.stringify(value.info?.permissions || {}, null, 2),
-          ),
+          View({ as: "h3", class: "box-border m-0 text-sm", attributes: { n: "script-cookie-permissions-title" } }, ["申请的 Cookie 权限"]),
+          Show({
+            when: read((value) => !value.info?.permissions?.cookies?.length),
+            ok: () => View({ class: "box-border text-sm text-muted", attributes: { n: "script-cookie-permissions-empty" } }, ["未申请 Cookie 权限"]),
+          }),
+          For({
+            each: read((value) => value.info?.permissions?.cookies || []),
+            key: "id",
+            render(raw) {
+              const permission = source_value(raw);
+              return View({
+                class: "box-border grid min-w-0 gap-space-3 rounded-control",
+                style: { padding: "12px", border: "1px solid var(--frui-color-border-soft)" },
+                attributes: { n: "script-cookie-permission" },
+              }, [
+                ["names", "Cookie 名称", permission.names.join("、")],
+                ["origin", "目标域名", permission.origin],
+                ["path", "允许的路径前缀", permission.path_prefix || "未声明"],
+                ["purpose", "使用用途", permission.purpose],
+              ].map(([name, label, value]) => FieldView({
+                semantic_name: "script-cookie-permission-" + name + "-field", label,
+              }, [View({
+                class: "box-border whitespace-pre-wrap break-anywhere text-sm",
+                attributes: { n: "script-cookie-permission-" + name },
+              }, [value])])));
+            },
+          }),
         ],
       ),
       View(
         {
-          class: "box-border",
-          style: {
-            margin: "0",
-            padding: "10px 24px",
-            "overflow-wrap": "anywhere",
-            "white-space": "pre-wrap",
-          },
-          as: "pre",
+          class: "box-border grid gap-space-3",
+          style: { padding: "10px 24px" },
           attributes: { n: "script-cookie-visibility" },
         },
         [
-          read(
-            (value) =>
-              "输出访问范围：\n" +
-              JSON.stringify(value.info?.visibility || {}, null, 2),
-          ),
+          View({ as: "h3", class: "box-border m-0 text-sm", attributes: { n: "script-cookie-visibility-title" } }, ["输出访问范围"]),
+          View({ class: "box-border whitespace-pre-wrap break-anywhere text-sm", attributes: { n: "script-cookie-subscribers" } }, [
+            read((value) => "订阅者：" + (value.info?.visibility?.subscribers || "未声明订阅者范围")),
+          ]),
+          Show({
+            when: read((value) => !value.info?.visibility?.routes?.length),
+            ok: () => View({ class: "box-border text-sm text-muted", attributes: { n: "script-cookie-routes-empty" } }, ["未声明输出路由"]),
+          }),
+          For({
+            each: read((value) => value.info?.visibility?.routes || []),
+            key: "path",
+            render(raw) {
+              const route = source_value(raw);
+              return View({
+                class: "box-border flex flex-wrap items-center justify-between gap-space-2 rounded-control",
+                style: { padding: "12px", border: "1px solid var(--frui-color-border-soft)" },
+                attributes: { n: "script-cookie-route" },
+              }, [
+                View({ class: "box-border min-w-0 break-anywhere font-mono text-sm", attributes: { n: "script-cookie-route-path" } }, [route.path]),
+                Badge({ attributes: { n: "script-cookie-route-access" } }, [
+                  route.public === true ? "公开访问（无需 token）" : "持有效访问 token 的订阅者可访问",
+                ]),
+              ]);
+            },
+          }),
         ],
       ),
       View(

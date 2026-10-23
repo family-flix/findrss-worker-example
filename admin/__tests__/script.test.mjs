@@ -1265,7 +1265,7 @@ test("Cookie 权限仅点击确认后授权并继续，取消不授权，修改�
   const run = () => find_node(root, "script-debug-run-button").props.onClick();
   await run();
   assert.equal(find_node(root, "script-cookie-consent").props.open.value, true);
-  assert.match(child_texts(find_node(root, "script-cookie-permissions")).join(""), /SUB/);
+  assert.match(child_texts(find_node(root, "script-cookie-permission-names")).join(""), /SUB/);
   assert.equal(calls.length, 1);
   find_node(root, "script-cookie-cancel").props.onClick();
   assert.equal(find_node(root, "script-cookie-consent").props.open.value, false);
