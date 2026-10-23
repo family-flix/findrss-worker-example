@@ -1899,3 +1899,91 @@ test("全局小讯入口打开原阅读器对话，路由更新标题上下文�
     assert.equal(find(view, "admin-global-agent-dialog"), null);
   } finally { view.onUnmounted(); model.methods.destroy(); }
 });
+
+async function component_frame(name) {
+  const result = await build({
+    stdin: { contents: readFileSync(new URL(`../components/${name}.frame`, import.meta.url), "utf8"),
+      resolveDir: fileURLToPath(new URL("../components", import.meta.url)), loader: "js" },
+    bundle: true, write: false, format: "iife", globalName: "component_preview",
+  });
+  vm.runInContext(result.outputFiles[0].text, context);
+  return context.component_preview._Preview;
+}
+
+test("来源 Select Frame 直接返回共用选择器，选择后同步图标，筛选包含全部来源", async () => {
+  const previews = await component_frame("discovery_platform");
+  assert.equal(previews.length, 3);
+  for (const [index, preview] of previews.slice(0, 2).entries()) {
+    assert.equal(preview.path, `/components/discovery_platform/${index + 1}`);
+    const root = preview.render();
+    try {
+      assert.equal(root.state.attributes.n, "preview-source-control-root");
+      const icon = find(root, "discovery-platform-icon");
+      assert.equal(icon.state.src, index ? "/platform-icons/all.svg" : "/platform-icons/website.svg");
+      const trigger = find(root, "preview-source-control");
+      assert.equal(trigger.state.attributes["aria-label"], index ? "筛选来源" : "来源");
+      trigger.events.onClick();
+      assert.equal(Boolean(find(root, "preview-source-control-option-all")), Boolean(index));
+      for (const id of ["website", "bilibili", "github", "wxmp"]) {
+        const row = find(root, "preview-source-control-option-" + id);
+        assert.equal(find(row, "discovery-platform-icon").state.src, `/platform-icons/${id === "github" ? "website" : id}.svg`);
+      }
+      find(root, "preview-source-control-option-bilibili").events.onClick();
+      assert.equal(icon.state.src, "/platform-icons/bilibili.svg");
+    } finally { root.onUnmounted(); }
+  }
+});
+
+test("来源下拉项预览默认展开真实菜单，选择后可关闭并重新打开", async () => {
+  const previews = await component_frame("discovery_platform");
+  assert.equal(previews[2].path, "/components/discovery_platform/3");
+  const root = previews[2].render();
+  try {
+    assert.equal(root.state.attributes.n, "preview-source-control-root");
+    const trigger = find(root, "preview-source-control");
+    assert.equal(trigger.state.attributes["aria-expanded"], "true");
+    for (const id of ["all", "website", "bilibili", "github", "wxmp"]) {
+      const row = find(root, "preview-source-control-option-" + id);
+      assert.equal(find(row, "discovery-platform-icon").state.src, `/platform-icons/${id === "github" ? "website" : id}.svg`);
+      assert.equal(row.state.attributes["aria-selected"], String(id === "bilibili"));
+    }
+    find(root, "preview-source-control-option-website").events.onClick();
+    assert.equal(trigger.state.attributes["aria-expanded"], "false");
+    assert.equal(find(root, "discovery-platform-icon").state.src, "/platform-icons/website.svg");
+    trigger.events.onClick();
+    assert.equal(trigger.state.attributes["aria-expanded"], "true");
+  } finally { root.onUnmounted(); }
+
+  const disabled = ui.Select({ defaultOpen: true, disabled: true, attributes: { n: "disabled-open-select" } });
+  try {
+    assert.equal(find(disabled, "disabled-open-select").state.attributes["aria-expanded"], "false");
+    assert.equal(find(disabled, "disabled-open-select-popup"), null);
+  } finally { disabled.onUnmounted(); }
+});
+
+test("共用来源选择器响应受控值、平台图标和选项更新，保留禁用与变更回调", () => {
+  const value = ui.ref("website"), disabled = ui.ref(false);
+  const platforms = ui.ref([{ id: "website", label: "网页" }]);
+  const options = ui.ref([{ value: "website", label: "网页" }]);
+  const changes = [];
+  const root = platform_helpers.SourceSelect(ui, { value, disabled, platforms, options,
+    attributes: { n: "shared-source", "aria-label": "来源" },
+    onChange(event) { changes.push(event.target.value); value.set(event.target.value); },
+  });
+  try {
+    const icon = find(root, "discovery-platform-icon");
+    platforms.set([{ id: "website", label: "网页", icon: "/custom.svg" }]);
+    assert.equal(icon.state.src, "/custom.svg");
+    options.set([...options.value, { value: "bilibili", label: "哔哩哔哩" }]);
+    const trigger = find(root, "shared-source");
+    trigger.events.onClick();
+    find(root, "shared-source-option-bilibili").events.onClick();
+    assert.deepEqual(changes, ["bilibili"]);
+    assert.equal(value.value, "bilibili");
+    assert.equal(icon.state.src, "/platform-icons/bilibili.svg");
+    value.set("website");
+    assert.equal(icon.state.src, "/custom.svg");
+    disabled.set(true);
+    assert.equal(trigger.state.attributes.disabled, true);
+  } finally { root.onUnmounted(); }
+});

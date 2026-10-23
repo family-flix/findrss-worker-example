@@ -23,6 +23,7 @@ import {
 function Select({
   value,
   defaultValue,
+  defaultOpen,
   options,
   disabled,
   placeholder,
@@ -36,6 +37,7 @@ function Select({
   const model = SelectViewModel({
     value,
     defaultValue,
+    defaultOpen,
     options,
     disabled,
     placeholder,

@@ -204,7 +204,7 @@ test("平台筛选 Select 使用数据库 SVG，切换选中平台后图标同�
   const select = field.children[0];
   const option = select.props.render_option({ value: "甲", label: "甲平台" });
   assert.equal(option.children[0].props.src.value, "data:image/svg+xml," + encodeURIComponent(first_icon));
-  const selected = select.props.render_value({ label: "选中平台" });
+  const selected = select.props.render_value({ state: ui.computed(model.state.filter_platform, value => ({ value })), label: "选中平台" });
   await model.methods.set_filter("platform", "甲");
   assert.equal(selected.children[0].props.src.value, "data:image/svg+xml," + encodeURIComponent(first_icon));
   await model.methods.set_filter("platform", "乙");

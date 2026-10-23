@@ -6,7 +6,8 @@ import {
 } from "../components/poll_policy.js";
 import {
   discovery_platform_label,
-  discovery_platform_icon_url,
+  PlatformOptionView,
+  SourceSelect,
 } from "../components/discovery_platform.js";
 
 import {
@@ -74,34 +75,6 @@ const filter_visibility_options = [
 /** @param {unknown} value */
 function source_value(value) {
   return value && value.__is_ref ? value.value : value;
-}
-
-function PlatformOptionView(id, platforms, label) {
-  return View(
-    {
-      class: "inline-flex items-center",
-      style: { gap: "6px" },
-      attributes: { n: "discovery-platform-option" },
-    },
-    [
-      Img({
-        class: "block flex-none object-fit-contain",
-        style: { width: "18px", height: "18px" },
-        src: combine(
-          { id: typeof id === "string" ? ref(id) : id, platforms },
-          (values) => discovery_platform_icon_url(values.id, values.platforms),
-        ),
-        attributes: {
-          n: "discovery-platform-icon",
-          alt: "",
-          "aria-hidden": "true",
-          width: "18",
-          height: "18",
-        },
-      }),
-      label,
-    ],
-  );
 }
 
 function format_bytes(value) {
@@ -849,7 +822,8 @@ function SourceFormView({ store: vm$ }) {
                       label: "来源",
                     },
                     [
-                      Select({
+                      SourceSelect(Timeless, {
+                        platforms: vm$.state.platforms,
                         class: "box-border",
                         value: vm$.state.draft_source_type,
                         options: vm$.state.platform_options,
@@ -857,14 +831,6 @@ function SourceFormView({ store: vm$ }) {
                           n: "discovery-source-type-select",
                           "aria-label": "来源",
                         },
-                        render_option: ({ value, label }) =>
-                          PlatformOptionView(value, vm$.state.platforms, label),
-                        render_value: ({ label }) =>
-                          PlatformOptionView(
-                            vm$.state.draft_source_type,
-                            vm$.state.platforms,
-                            label,
-                          ),
                         onChange(event) {
                           vm$.methods.set_draft(
                             "source_type",
@@ -1199,7 +1165,8 @@ function FilterFormView({ store }) {
           label: "来源",
         },
         [
-          Select({
+          SourceSelect(Timeless, {
+            platforms: vm$.state.platforms,
             class: "box-border",
             value: vm$.state.filter_platform,
             disabled: vm$.state.bulk_busy,
@@ -1208,14 +1175,6 @@ function FilterFormView({ store }) {
               n: "discovery-source-filter-platform-select",
               "aria-label": "筛选来源",
             },
-            render_option: ({ value, label }) =>
-              PlatformOptionView(value, vm$.state.platforms, label),
-            render_value: ({ label }) =>
-              PlatformOptionView(
-                vm$.state.filter_platform,
-                vm$.state.platforms,
-                label,
-              ),
             onChange(event) {
               vm$.methods.set_filter("platform", event.target.value);
             },
@@ -1818,6 +1777,7 @@ function SourceRowView({ store: vm$, source, now }) {
           },
           [
             PlatformOptionView(
+              Timeless,
               source.source_type,
               vm$.state.platforms,
               computed(vm$.state.platforms, (platforms) =>

@@ -1,0 +1,58 @@
+import { SourceSelect } from "./discovery_platform.js";
+
+const platforms = [
+  { id: "website", label: "网页" },
+  { id: "bilibili", label: "哔哩哔哩" },
+  { id: "github", label: "GitHub" },
+  { id: "wxmp", label: "公众号" },
+];
+const options = platforms.map(({ id, label }) => ({ value: id, label }));
+
+export const _Preview = [
+  {
+    name: "来源 Select",
+    path: "/components/discovery_platform/1",
+    width: 360,
+    height: 600,
+    render() {
+      const ui = window.FindRSSAdminUI;
+      return SourceSelect(ui, {
+        platforms: ui.ref(platforms),
+        defaultValue: "website",
+        options,
+        attributes: { n: "preview-source-control", "aria-label": "来源" },
+      });
+    },
+  },
+  {
+    name: "来源 Select · 筛选",
+    path: "/components/discovery_platform/2",
+    width: 360,
+    height: 600,
+    render() {
+      const ui = window.FindRSSAdminUI;
+      return SourceSelect(ui, {
+        platforms: ui.ref(platforms),
+        defaultValue: "all",
+        options: [{ value: "all", label: "全部来源" }, ...options],
+        attributes: { n: "preview-source-control", "aria-label": "筛选来源" },
+      });
+    },
+  },
+  {
+    name: "来源 Select · 下拉项",
+    path: "/components/discovery_platform/3",
+    width: 360,
+    height: 600,
+    render() {
+      const ui = window.FindRSSAdminUI;
+      return SourceSelect(ui, {
+        platforms: ui.ref(platforms),
+        defaultValue: "bilibili",
+        defaultOpen: true,
+        options: [{ value: "all", label: "全部来源" }, ...options],
+        attributes: { n: "preview-source-control", "aria-label": "来源下拉项" },
+      });
+    },
+  },
+];

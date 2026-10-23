@@ -11,6 +11,7 @@ import {
 function SelectViewModel({
   value,
   defaultValue = null,
+  defaultOpen = false,
   options = [],
   disabled,
   placeholder = "请选择",
@@ -92,6 +93,7 @@ function SelectViewModel({
   ];
   sync_options();
   set_disabled(source_value(disabled, false));
+  if (defaultOpen && !store.disabled) store.show();
   const is_placeholder = computed(state, next => !next.selectedOption && (next.value == null || next.value === ""));
   const label = computed(state, next => next.selectedOption?.label ?? (next.value == null || next.value === "" ? next.placeholder : next
     .value));
