@@ -1,6 +1,5 @@
 import { DevicesPage } from './dashboard.js';
-import { render_page } from 'admin-preview-page';
 
 export const _Preview = [
-  { name: '设备管理', path: '/devices/1', width: 1200, height: 800, render() { return render_page(DevicesPage, 'devices'); } },
+  { order: 50, name: '设备管理', path: '/devices/1', width: 1200, height: 800, render() { return DevicesPage; } },
 ];

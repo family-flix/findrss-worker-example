@@ -1,6 +1,5 @@
 import { StoragePage } from './storage.js';
-import { render_page } from 'admin-preview-page';
 
 export const _Preview = [
-  { name: '存储', path: '/storage/1', width: 1200, height: 800, render() { return render_page(StoragePage, 'storage'); } },
+  { order: 60, name: '存储', path: '/storage/1', width: 1200, height: 800, render() { return StoragePage; } },
 ];

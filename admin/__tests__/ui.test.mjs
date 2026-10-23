@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import { AdminAgentModel, AdminAgentView } from "../components/admin_agent.js";
+import { AdminAgentPreviewModel } from "../components/admin_agent.preview.model.js";
 import { ScriptAgentModel, ScriptAgentPanelView } from "../components/script_agent.js";
 import { AISettingsStore } from "../components/ai_settings.js";
 import { AI_PROVIDER_PRESETS } from "../domain/preferences/ai_presets.js";
@@ -1986,4 +1987,46 @@ test("共用来源选择器响应受控值、平台图标和选项更新，保�
     disabled.set(true);
     assert.equal(trigger.state.attributes.disabled, true);
   } finally { root.onUnmounted(); }
+});
+
+test("XiaoxunAgent Frame 默认打开，关闭后可重新打开，包含对话和模型选择", async () => {
+  const [preview] = await component_frame("admin_agent");
+  const root = preview.render();
+  try {
+    assert.ok(find(root, "admin-global-agent-dialog"));
+    assert.ok(find(root, "xiaoxun-model-trigger"));
+    assert.ok(find(root, "xiaoxun-dialogue-message"));
+    find(root, "admin-global-agent-close").events.onClick();
+    assert.equal(find(root, "admin-global-agent-dialog"), null);
+    find(root, "admin-global-agent-toggle").events.onClick();
+    assert.ok(find(root, "admin-global-agent-dialog"));
+  } finally { root.onUnmounted(); }
+});
+
+test("XiaoxunAgent 预览 Model 本地回复、切换模型和重置对话，各实例相互独立", async () => {
+  const model = AdminAgentPreviewModel({ ui });
+  const other = AdminAgentPreviewModel({ ui });
+  try {
+    await model.agent.methods.start();
+    assert.equal(model.agent.pet.dialogue().models.length, 2);
+    const key = JSON.stringify(["preview", "reasoning"]);
+    model.agent.pet.select_model(key);
+    assert.equal(model.agent.state.model_key.value, key);
+    model.agent.methods.set_prompt("查看状态");
+    model.agent.methods.send();
+    await new Promise(setImmediate);
+    assert.equal(model.agent.state.busy.value, false);
+    assert.equal(model.agent.state.error.value, "");
+    assert.match(model.agent.state.messages.value.at(-1).content, /本地预览回复/);
+    model.agent.methods.new_chat();
+    assert.equal(model.agent.state.messages.value.length, 0);
+    assert.equal(other.agent.state.messages.value.length, 2);
+    model.agent.methods.set_prompt("取消此回复");
+    model.agent.methods.send();
+    model.agent.methods.cancel();
+    await new Promise(setImmediate);
+    assert.equal(model.agent.state.messages.value.length, 1);
+    await model.agent.settings_store.methods.save_settings();
+    assert.match(model.agent.settings_store.state.settings_error.value, /预览不保存设置/);
+  } finally { model.methods.destroy(); other.methods.destroy(); }
 });

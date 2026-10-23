@@ -1,20 +1,60 @@
-import { DiscoveryPage, SourceFormView } from './discovery.js';
-import { DiscoveryAdminViewModel } from './discovery.model.js';
-import { render_page } from 'admin-preview-page';
+import { DiscoveryPage, SourceFormView } from "./discovery.js";
+import { DiscoveryAdminViewModel } from "./discovery.model.js";
 
 export const _Preview = [
-  { name: '订阅源管理 · mock 数据', path: '/discovery/1', width: 1200, height: 800, render() { return render_page(DiscoveryPage, 'discovery'); } },
-  { name: '订阅源管理 · 空状态', path: '/discovery/2', width: 1200, height: 800, render() { return render_page(DiscoveryPage, 'discovery'); } },
   {
-    name: '新增订阅源弹窗', path: '/discovery/components/create-source/1', width: 1000, height: 1800,
+    order: 9,
+    name: "订阅源管理 · mock 数据",
+    path: "/discovery/1",
+    width: 1200,
+    height: 800,
+    render() {
+      return DiscoveryPage;
+    },
+  },
+  {
+    order: 10,
+    name: "订阅源管理 · 空状态",
+    path: "/discovery/2",
+    width: 1200,
+    height: 800,
+    render() {
+      return DiscoveryPage;
+    },
+  },
+  {
+    order: 10,
+    name: "新增订阅源弹窗",
+    path: "/discovery/components/create-source/1",
+    width: 1000,
+    height: 1800,
     render() {
       const UI = window.FindRSSAdminUI;
       const store = DiscoveryAdminViewModel();
       store.methods.create_source();
-      return UI.View({ attributes: { n: 'preview-discovery-create-source' }, onUnmounted() { store.methods.destroy(); } }, [
-        UI.Button({ attributes: { n: 'preview-discovery-create-source-open' }, onClick: store.methods.create_source }, ['新增订阅源']),
-        UI.Show({ when: store.state.form_open, ok() { return SourceFormView({ store }); } }),
-      ]);
+      return UI.View(
+        {
+          attributes: { n: "preview-discovery-create-source" },
+          onUnmounted() {
+            store.methods.destroy();
+          },
+        },
+        [
+          UI.Button(
+            {
+              attributes: { n: "preview-discovery-create-source-open" },
+              onClick: store.methods.create_source,
+            },
+            ["新增订阅源"],
+          ),
+          UI.Show({
+            when: store.state.form_open,
+            ok() {
+              return SourceFormView({ store });
+            },
+          }),
+        ],
+      );
     },
   },
 ];

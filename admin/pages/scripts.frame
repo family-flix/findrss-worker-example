@@ -1,17 +1,42 @@
 import { ScriptPage, ScriptEditorView } from './script.js';
 import { ScriptViewModel } from './script.model.js';
-import { render_page } from 'admin-preview-page';
+import { ScriptPreviewModel } from './script.preview.model.js';
 
 export const _Preview = [
-  { name: '脚本管理', path: '/scripts/1', width: 1200, height: 800, render() { return render_page(ScriptPage, 'scripts'); } },
+  { order: 20, name: '脚本管理 · mock 数据', path: '/scripts/1', width: 1200, height: 800, render() { return () => ScriptPage({ store: ScriptPreviewModel() }); } },
+  { order: 20, name: '脚本管理 · 空状态', path: '/scripts/2', width: 1200, height: 800, render() { return () => ScriptPage({ store: ScriptPreviewModel({ empty: true }) }); } },
   {
-    name: '添加脚本弹窗', path: '/scripts/components/create-script/1', width: 1200, height: 800,
+    order: 20, name: '添加脚本弹窗', path: '/scripts/components/create-script/1', width: 1200, height: 800,
     render() {
       const UI = window.FindRSSAdminUI;
       const store = ScriptViewModel();
       store.methods.create_script();
       return UI.View({ attributes: { n: 'preview-script-create' }, onUnmounted() { store.methods.destroy(); } }, [
         UI.Button({ attributes: { n: 'preview-script-create-open' }, onClick: store.methods.create_script }, ['添加脚本']),
+        ScriptEditorView({ store }),
+      ]);
+    },
+  },
+  {
+    order: 20, name: '安装脚本弹窗', path: '/scripts/components/install-script/1', width: 1200, height: 800,
+    render() {
+      const UI = window.FindRSSAdminUI;
+      const store = ScriptPreviewModel();
+      store.methods.open_install();
+      return UI.View({ attributes: { n: 'preview-script-install' }, onUnmounted() { store.methods.destroy(); } }, [
+        UI.Button({ attributes: { n: 'preview-script-install-open' }, onClick: store.methods.open_install }, ['安装脚本']),
+        ScriptEditorView({ store }),
+      ]);
+    },
+  },
+  {
+    order: 20, name: 'Cookie 权限确认弹窗', path: '/scripts/components/cookie-consent/1', width: 1200, height: 1000,
+    render() {
+      const UI = window.FindRSSAdminUI;
+      const store = ScriptPreviewModel();
+      store.methods.open_cookie_consent_preview();
+      return UI.View({ attributes: { n: 'preview-script-cookie-consent' }, onUnmounted() { store.methods.destroy(); } }, [
+        UI.Button({ attributes: { n: 'preview-script-cookie-consent-open' }, onClick: store.methods.open_cookie_consent_preview }, ['确认 Cookie 权限']),
         ScriptEditorView({ store }),
       ]);
     },

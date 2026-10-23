@@ -1,6 +1,5 @@
 import { RedemptionCardsPage } from './redemptions.js';
-import { render_page } from 'admin-preview-page';
 
 export const _Preview = [
-  { name: '兑换卡管理', path: '/redemptions/1', width: 1200, height: 800, render() { return render_page(RedemptionCardsPage, 'redemptions'); } },
+  { order: 150, name: '兑换卡管理', path: '/redemptions/1', width: 1200, height: 800, render() { return RedemptionCardsPage; } },
 ];

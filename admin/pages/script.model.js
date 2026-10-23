@@ -159,27 +159,27 @@ function normalize_log_lines(raw) {
   }));
 }
 
-async function request_json(url, options = {}) {
-  const response = await fetch(url, {
-    credentials: "same-origin",
-    cache: "no-store",
-    ...options,
-    headers: {
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...(options.headers || {}),
-    },
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw Object.assign(
-      new Error(payload.error || "请求失败：HTTP " + response.status),
-      { payload },
-    );
+function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
+  async function request_json(url, options = {}) {
+    const response = await request_fetch(url, {
+      credentials: "same-origin",
+      cache: "no-store",
+      ...options,
+      headers: {
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers || {}),
+      },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw Object.assign(
+        new Error(payload.error || "请求失败：HTTP " + response.status),
+        { payload },
+      );
+    }
+    return payload;
   }
-  return payload;
-}
 
-function ScriptViewModel() {
   const scripts_ = refarr([]);
   const cookie_consent_ = refobj({
     open: false,
@@ -1255,7 +1255,7 @@ function ScriptViewModel() {
   });
 
   const pagination = ListPaginationModel(Timeless, {
-    fetch, url: "/admin/api/scripts", key: "scripts", normalize: normalize_script,
+    fetch: request_fetch, url: "/admin/api/scripts", key: "scripts", normalize: normalize_script,
     loading: loading_, error: list_error_,
     filters: () => ({ q: query_.value.trim(), kind: script_type_.value, status: filter_status_.value }),
     on_data(scripts) { scripts_.as(scripts); },

@@ -1,0 +1,22 @@
+import { AdminAgentView } from "./admin_agent.js";
+import { AdminAgentPreviewModel } from "./admin_agent.preview.model.js";
+
+export const _Preview = [
+  {
+    name: "XiaoxunAgent",
+    path: "/components/xiaoxun-agent/1",
+    width: 600,
+    height: 800,
+    render() {
+      const ui = window.FindRSSAdminUI;
+      const model = AdminAgentPreviewModel({ ui });
+      return ui.View(
+        {
+          attributes: { n: "preview-xiaoxun-agent" },
+          onUnmounted: model.methods.destroy,
+        },
+        [AdminAgentView({ ui, model })],
+      );
+    },
+  },
+];

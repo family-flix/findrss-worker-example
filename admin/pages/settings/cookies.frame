@@ -1,6 +1,14 @@
-import { SettingsCookiesPage } from './cookies.js';
-import { render_page } from 'admin-preview-page';
+import { SettingsCookiesPage } from "./cookies.js";
 
 export const _Preview = [
-  { name: 'Cookie 解密', path: '/settings-cookies/1', width: 1200, height: 800, render() { return render_page(SettingsCookiesPage, 'settings.cookies'); } },
+  {
+    order: 93,
+    name: "Cookie 解密",
+    path: "/settings/cookies/1",
+    width: 1200,
+    height: 800,
+    render() {
+      return SettingsCookiesPage;
+    },
+  },
 ];

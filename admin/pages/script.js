@@ -2919,8 +2919,8 @@ function ScriptEditorView({ store }) {
   ]);
 }
 
-function ScriptApplicationView(embedded = false) {
-  const vm$ = ScriptViewModel();
+function ScriptApplicationView(embedded = false, store) {
+  const vm$ = store || ScriptViewModel();
   const discovery = DiscoveryAdminViewModel();
   let detach_agent;
   const content = View(
@@ -3078,8 +3078,8 @@ function ScriptApplicationView(embedded = false) {
     : window.FindRSSAdminShell.View(page_options, [script_tabs, content]);
 }
 
-function ScriptPage() {
-  return ScriptApplicationView(true);
+function ScriptPage({ store } = {}) {
+  return ScriptApplicationView(true, store);
 }
 
 export { ScriptPage, ScriptEditorView };

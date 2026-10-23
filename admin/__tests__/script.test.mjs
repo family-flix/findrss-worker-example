@@ -1382,12 +1382,152 @@ test("stub 能复现「computed 缺 map」导致的空白页故障", () => {
   assert.throws(() => window.Timeless.combine({ a: window.Timeless.ref(1) }), /缺少 map 函数/);
 });
 
-test("添加脚本 Frame 预览直接打开弹窗，关闭后可重新打开并清理 Model", async () => {
+async function script_frame_previews() {
   const source = readFileSync(new URL("../pages/scripts.frame", import.meta.url), "utf8")
     .replace("'./script.js'", JSON.stringify(new URL("../pages/script.js", import.meta.url).href))
     .replace("'./script.model.js'", JSON.stringify(new URL("../pages/script.model.js", import.meta.url).href))
-    .replace("import { render_page } from 'admin-preview-page';", "const render_page = () => {};");
-  const { _Preview } = await import("data:text/javascript," + encodeURIComponent(source));
+    .replace("'./script.preview.model.js'", JSON.stringify(new URL("../pages/script.preview.model.js", import.meta.url).href))
+    .replace("import { render_page } from 'admin-preview-page';", "const render_page = Page => Page();");
+  return (await import("data:text/javascript," + encodeURIComponent(source)))._Preview;
+}
+
+test("脚本 Frame mock 列表支持搜索、状态和类型筛选，空状态不读取真实接口", async t => {
+  const original = fetch_handler;
+  fetch_handler = () => assert.fail("mock 预览不能调用真实接口");
+  t.after(() => { fetch_handler = original; });
+  const previews = await script_frame_previews();
+  for (const path of ["/scripts/1", "/scripts/2"]) {
+    const root = previews.find(item => item.path === path).render();
+    const content = find_node(root, "scripts-content");
+    try {
+      content.props.onMounted();
+      await new Promise(setImmediate);
+      if (path === "/scripts/2") {
+        assert.deepEqual(card_names(root), []);
+        assert.ok(find_node(root, "script-list-empty"));
+        continue;
+      }
+      assert.deepEqual(card_names(root), ["Solidot 科技资讯", "会员文章订阅", "设计周刊"]);
+      assert.deepEqual(child_texts(find_node(root, "scripts-pagination-summary")), ["共 3 条 · 显示 1–3"]);
+      const query = find_node(root, "script-filter-query-input");
+      await query.props.onInput({ target: { value: "会员" } });
+      assert.deepEqual(card_names(root), ["会员文章订阅"]);
+      await query.props.onInput({ target: { value: "" } });
+      await find_node(root, "script-filter-status-select").props.onChange({ target: { value: "draft" } });
+      assert.deepEqual(card_names(root), ["设计周刊"]);
+      await find_node(root, "script-type-tabs").props.onChange("hot");
+      assert.deepEqual(card_names(root), ["今日热榜"]);
+    } finally { content.props.onUnmounted(); }
+  }
+});
+
+test("Cookie 授权以权限卡片和路由访问范围展示，并响应空状态和权限变化", t => {
+  refarr_seeds = [];
+  const model = ScriptViewModel();
+  const root = ScriptPage({ store: model });
+  t.after(() => find_node(root, "scripts-content").props.onUnmounted());
+  const text = name => child_texts(find_node(root, name)).join("");
+  assert.equal(text("script-cookie-permissions-empty"), "未申请 Cookie 权限");
+  assert.equal(text("script-cookie-routes-empty"), "未声明输出路由");
+  assert.equal(text("script-cookie-subscribers"), "订阅者：未声明订阅者范围");
+
+  const permissions = { cookies: [
+    { id: "session", names: ["SID", "CSRF_TOKEN"], origin: "https://example.com", path_prefix: "/articles", purpose: "读取会员文章" },
+    { id: "profile", names: ["USER"], origin: "https://accounts.example.com", path_prefix: "/profile", purpose: "读取用户资料" },
+  ] };
+  model.state.cookie_consent.as({ open: true, busy: false, error: "", info: {
+    permissions, visibility: { subscribers: "持有效访问 token 的订阅者", routes: [
+      { path: "/public", public: true }, { path: "/private", public: false },
+    ] },
+  } });
+  const cards = walk(root).filter(node => node?.props?.attributes?.n === "script-cookie-permission");
+  assert.equal(cards.length, 2);
+  for (const [index, card] of cards.entries()) {
+    assert.equal(find_node(card, "script-cookie-permission-id"), undefined);
+    for (const [name, value] of Object.entries({
+      names: permissions.cookies[index].names.join("、"),
+      origin: permissions.cookies[index].origin, path: permissions.cookies[index].path_prefix, purpose: permissions.cookies[index].purpose,
+    })) assert.deepEqual(child_texts(find_node(card, "script-cookie-permission-" + name)), [value]);
+  }
+  assert.equal(find_node(root, "script-cookie-permissions-empty"), undefined);
+  assert.equal(find_node(root, "script-cookie-routes-empty"), undefined);
+  assert.equal(text("script-cookie-subscribers"), "订阅者：持有效访问 token 的订阅者");
+  const routes = walk(root).filter(node => node?.props?.attributes?.n === "script-cookie-route");
+  assert.deepEqual(routes.map(route => child_texts(find_node(route, "script-cookie-route-path"))[0]), ["/public", "/private"]);
+  assert.deepEqual(routes.map(route => child_texts(find_node(route, "script-cookie-route-access"))[0]), ["公开访问（无需 token）", "持有效访问 token 的订阅者可访问"]);
+  for (const section of ["script-cookie-permissions", "script-cookie-visibility"]) {
+    assert.ok(walk(find_node(root, section)).every(node => node?.props?.as !== "pre"));
+  }
+  model.state.cookie_consent.as({ open: false, busy: false, error: "", info: null });
+  assert.equal(find_node(root, "script-cookie-permission"), undefined);
+  assert.equal(find_node(root, "script-cookie-route"), undefined);
+  assert.ok(find_node(root, "script-cookie-permissions-empty"));
+});
+
+test("Cookie 权限 Frame 展示 mock 权限，取消和确认均可重新打开且不影响其他预览", async t => {
+  const original = fetch_handler;
+  fetch_handler = () => assert.fail("权限预览不能调用真实接口");
+  t.after(() => { fetch_handler = original; });
+  const previews = await script_frame_previews();
+  const preview = previews.find(item => item.path === "/scripts/components/cookie-consent/1");
+  assert.ok(preview);
+  const root = preview.render();
+  try {
+    await new Promise(setImmediate);
+    const dialog = () => find_node(root, "script-cookie-consent");
+    assert.equal(dialog().props.open.value, true);
+    assert.match(child_texts(find_node(root, "script-cookie-source")).join(""), /预览数据/);
+    assert.match(child_texts(find_node(root, "script-cookie-permission-names")).join(""), /SID/);
+    assert.match(child_texts(find_node(root, "script-cookie-route-path")).join(""), /members/);
+    assert.deepEqual(child_texts(find_node(root, "script-cookie-route-access")), ["公开访问（无需 token）"]);
+    assert.match(child_texts(find_node(root, "script-cookie-version")).join(""), /1\.2\.0/);
+    assert.match(child_texts(find_node(root, "script-cookie-hash")).join(""), /[a-f0-9]{64}/);
+    find_node(root, "script-cookie-cancel").props.onClick();
+    assert.equal(dialog().props.open.value, false);
+    const reopen = () => find_node(root, "preview-script-cookie-consent-open").props.onClick();
+    await reopen();
+    assert.equal(dialog().props.open.value, true);
+    await find_node(root, "script-cookie-confirm").props.onClick();
+    assert.equal(dialog().props.open.value, false);
+    assert.equal(child_texts(find_node(root, "script-cookie-error")).join(""), "");
+    await reopen();
+    assert.equal(dialog().props.open.value, true);
+    const other = preview.render();
+    try {
+      await new Promise(setImmediate);
+      assert.equal(find_node(other, "script-cookie-consent").props.open.value, true);
+      find_node(other, "script-cookie-cancel").props.onClick();
+      assert.equal(dialog().props.open.value, true);
+    } finally { other.props.onUnmounted(); }
+  } finally { root.props.onUnmounted(); }
+});
+
+test("安装脚本 Frame 预览直接打开弹窗，关闭后可重新打开并清空输入", async t => {
+  const original = fetch_handler;
+  fetch_handler = () => assert.fail("安装预览不能调用真实接口");
+  t.after(() => { fetch_handler = original; });
+  const previews = await script_frame_previews();
+  const preview = previews.find(item => item.path === "/scripts/components/install-script/1");
+  assert.ok(preview);
+  const root = preview.render();
+  try {
+    assert.equal(find_node(root, "script-install-dialog").props.title, "安装脚本");
+    assert.equal(find_node(root, "script-form-dialog"), undefined);
+    assert.equal(find_node(root, "script-install-input").props.value.value, "");
+    await find_node(root, "script-install-parse").props.onClick();
+    assert.match(child_texts(find_node(root, "script-install-error")).join(""), /请输入脚本/);
+    find_node(root, "script-install-input").props.onInput({ target: { value: "https://example.com/script.js" } });
+    find_node(root, "script-install-cancel").props.onClick();
+    assert.equal(find_node(root, "script-install-dialog"), undefined);
+    find_node(root, "preview-script-install-open").props.onClick();
+    assert.ok(find_node(root, "script-install-dialog"));
+    assert.equal(find_node(root, "script-install-input").props.value.value, "");
+    assert.equal(child_texts(find_node(root, "script-install-error")).join(""), "");
+  } finally { root.props.onUnmounted(); }
+});
+
+test("添加脚本 Frame 预览直接打开弹窗，关闭后可重新打开并清理 Model", async () => {
+  const _Preview = await script_frame_previews();
   const preview = _Preview.find(item => item.path === "/scripts/components/create-script/1");
   assert.ok(preview);
   const root = preview.render();

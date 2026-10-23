@@ -1,6 +1,5 @@
 import { SettingsSnapshotsPage } from './snapshots.js';
-import { render_page } from 'admin-preview-page';
 
 export const _Preview = [
-  { name: '订阅源抓取', path: '/settings-snapshots/1', width: 1200, height: 800, render() { return render_page(SettingsSnapshotsPage, 'settings.snapshots'); } },
+  { order: 95, name: '订阅源抓取', path: '/settings/snapshots/1', width: 1200, height: 800, render() { return SettingsSnapshotsPage; } },
 ];
