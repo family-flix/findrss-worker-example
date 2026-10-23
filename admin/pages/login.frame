@@ -1,0 +1,5 @@
+import { LoginView } from './login.js';
+
+export const _Preview = [
+  { name: '登录', path: '/login/1', width: 1200, height: 800, render() { return LoginView(); } },
+];

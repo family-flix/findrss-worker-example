@@ -1,0 +1,6 @@
+import { TokensPage } from './dashboard.js';
+import { render_page } from 'admin-preview-page';
+
+export const _Preview = [
+  { name: 'Token 管理', path: '/tokens/1', width: 1200, height: 800, render() { return render_page(TokensPage, 'tokens'); } },
+];

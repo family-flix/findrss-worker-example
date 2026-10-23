@@ -1,0 +1,6 @@
+import { SettingsModelsPage } from './models.js';
+import { render_page } from 'admin-preview-page';
+
+export const _Preview = [
+  { name: '大模型', path: '/settings-models/1', width: 1200, height: 800, render() { return render_page(SettingsModelsPage, 'settings.models'); } },
+];

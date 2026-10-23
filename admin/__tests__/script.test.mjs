@@ -1347,6 +1347,28 @@ test("stub 能复现「computed 缺 map」导致的空白页故障", () => {
   assert.throws(() => window.Timeless.combine({ a: window.Timeless.ref(1) }), /缺少 map 函数/);
 });
 
+test("添加脚本 Frame 预览直接打开弹窗，关闭后可重新打开并清理 Model", async () => {
+  const source = readFileSync(new URL("../pages/scripts.frame", import.meta.url), "utf8")
+    .replace("'./script.js'", JSON.stringify(new URL("../pages/script.js", import.meta.url).href))
+    .replace("'./script.model.js'", JSON.stringify(new URL("../pages/script.model.js", import.meta.url).href))
+    .replace("import { render_page } from 'admin-preview-page';", "const render_page = () => {};");
+  const { _Preview } = await import("data:text/javascript," + encodeURIComponent(source));
+  const preview = _Preview.find(item => item.path === "/scripts/components/create-script/1");
+  assert.ok(preview);
+  const root = preview.render();
+  try {
+    const dialog = find_node(root, "script-form-dialog");
+    assert.equal(dialog.props.title.value, "新增脚本");
+    assert.equal(find_node(dialog, "script-code-textarea").props.value.value, DEFAULT_RSS_SCRIPT);
+    find_node(root, "script-cancel-button").props.onClick();
+    assert.equal(find_node(root, "script-form-dialog"), undefined);
+    find_node(root, "preview-script-create-open").props.onClick();
+    assert.ok(find_node(root, "script-form-dialog"));
+  } finally {
+    root.props.onUnmounted();
+  }
+});
+
 test("脚本表单默认隐藏，新增/编辑打开 Modal，取消清空草稿", () => {
   const root = build_page({ ...script_fixture, id: "one" }, false);
   assert.equal(find_node(root, "script-form-dialog"), undefined);

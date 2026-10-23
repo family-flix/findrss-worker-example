@@ -1,0 +1,6 @@
+import { SettingsDeviceTokensPage } from './device-tokens.js';
+import { render_page } from 'admin-preview-page';
+
+export const _Preview = [
+  { name: '设备 Token', path: '/settings-device-tokens/1', width: 1200, height: 800, render() { return render_page(SettingsDeviceTokensPage, 'settings.device_tokens'); } },
+];

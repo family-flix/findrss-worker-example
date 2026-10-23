@@ -1,0 +1,6 @@
+import { SettingsWebhookPage } from './webhook.js';
+import { render_page } from 'admin-preview-page';
+
+export const _Preview = [
+  { name: 'Webhook 消息推送', path: '/settings-webhook/1', width: 1200, height: 800, render() { return render_page(SettingsWebhookPage, 'settings.webhook'); } },
+];

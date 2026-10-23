@@ -1,0 +1,6 @@
+import { SettingsPage } from './settings.js';
+import { render_page } from 'admin-preview-page';
+
+export const _Preview = [
+  { name: '设置', path: '/settings/1', width: 1200, height: 800, render() { return render_page(SettingsPage, 'settings'); } },
+];

@@ -1,0 +1,19 @@
+import { ScriptPage, ScriptEditorView } from './script.js';
+import { ScriptViewModel } from './script.model.js';
+import { render_page } from 'admin-preview-page';
+
+export const _Preview = [
+  { name: '脚本管理', path: '/scripts/1', width: 1200, height: 800, render() { return render_page(ScriptPage, 'scripts'); } },
+  {
+    name: '添加脚本弹窗', path: '/scripts/components/create-script/1', width: 1200, height: 800,
+    render() {
+      const UI = window.FindRSSAdminUI;
+      const store = ScriptViewModel();
+      store.methods.create_script();
+      return UI.View({ attributes: { n: 'preview-script-create' }, onUnmounted() { store.methods.destroy(); } }, [
+        UI.Button({ attributes: { n: 'preview-script-create-open' }, onClick: store.methods.create_script }, ['添加脚本']),
+        ScriptEditorView({ store }),
+      ]);
+    },
+  },
+];

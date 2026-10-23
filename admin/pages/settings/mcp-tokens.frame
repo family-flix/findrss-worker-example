@@ -1,0 +1,6 @@
+import { SettingsMcpTokensPage } from './mcp-tokens.js';
+import { render_page } from 'admin-preview-page';
+
+export const _Preview = [
+  { name: 'MCP 授权', path: '/settings-mcp-tokens/1', width: 1200, height: 800, render() { return render_page(SettingsMcpTokensPage, 'settings.mcp_tokens'); } },
+];
