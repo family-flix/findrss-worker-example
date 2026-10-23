@@ -1,11 +1,17 @@
 import { format_datetime as format_time } from "../../server/lib/datetime.js";
 import { ScriptDebugOutputModel } from "../components/script_output.js";
-import { ScriptFeedPreviewModel, ScriptFeedPreviewView } from "../components/script_feed.js";
+import {
+  ScriptFeedPreviewModel,
+  ScriptFeedPreviewView,
+} from "../components/script_feed.js";
 import { ScriptDebugPreviewModel } from "../domain/script_preview.js";
 import { ScriptMediaPreviewView } from "../components/script_media.js";
 import { ScriptAgentPanelView } from "../components/script_agent.js";
 import { PaginationView } from "../components/pagination.js";
-import { discovery_platform_label, discovery_platform_icon_url } from "../components/discovery_platform.js";
+import {
+  discovery_platform_label,
+  discovery_platform_icon_url,
+} from "../components/discovery_platform.js";
 import { ModalViewModel } from "../components/frui/modal.model.js";
 import { ScriptConfigView } from "../components/script_config.js";
 import { SourceFormView } from "./discovery.js";
@@ -293,10 +299,23 @@ function ScriptCookieConsentView({ store: vm$ }) {
 }
 
 function ScriptDebugResultView({ store: vm$, route }) {
-  const preview = computed(vm$.state.debug_result, result => ScriptDebugPreviewModel(result.rss_debug,
-    vm$.state.draft_type.value === "rss" && !route?.image_proxy ? "rss" : ""));
-  return For({ each: computed(preview, value => [{ key: value.kind, kind: value.kind }]), key: "key",
-    render(value) { return ScriptDebugResultContentView({ store: vm$, kind: source_value(value).kind, preview }); } });
+  const preview = computed(vm$.state.debug_result, (result) =>
+    ScriptDebugPreviewModel(
+      result.rss_debug,
+      vm$.state.draft_type.value === "rss" && !route?.image_proxy ? "rss" : "",
+    ),
+  );
+  return For({
+    each: computed(preview, (value) => [{ key: value.kind, kind: value.kind }]),
+    key: "key",
+    render(value) {
+      return ScriptDebugResultContentView({
+        store: vm$,
+        kind: source_value(value).kind,
+        preview,
+      });
+    },
+  });
 }
 
 function ScriptDebugResultContentView({ store: vm$, kind, preview }) {
@@ -306,24 +325,49 @@ function ScriptDebugResultContentView({ store: vm$, kind, preview }) {
   );
   const is_rss = kind === "rss";
   let preview_cache;
-  const feed_preview = combine({ output, result: vm$.state.debug_result }, ({ output, result }) => {
-    const debug = result.rss_debug;
-    let self_url = "";
-    if (debug?.request?.public_origin) {
-      const url = new URL(String(debug.request.pathname || "/").replace(/^\/debug(?=\/)/, "/rss"), debug.request.public_origin);
-      url.search = new URLSearchParams(Object.entries(debug.request.query || {}).sort()).toString();
-      self_url = url.href;
-    }
-    const source = typeof debug?.output === "string" ? output.source : "";
-    const assets = debug?.preview_assets;
-    if (preview_cache?.source !== source || preview_cache?.self_url !== self_url || preview_cache?.assets !== assets) {
-      preview_cache = { source, self_url, assets, value: ScriptFeedPreviewModel(source, self_url, assets) };
-    }
-    return preview_cache.value;
-  });
-  const xml_output = computed(feed_preview, result => ScriptDebugOutputModel(JSON.stringify({
-    body: result.xml, content_type: "application/xml",
-  })));
+  const feed_preview = combine(
+    { output, result: vm$.state.debug_result },
+    ({ output, result }) => {
+      const debug = result.rss_debug;
+      let self_url = "";
+      if (debug?.request?.public_origin) {
+        const url = new URL(
+          String(debug.request.pathname || "/").replace(
+            /^\/debug(?=\/)/,
+            "/rss",
+          ),
+          debug.request.public_origin,
+        );
+        url.search = new URLSearchParams(
+          Object.entries(debug.request.query || {}).sort(),
+        ).toString();
+        self_url = url.href;
+      }
+      const source = typeof debug?.output === "string" ? output.source : "";
+      const assets = debug?.preview_assets;
+      if (
+        preview_cache?.source !== source ||
+        preview_cache?.self_url !== self_url ||
+        preview_cache?.assets !== assets
+      ) {
+        preview_cache = {
+          source,
+          self_url,
+          assets,
+          value: ScriptFeedPreviewModel(source, self_url, assets),
+        };
+      }
+      return preview_cache.value;
+    },
+  );
+  const xml_output = computed(feed_preview, (result) =>
+    ScriptDebugOutputModel(
+      JSON.stringify({
+        body: result.xml,
+        content_type: "application/xml",
+      }),
+    ),
+  );
   const block = (name, title, value) =>
     View(
       {
@@ -595,39 +639,88 @@ function ScriptDebugResultContentView({ store: vm$, kind, preview }) {
                           .join("\n") || "无执行日志",
                     ),
                   ),
-
                 ]),
               ];
             },
           },
-          ...(is_rss ? [
-            {
-              id: "xml", label: "XML预览", panel_id: "script-debug-xml-panel",
-              get content() {
-                return [panel("xml", [Show({
-                  when: computed(feed_preview, result => !result.empty),
-                  ok: () => CodeEditor({
-                    rootStyle: { "min-width": "0", width: "100%" },
-                    wrapperStyle: { height: "clamp(240px, 55dvh, 800px)" },
-                    value: computed(xml_output, result => result.formatted),
-                    mode: "application/xml", readOnly: true,
-                    attributes: { n: "script-debug-xml-content", "aria-label": "XML 响应预览", readonly: "", spellcheck: "false" },
-                  }),
-                  fail: () => View({ class: "box-border text-muted", attributes: { role: "status" } }, ["运行调试后查看 XML 响应"]),
-                })])];
-              },
-            },
-            {
-              id: "feed", label: "预览", panel_id: "script-debug-feed-panel",
-              get content() {
-                return [panel("feed", [ScriptFeedPreviewView(Timeless, { preview: feed_preview })])];
-              },
-            },
-          ] : []),
-          ...(["img", "video", "audio"].includes(kind) ? [{
-            id: "preview", label: "预览", panel_id: "script-debug-preview-panel",
-            get content() { return [panel("preview", [ScriptMediaPreviewView(Timeless, { preview })])]; },
-          }] : []),
+          ...(is_rss
+            ? [
+                {
+                  id: "xml",
+                  label: "XML预览",
+                  panel_id: "script-debug-xml-panel",
+                  get content() {
+                    return [
+                      panel("xml", [
+                        Show({
+                          when: computed(
+                            feed_preview,
+                            (result) => !result.empty,
+                          ),
+                          ok: () =>
+                            CodeEditor({
+                              rootStyle: { "min-width": "0", width: "100%" },
+                              wrapperStyle: {
+                                height: "clamp(240px, 55dvh, 800px)",
+                              },
+                              value: computed(
+                                xml_output,
+                                (result) => result.formatted,
+                              ),
+                              mode: "application/xml",
+                              readOnly: true,
+                              attributes: {
+                                n: "script-debug-xml-content",
+                                "aria-label": "XML 响应预览",
+                                readonly: "",
+                                spellcheck: "false",
+                              },
+                            }),
+                          fail: () =>
+                            View(
+                              {
+                                class: "box-border text-muted",
+                                attributes: { role: "status" },
+                              },
+                              ["运行调试后查看 XML 响应"],
+                            ),
+                        }),
+                      ]),
+                    ];
+                  },
+                },
+                {
+                  id: "feed",
+                  label: "预览",
+                  panel_id: "script-debug-feed-panel",
+                  get content() {
+                    return [
+                      panel("feed", [
+                        ScriptFeedPreviewView(Timeless, {
+                          preview: feed_preview,
+                        }),
+                      ]),
+                    ];
+                  },
+                },
+              ]
+            : []),
+          ...(["img", "video", "audio"].includes(kind)
+            ? [
+                {
+                  id: "preview",
+                  label: "预览",
+                  panel_id: "script-debug-preview-panel",
+                  get content() {
+                    return [
+                      panel("preview", [
+                        ScriptMediaPreviewView(Timeless, { preview }),
+                      ]),
+                    ];
+                  },
+                },
+              ]
+            : []),
         ],
       }),
     ],
@@ -635,256 +728,833 @@ function ScriptDebugResultContentView({ store: vm$, kind, preview }) {
 }
 
 function ScriptDebugRouteView({ store: vm$, route, panel_id }) {
-  const url = computed(vm$.state.debug_routes, rows => rows.find(row => row.path === route.path)?.url || "");
-  return View({
-    class: "box-border flex-1 min-h-0 flex flex-col overflow-hidden",
-    attributes: { n: "script-debug-route-panel", id: panel_id },
-  }, [
-    View({
-      class: "box-border flex-none grid gap-space-2 p-space-5",
-      style: { "border-bottom": "1px solid var(--frui-color-border-soft)" },
-      attributes: { n: "script-debug-toolbar" },
-    }, [
-      View({ class: "box-border text-muted text-sm break-anywhere", attributes: { n: "script-debug-route-path" } }, [route.path]),
-      View({
-        class: "box-border grid items-center gap-space-2",
-        style: { "grid-template-columns": "minmax(0, 1fr) auto" },
-        attributes: { n: "script-debug-route-row", role: "group", "aria-label": route.name },
-      }, [
-        Input({ value: url, disabled: vm$.state.saving, placeholder: route.path,
-          attributes: { n: "script-debug-url", "aria-label": route.name + "调试地址", spellcheck: "false" },
-          onInput: event => vm$.methods.set_debug_url(event.target.value, route.path),
-        }),
-        Button({ icon: Icon("play", 16),
-          attributes: { n: "script-debug-run-button", "aria-label": "运行调试：" + route.name,
-            title: "运行当前草稿（⌘/Ctrl + Enter）" },
-          disabled: combine({ saving: vm$.state.saving, debugging: vm$.state.debugging,
-            script: vm$.state.draft_script, url, agent_busy: vm$.agent.state.busy },
-          deps => deps.saving || deps.debugging || deps.agent_busy || !deps.script.trim() || !deps.url.trim() || undefined),
-          onClick: () => vm$.methods.debug_script(route.path),
-        }, [computed(vm$.state.debugging, running => running ? "调试中…" : "运行调试")]),
-      ]),
-      View({ class: "box-border text-link text-sm", attributes: { n: "script-debug-progress", role: "status" } }, [
-        computed(vm$.state.debugging, running => running ? "正在执行当前草稿，可继续编辑…" : ""),
-      ]),
-    ]),
-    ScriptDebugResultView({ store: vm$, route }),
-  ]);
+  const url = computed(
+    vm$.state.debug_routes,
+    (rows) => rows.find((row) => row.path === route.path)?.url || "",
+  );
+  return View(
+    {
+      class: "box-border flex-1 min-h-0 flex flex-col overflow-hidden",
+      attributes: { n: "script-debug-route-panel", id: panel_id },
+    },
+    [
+      View(
+        {
+          class: "box-border flex-none grid gap-space-2 p-space-5",
+          style: { "border-bottom": "1px solid var(--frui-color-border-soft)" },
+          attributes: { n: "script-debug-toolbar" },
+        },
+        [
+          View(
+            {
+              class: "box-border text-muted text-sm break-anywhere",
+              attributes: { n: "script-debug-route-path" },
+            },
+            [route.path],
+          ),
+          View(
+            {
+              class: "box-border grid items-center gap-space-2",
+              style: { "grid-template-columns": "minmax(0, 1fr) auto" },
+              attributes: {
+                n: "script-debug-route-row",
+                role: "group",
+                "aria-label": route.name,
+              },
+            },
+            [
+              Input({
+                value: url,
+                disabled: vm$.state.saving,
+                placeholder: route.path,
+                attributes: {
+                  n: "script-debug-url",
+                  "aria-label": route.name + "调试地址",
+                  spellcheck: "false",
+                },
+                onInput: (event) =>
+                  vm$.methods.set_debug_url(event.target.value, route.path),
+              }),
+              Button(
+                {
+                  icon: Icon("play", 16),
+                  attributes: {
+                    n: "script-debug-run-button",
+                    "aria-label": "运行调试：" + route.name,
+                    title: "运行当前草稿（⌘/Ctrl + Enter）",
+                  },
+                  disabled: combine(
+                    {
+                      saving: vm$.state.saving,
+                      debugging: vm$.state.debugging,
+                      script: vm$.state.draft_script,
+                      url,
+                      agent_busy: vm$.agent.state.busy,
+                    },
+                    (deps) =>
+                      deps.saving ||
+                      deps.debugging ||
+                      deps.agent_busy ||
+                      !deps.script.trim() ||
+                      !deps.url.trim() ||
+                      undefined,
+                  ),
+                  onClick: () => vm$.methods.debug_script(route.path),
+                },
+                [
+                  computed(vm$.state.debugging, (running) =>
+                    running ? "调试中…" : "运行调试",
+                  ),
+                ],
+              ),
+            ],
+          ),
+          View(
+            {
+              class: "box-border text-link text-sm",
+              attributes: { n: "script-debug-progress", role: "status" },
+            },
+            [
+              computed(vm$.state.debugging, (running) =>
+                running ? "正在执行当前草稿，可继续编辑…" : "",
+              ),
+            ],
+          ),
+        ],
+      ),
+      ScriptDebugResultView({ store: vm$, route }),
+    ],
+  );
 }
 
 function ScriptDebugRoutesView({ store: vm$ }) {
   // 路由列表变化时重建 Tab，编辑地址只更新对应输入，不重建编辑器。
-  const groups = computed(vm$.state.debug_routes, routes => [{
-    key: JSON.stringify(routes.map(({ path, name, image_proxy }) => [path, name, image_proxy])), routes,
-  }]);
-  return View({
-    class: "box-border flex flex-col min-w-0 min-h-0 overflow-hidden max-1100-grid-column max-1100-height max-1100-border-top max-760-min-height",
-    style: { "--max-1100-grid-column": "1 / -1", "--max-1100-height": "70dvh",
-      "--max-1100-border-top": "1px solid var(--frui-color-border-soft)", "--max-760-min-height": "50dvh" },
-    attributes: { n: "script-debug-pane" },
-  }, [
-    View({ class: "box-border text-danger whitespace-pre-wrap break-anywhere",
-      attributes: { n: "script-debug-routes-error", role: "alert" } }, [vm$.state.debug_routes_error]),
-    For({ each: groups, key: "key", render(group_value) {
-      const group = source_value(group_value);
-      return Tabs({
-        value: computed(vm$.state.debug_route_path, path => path), onChange: vm$.methods.select_debug_route,
-        class: "box-border flex-1 min-h-0 flex flex-col gap-0",
-        listProps: { class: "box-border flex-none", style: { padding: "0 var(--frui-space-5)" } },
-        panelProps: { class: "box-border flex-1 min-h-0 flex overflow-hidden" },
-        attributes: { n: "script-debug-route-tabs", "aria-label": "调试路由" },
-        items: group.routes.map((route, index) => ({
-          id: route.path, label: route.name, panel_id: "script-debug-route-panel-" + index,
-          attributes: { id: "script-debug-route-tab-" + index, title: route.path },
-          get content() {
-            return [Show({ when: computed(vm$.state.debug_route_path, path => path === route.path),
-              ok: () => ScriptDebugRouteView({ store: vm$, route, panel_id: "script-debug-route-panel-" + index }),
-            })];
-          },
-        })),
-      });
-    } }),
+  const groups = computed(vm$.state.debug_routes, (routes) => [
+    {
+      key: JSON.stringify(
+        routes.map(({ path, name, image_proxy }) => [path, name, image_proxy]),
+      ),
+      routes,
+    },
   ]);
+  return View(
+    {
+      class:
+        "box-border flex flex-col min-w-0 min-h-0 overflow-hidden max-1100-grid-column max-1100-height max-1100-border-top max-760-min-height",
+      style: {
+        "--max-1100-grid-column": "1 / -1",
+        "--max-1100-height": "70dvh",
+        "--max-1100-border-top": "1px solid var(--frui-color-border-soft)",
+        "--max-760-min-height": "50dvh",
+      },
+      attributes: { n: "script-debug-pane" },
+    },
+    [
+      View(
+        {
+          class: "box-border text-danger whitespace-pre-wrap break-anywhere",
+          attributes: { n: "script-debug-routes-error", role: "alert" },
+        },
+        [vm$.state.debug_routes_error],
+      ),
+      For({
+        each: groups,
+        key: "key",
+        render(group_value) {
+          const group = source_value(group_value);
+          return Tabs({
+            value: computed(vm$.state.debug_route_path, (path) => path),
+            onChange: vm$.methods.select_debug_route,
+            class: "box-border flex-1 min-h-0 flex flex-col gap-0",
+            listProps: {
+              class: "box-border flex-none",
+              style: { padding: "0 var(--frui-space-5)" },
+            },
+            panelProps: {
+              class: "box-border flex-1 min-h-0 flex overflow-hidden",
+            },
+            attributes: {
+              n: "script-debug-route-tabs",
+              "aria-label": "调试路由",
+            },
+            items: group.routes.map((route, index) => ({
+              id: route.path,
+              label: route.name,
+              panel_id: "script-debug-route-panel-" + index,
+              attributes: {
+                id: "script-debug-route-tab-" + index,
+                title: route.path,
+              },
+              get content() {
+                return [
+                  Show({
+                    when: computed(
+                      vm$.state.debug_route_path,
+                      (path) => path === route.path,
+                    ),
+                    ok: () =>
+                      ScriptDebugRouteView({
+                        store: vm$,
+                        route,
+                        panel_id: "script-debug-route-panel-" + index,
+                      }),
+                  }),
+                ];
+              },
+            })),
+          });
+        },
+      }),
+    ],
+  );
 }
 
 function ScriptDiffView({ store: vm$ }) {
   const trigger = document.activeElement;
   const modal = ModalViewModel({ onClose: vm$.methods.close_diff });
-  return Dialog({
-    open: vm$.state.diff_open,
-    title: "Diff变更",
-    description: "正式版本 → 当前编辑（含未保存修改）· − 删除 · + 新增",
-    attributes: { n: "script-diff-dialog", "aria-label": "脚本变更对比" },
-    class: "box-border flex flex-col overflow-hidden",
-    style: { width: "min(1200px, calc(100vw - 32px))", height: "80dvh", "z-index": "303" },
-    overlayProps: { style: { "z-index": "302" } },
-    bodyProps: { class: "box-border flex flex-col flex-1 min-h-0 overflow-hidden" },
-    maskClosable: false,
-    closable: false,
-    onMounted: modal.mount,
-    onUnmounted() {
-      modal.unmount();
-      if (trigger?.isConnected) trigger.focus();
+  return Dialog(
+    {
+      open: vm$.state.diff_open,
+      title: "Diff变更",
+      description: "正式版本 → 当前编辑（含未保存修改）· − 删除 · + 新增",
+      attributes: { n: "script-diff-dialog", "aria-label": "脚本变更对比" },
+      class: "box-border flex flex-col overflow-hidden",
+      style: {
+        width: "min(1200px, calc(100vw - 32px))",
+        height: "80dvh",
+        "z-index": "303",
+      },
+      overlayProps: { style: { "z-index": "302" } },
+      bodyProps: {
+        class: "box-border flex flex-col flex-1 min-h-0 overflow-hidden",
+      },
+      maskClosable: false,
+      closable: false,
+      onMounted: modal.mount,
+      onUnmounted() {
+        modal.unmount();
+        if (trigger?.isConnected) trigger.focus();
+      },
+      onKeyDown: modal.keydown,
+      footer: [
+        Button(
+          {
+            variant: "secondary",
+            attributes: { n: "script-diff-close-button" },
+            onClick: vm$.methods.close_diff,
+          },
+          ["关闭"],
+        ),
+      ],
     },
-    onKeyDown: modal.keydown,
-    footer: [Button({
-      variant: "secondary", attributes: { n: "script-diff-close-button" },
-      onClick: vm$.methods.close_diff,
-    }, ["关闭"])],
-  }, [Show({
-    when: computed(vm$.state.diff_text, text => Boolean(text)),
-    ok: () => CodeEditor({
-      value: vm$.state.diff_text, mode: "diff", readOnly: true,
-      attributes: { n: "script-diff-code", "aria-label": "正式版本与当前编辑的代码差异" },
-      rootStyle: { display: "flex", flex: "1", "min-height": "0" },
-      wrapperStyle: { flex: "1", "min-height": "0", height: "100%", font: "13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace" },
-    }),
-    else: () => View({
-      class: "box-border text-muted", attributes: { n: "script-diff-empty", role: "status" },
-    }, ["与正式版本一致，暂无变更。"]),
-  })]);
+    [
+      Show({
+        when: computed(vm$.state.diff_text, (text) => Boolean(text)),
+        ok: () =>
+          CodeEditor({
+            value: vm$.state.diff_text,
+            mode: "diff",
+            readOnly: true,
+            attributes: {
+              n: "script-diff-code",
+              "aria-label": "正式版本与当前编辑的代码差异",
+            },
+            rootStyle: { display: "flex", flex: "1", "min-height": "0" },
+            wrapperStyle: {
+              flex: "1",
+              "min-height": "0",
+              height: "100%",
+              font: "13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace",
+            },
+          }),
+        else: () =>
+          View(
+            {
+              class: "box-border text-muted",
+              attributes: { n: "script-diff-empty", role: "status" },
+            },
+            ["与正式版本一致，暂无变更。"],
+          ),
+      }),
+    ],
+  );
 }
 
 function ScriptHistoryView({ store: vm$ }) {
-  const read = map => computed(vm$.state.history, map);
-  const busy = read(value => value.busy);
+  const read = (map) => computed(vm$.state.history, map);
+  const busy = read((value) => value.busy);
   const modal = ModalViewModel({ onClose: vm$.methods.close_history, busy });
-  return Dialog({ open: read(value => value.open), title: "版本历史",
-    description: "查看已发布源码，或回退到历史版本。未发布草稿会保留。",
-    attributes: { n: "script-history-dialog", "aria-label": "版本历史" },
-    class: "box-border flex flex-col overflow-hidden", style: { width: "min(760px, calc(100vw - 32px))", "max-height": "calc(100dvh - 32px)" },
-    bodyProps: { class: "box-border overflow-auto min-h-0" }, maskClosable: false, closable: false,
-    onMounted: modal.mount, onUnmounted: modal.unmount, onKeyDown: modal.keydown, onClose: vm$.methods.close_history,
-    footer: [Button({ variant: "secondary", disabled: busy, onClick: vm$.methods.close_history,
-      attributes: { n: "script-history-close" } }, ["关闭"])],
-  }, [View({ class: "box-border grid gap-space-4" }, [
-    Show({ when: busy, ok: () => View({ class: "box-border text-muted", attributes: { role: "status" } }, ["处理中…"]) }),
-    Show({ when: read(value => !value.busy && !value.versions.length), ok: () =>
-      View({ class: "box-border text-muted" }, ["暂无已保存的正式版本。迁移前已被覆盖的版本无法恢复。"]) }),
-    For({ each: read(value => value.versions), key: "id", render(raw) {
-      const release = source_value(raw);
-      return View({ class: "box-border flex flex-wrap items-center justify-between gap-space-3",
-        attributes: { n: "script-history-version" } }, [
-        View({ class: "box-border grid gap-space-2 min-w-0" }, [
-          View({ class: "box-border break-anywhere", attributes: { n: "script-history-version-name" } },
-            [(release.version || "未编号版本") + (release.current ? " · 当前使用" : "")]),
-          View({ class: "box-border text-muted text-sm break-anywhere" },
-            [format_time(release.created_at) + " · " + Math.ceil(release.bytes / 1024) + " KB"]),
-        ]),
-        View({ class: "box-border flex gap-space-2" }, [
-          Button({ variant: "secondary", disabled: busy, attributes: { n: "script-history-view" },
-            onClick: () => vm$.methods.view_version(release.id) }, ["查看源码"]),
-          ...(!release.current ? [Button({ variant: "secondary", disabled: busy, attributes: { n: "script-history-rollback" },
-            onClick: () => vm$.methods.rollback_version(release.id) }, ["回退到此版本"])] : []),
-        ]),
-      ]);
-    } }),
-    Show({ when: read(value => Boolean(value.selected_id)), ok: () => Textarea({ value: read(value => value.source), rows: 12,
-      readOnly: true, attributes: { n: "script-history-source", readonly: true, "aria-label": "历史版本源码" } }) }),
-    View({ class: "box-border text-danger whitespace-pre-wrap text-sm", attributes: { n: "script-history-error", role: "alert" } }, [read(value => value.error)]),
-  ])]);
+  return Dialog(
+    {
+      open: read((value) => value.open),
+      title: "版本历史",
+      description: "查看已发布源码，或回退到历史版本。未发布草稿会保留。",
+      attributes: { n: "script-history-dialog", "aria-label": "版本历史" },
+      class: "box-border flex flex-col overflow-hidden",
+      style: {
+        width: "min(760px, calc(100vw - 32px))",
+        "max-height": "calc(100dvh - 32px)",
+      },
+      bodyProps: { class: "box-border overflow-auto min-h-0" },
+      maskClosable: false,
+      closable: false,
+      onMounted: modal.mount,
+      onUnmounted: modal.unmount,
+      onKeyDown: modal.keydown,
+      onClose: vm$.methods.close_history,
+      footer: [
+        Button(
+          {
+            variant: "secondary",
+            disabled: busy,
+            onClick: vm$.methods.close_history,
+            attributes: { n: "script-history-close" },
+          },
+          ["关闭"],
+        ),
+      ],
+    },
+    [
+      View({ class: "box-border grid gap-space-4" }, [
+        Show({
+          when: busy,
+          ok: () =>
+            View(
+              {
+                class: "box-border text-muted",
+                attributes: { role: "status" },
+              },
+              ["处理中…"],
+            ),
+        }),
+        Show({
+          when: read((value) => !value.busy && !value.versions.length),
+          ok: () =>
+            View({ class: "box-border text-muted" }, [
+              "暂无已保存的正式版本。迁移前已被覆盖的版本无法恢复。",
+            ]),
+        }),
+        For({
+          each: read((value) => value.versions),
+          key: "id",
+          render(raw) {
+            const release = source_value(raw);
+            return View(
+              {
+                class:
+                  "box-border flex flex-wrap items-center justify-between gap-space-3",
+                attributes: { n: "script-history-version" },
+              },
+              [
+                View({ class: "box-border grid gap-space-2 min-w-0" }, [
+                  View(
+                    {
+                      class: "box-border break-anywhere",
+                      attributes: { n: "script-history-version-name" },
+                    },
+                    [
+                      (release.version || "未编号版本") +
+                        (release.current ? " · 当前使用" : ""),
+                    ],
+                  ),
+                  View(
+                    { class: "box-border text-muted text-sm break-anywhere" },
+                    [
+                      format_time(release.created_at) +
+                        " · " +
+                        Math.ceil(release.bytes / 1024) +
+                        " KB",
+                    ],
+                  ),
+                ]),
+                View({ class: "box-border flex gap-space-2" }, [
+                  Button(
+                    {
+                      variant: "secondary",
+                      disabled: busy,
+                      attributes: { n: "script-history-view" },
+                      onClick: () => vm$.methods.view_version(release.id),
+                    },
+                    ["查看源码"],
+                  ),
+                  ...(!release.current
+                    ? [
+                        Button(
+                          {
+                            variant: "secondary",
+                            disabled: busy,
+                            attributes: { n: "script-history-rollback" },
+                            onClick: () =>
+                              vm$.methods.rollback_version(release.id),
+                          },
+                          ["回退到此版本"],
+                        ),
+                      ]
+                    : []),
+                ]),
+              ],
+            );
+          },
+        }),
+        Show({
+          when: read((value) => Boolean(value.selected_id)),
+          ok: () =>
+            Textarea({
+              value: read((value) => value.source),
+              rows: 12,
+              readOnly: true,
+              attributes: {
+                n: "script-history-source",
+                readonly: true,
+                "aria-label": "历史版本源码",
+              },
+            }),
+        }),
+        View(
+          {
+            class: "box-border text-danger whitespace-pre-wrap text-sm",
+            attributes: { n: "script-history-error", role: "alert" },
+          },
+          [read((value) => value.error)],
+        ),
+      ]),
+    ],
+  );
 }
 
 function ScriptInstallView({ store: vm$ }) {
-  const busy = combine({ parsing: vm$.state.install_busy, saving: vm$.state.saving, consent: vm$.state.cookie_consent },
-    ({ parsing, saving, consent }) => parsing || saving || consent.open);
-  const read = map => computed(vm$.state.install_preview, value => map(value?.metadata || {}, value));
+  const busy = combine(
+    {
+      parsing: vm$.state.install_busy,
+      saving: vm$.state.saving,
+      consent: vm$.state.cookie_consent,
+    },
+    ({ parsing, saving, consent }) => parsing || saving || consent.open,
+  );
+  const read = (map) =>
+    computed(vm$.state.install_preview, (value) =>
+      map(value?.metadata || {}, value),
+    );
   const modal = ModalViewModel({ onClose: vm$.methods.close_install, busy });
-  return Dialog({
-    open: vm$.state.install_open,
-    title: "安装脚本",
-    description: "输入脚本直链或粘贴源码，解析预览后确认保存。",
-    attributes: { n: "script-install-dialog", "aria-label": "安装脚本" },
-    class: "box-border flex flex-col overflow-hidden",
-    style: { width: "min(760px, calc(100vw - 32px))", "max-height": "calc(100dvh - 32px)" },
-    bodyProps: { class: "box-border overflow-auto min-h-0" },
-    maskClosable: false, closable: false,
-    onMounted: modal.mount, onUnmounted: modal.unmount, onKeyDown: modal.keydown,
-    onClose: vm$.methods.close_install,
-    footer: [
-      Button({ variant: "secondary", disabled: busy, attributes: { n: "script-install-cancel" },
-        onClick: vm$.methods.close_install }, ["取消"]),
-      Show({ when: computed(vm$.state.install_preview, value => !value), ok: () =>
-        Button({ disabled: busy, attributes: { n: "script-install-parse" }, onClick: vm$.methods.preview_install },
-          [computed(vm$.state.install_busy, value => value ? "下载、解析中…" : "保存并预览")]),
-      }),
-      Show({ when: vm$.state.install_preview, ok: () => View({ class: "box-border flex gap-space-2", attributes: { n: "script-install-save-actions" } }, [
-        Button({ variant: "secondary", disabled: busy, attributes: { n: "script-install-save" },
-          onClick: () => vm$.methods.save_install("draft") }, ["保存草稿"]),
-        Button({ disabled: busy, attributes: { n: "script-install-publish" },
-          onClick: () => vm$.methods.save_install("published") }, [computed(vm$.state.saving, value => value ? "保存中…" : "发布安装")]),
-      ]) }),
-    ],
-  }, [
-    View({ class: "box-border grid gap-space-4", attributes: { n: "script-install-body" } }, [
-      Field({ label: "脚本 URL 或脚本内容", control_id: "script-install-input", attributes: { n: "script-install-input-field" } }, [
-        Textarea({ value: vm$.state.install_input, disabled: busy, rows: 7,
-          placeholder: "https://example.com/script.js\n或粘贴完整 JavaScript 脚本",
-          attributes: { n: "script-install-input", id: "script-install-input", "aria-label": "脚本 URL 或脚本内容" },
-          onInput: event => vm$.methods.set_install_input(event.target.value) }),
-      ]),
-      Show({ when: vm$.state.install_preview, ok: () => View({ class: "box-border grid gap-space-4", attributes: { n: "script-install-preview" } }, [
-        View({
-          class: "box-border flex items-center gap-space-2 min-w-0 text-text text-base",
-          attributes: { n: "script-install-platform", "aria-label": "来源" },
-        }, [
-          Img({
-            src: read(metadata => discovery_platform_icon_url(metadata.platform)),
-            class: "box-border block flex-none object-fit-contain width-space-5 height-space-5",
-            attributes: { n: "script-install-platform-icon", alt: "", "aria-hidden": "true",
-              width: "20", height: "20", referrerpolicy: "no-referrer" },
-          }),
-          View({ class: "box-border min-w-0 break-anywhere", attributes: { n: "script-install-platform-name" } }, [
-            read(metadata => discovery_platform_label(metadata.platform || { name: "网页", icon: "" })),
-          ]),
-        ]),
-        ...[
-          ["name", "脚本名称", metadata => metadata.name],
-          ["kind", "脚本类型", metadata => metadata.kind === "hot" ? "热榜" : "RSS"],
-          ["website", "网站", metadata => metadata.url || "未声明"],
-          ["tags", "标签", metadata => metadata.tags?.join("、") || "无"],
-          ["maintainers", "维护者", metadata => metadata.maintainers?.map(value => typeof value === "string" ? value : value.nickname).join("、") || "未声明"],
-          ["source", "下载来源", (_metadata, value) => value?.source_url || "粘贴的脚本内容"],
-        ].map(([name, label, render]) => FieldView({ semantic_name: "script-install-" + name + "-field", label }, [
-          View({ class: "box-border whitespace-pre-wrap break-anywhere text-sm", attributes: { n: "script-install-" + name } }, [read(render)]),
-        ])),
-        FieldView({ semantic_name: "script-install-routes-field", label: "路由与可见范围" }, [
-          For({ each: read(metadata => metadata.routes || []), key: "path", render(raw) {
-            const route = source_value(raw);
-            return View({ class: "box-border grid gap-space-2 rounded-control", style: { padding: "12px", border: "1px solid var(--frui-color-border-soft)" }, attributes: { n: "script-install-route" } }, [
-              View({ class: "box-border", style: { "font-weight": "600" }, attributes: { n: "script-install-route-name" } }, [route.name]),
-              View({ class: "box-border break-anywhere font-mono text-sm", attributes: { n: "script-install-route-path" } }, [route.path]),
-              View({ class: "box-border whitespace-pre-wrap text-sm", attributes: { n: "script-install-route-description" } }, [route.description || "无描述"]),
-              View({ class: "box-border break-anywhere text-sm", attributes: { n: "script-install-route-example" } }, ["示例：" + route.example]),
-              View({ class: "box-border text-sm", attributes: { n: "script-install-route-visibility" } }, [route.public ? "公开访问（无需 token）" : "持有效访问 token 的订阅者可访问"]),
-              View({ as: "pre", class: "box-border m-0 whitespace-pre-wrap break-anywhere text-sm", attributes: { n: "script-install-route-parameters" } }, ["参数：" + JSON.stringify(route.parameters, null, 2)]),
-              ...(route.allowed_hosts?.length ? [View({ class: "box-border break-anywhere text-sm", attributes: { n: "script-install-route-hosts" } }, ["图片代理域名：" + route.allowed_hosts.join("、")])] : []),
-            ]);
-          } }),
-        ]),
-        FieldView({ semantic_name: "script-install-permissions-field", label: "申请的权限" }, [
-          View({ as: "pre", class: "box-border m-0 whitespace-pre-wrap break-anywhere text-sm", attributes: { n: "script-install-permissions" } }, [
-            read(metadata => metadata.permissions?.cookies?.length ? JSON.stringify(metadata.permissions, null, 2) : "未申请 Cookie 权限"),
-          ]),
-        ]),
-        Show({ when: read(metadata => Boolean(metadata.config_schema)), ok: () =>
-          FieldView({ semantic_name: "script-install-config-field", label: "配置声明（保存后可通过脚本的配置按钮填写）" }, [
-            View({ as: "pre", class: "box-border m-0 whitespace-pre-wrap break-anywhere text-sm", attributes: { n: "script-install-config" } }, [read(metadata => JSON.stringify(metadata.config_schema, null, 2))]),
-          ]),
+  return Dialog(
+    {
+      open: vm$.state.install_open,
+      title: "安装脚本",
+      description: "输入脚本直链或粘贴源码，解析预览后确认保存。",
+      attributes: { n: "script-install-dialog", "aria-label": "安装脚本" },
+      class: "box-border flex flex-col overflow-hidden",
+      style: {
+        width: "min(760px, calc(100vw - 32px))",
+        "max-height": "calc(100dvh - 32px)",
+      },
+      bodyProps: { class: "box-border overflow-auto min-h-0" },
+      maskClosable: false,
+      closable: false,
+      onMounted: modal.mount,
+      onUnmounted: modal.unmount,
+      onKeyDown: modal.keydown,
+      onClose: vm$.methods.close_install,
+      footer: [
+        Button(
+          {
+            variant: "secondary",
+            disabled: busy,
+            attributes: { n: "script-install-cancel" },
+            onClick: vm$.methods.close_install,
+          },
+          ["取消"],
+        ),
+        Show({
+          when: computed(vm$.state.install_preview, (value) => !value),
+          ok: () =>
+            Button(
+              {
+                disabled: busy,
+                attributes: { n: "script-install-parse" },
+                onClick: vm$.methods.preview_install,
+              },
+              [
+                computed(vm$.state.install_busy, (value) =>
+                  value ? "下载、解析中…" : "保存并预览",
+                ),
+              ],
+            ),
         }),
-        Field({ label: "源码预览", control_id: "script-install-source-code", attributes: { n: "script-install-code-field" } }, [
-          Textarea({ value: read((_metadata, value) => value?.script || ""), rows: 8, readOnly: true,
-            attributes: { n: "script-install-source-code", id: "script-install-source-code", readonly: true, "aria-label": "源码预览" } }),
-        ]),
-        Field({ label: "版本号（发布安装时必填）", control_id: "script-install-version", attributes: { n: "script-install-version-field" } }, [
-          Input({ value: vm$.state.draft_version, disabled: busy, placeholder: "例如 1.0.0",
-            attributes: { n: "script-install-version", id: "script-install-version" },
-            onInput: event => vm$.methods.set_draft("version", event.target.value) }),
-        ]),
-      ]) }),
-      View({ class: "box-border text-danger whitespace-pre-wrap text-sm", attributes: { n: "script-install-error", role: "alert" } }, [vm$.state.form_error]),
-    ]),
-  ]);
+        Show({
+          when: vm$.state.install_preview,
+          ok: () =>
+            View(
+              {
+                class: "box-border flex gap-space-2",
+                attributes: { n: "script-install-save-actions" },
+              },
+              [
+                Button(
+                  {
+                    variant: "secondary",
+                    disabled: busy,
+                    attributes: { n: "script-install-save" },
+                    onClick: () => vm$.methods.save_install("draft"),
+                  },
+                  ["保存草稿"],
+                ),
+                Button(
+                  {
+                    disabled: busy,
+                    attributes: { n: "script-install-publish" },
+                    onClick: () => vm$.methods.save_install("published"),
+                  },
+                  [
+                    computed(vm$.state.saving, (value) =>
+                      value ? "保存中…" : "发布安装",
+                    ),
+                  ],
+                ),
+              ],
+            ),
+        }),
+      ],
+    },
+    [
+      View(
+        {
+          class: "box-border grid gap-space-4",
+          attributes: { n: "script-install-body" },
+        },
+        [
+          Field(
+            {
+              label: "脚本 URL 或脚本内容",
+              control_id: "script-install-input",
+              attributes: { n: "script-install-input-field" },
+            },
+            [
+              Textarea({
+                value: vm$.state.install_input,
+                disabled: busy,
+                rows: 7,
+                placeholder:
+                  "https://example.com/script.js\n或粘贴完整 JavaScript 脚本",
+                attributes: {
+                  n: "script-install-input",
+                  id: "script-install-input",
+                  "aria-label": "脚本 URL 或脚本内容",
+                },
+                onInput: (event) =>
+                  vm$.methods.set_install_input(event.target.value),
+              }),
+            ],
+          ),
+          Show({
+            when: vm$.state.install_preview,
+            ok: () =>
+              View(
+                {
+                  class: "box-border grid gap-space-4",
+                  attributes: { n: "script-install-preview" },
+                },
+                [
+                  View(
+                    {
+                      class:
+                        "box-border flex items-center gap-space-2 min-w-0 text-text text-base",
+                      attributes: {
+                        n: "script-install-platform",
+                        "aria-label": "来源",
+                      },
+                    },
+                    [
+                      Img({
+                        src: read((metadata) =>
+                          discovery_platform_icon_url(metadata.platform),
+                        ),
+                        class:
+                          "box-border block flex-none object-fit-contain width-space-5 height-space-5",
+                        attributes: {
+                          n: "script-install-platform-icon",
+                          alt: "",
+                          "aria-hidden": "true",
+                          width: "20",
+                          height: "20",
+                          referrerpolicy: "no-referrer",
+                        },
+                      }),
+                      View(
+                        {
+                          class: "box-border min-w-0 break-anywhere",
+                          attributes: { n: "script-install-platform-name" },
+                        },
+                        [
+                          read((metadata) =>
+                            discovery_platform_label(
+                              metadata.platform || { name: "网页", icon: "" },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  ...[
+                    ["name", "脚本名称", (metadata) => metadata.name],
+                    [
+                      "kind",
+                      "脚本类型",
+                      (metadata) => (metadata.kind === "hot" ? "热榜" : "RSS"),
+                    ],
+                    ["website", "网站", (metadata) => metadata.url || "未声明"],
+                    [
+                      "tags",
+                      "标签",
+                      (metadata) => metadata.tags?.join("、") || "无",
+                    ],
+                    [
+                      "maintainers",
+                      "维护者",
+                      (metadata) =>
+                        metadata.maintainers
+                          ?.map((value) =>
+                            typeof value === "string" ? value : value.nickname,
+                          )
+                          .join("、") || "未声明",
+                    ],
+                    [
+                      "source",
+                      "下载来源",
+                      (_metadata, value) =>
+                        value?.source_url || "粘贴的脚本内容",
+                    ],
+                  ].map(([name, label, render]) =>
+                    FieldView(
+                      {
+                        semantic_name: "script-install-" + name + "-field",
+                        label,
+                      },
+                      [
+                        View(
+                          {
+                            class:
+                              "box-border whitespace-pre-wrap break-anywhere text-sm",
+                            attributes: { n: "script-install-" + name },
+                          },
+                          [read(render)],
+                        ),
+                      ],
+                    ),
+                  ),
+                  FieldView(
+                    {
+                      semantic_name: "script-install-routes-field",
+                      label: "路由与可见范围",
+                    },
+                    [
+                      For({
+                        each: read((metadata) => metadata.routes || []),
+                        key: "path",
+                        render(raw) {
+                          const route = source_value(raw);
+                          return View(
+                            {
+                              class:
+                                "box-border grid gap-space-2 rounded-control",
+                              style: {
+                                padding: "12px",
+                                border:
+                                  "1px solid var(--frui-color-border-soft)",
+                              },
+                              attributes: { n: "script-install-route" },
+                            },
+                            [
+                              View(
+                                {
+                                  class: "box-border",
+                                  style: { "font-weight": "600" },
+                                  attributes: {
+                                    n: "script-install-route-name",
+                                  },
+                                },
+                                [route.name],
+                              ),
+                              View(
+                                {
+                                  class:
+                                    "box-border break-anywhere font-mono text-sm",
+                                  attributes: {
+                                    n: "script-install-route-path",
+                                  },
+                                },
+                                [route.path],
+                              ),
+                              View(
+                                {
+                                  class:
+                                    "box-border whitespace-pre-wrap text-sm",
+                                  attributes: {
+                                    n: "script-install-route-description",
+                                  },
+                                },
+                                [route.description || "无描述"],
+                              ),
+                              View(
+                                {
+                                  class: "box-border break-anywhere text-sm",
+                                  attributes: {
+                                    n: "script-install-route-example",
+                                  },
+                                },
+                                ["示例：" + route.example],
+                              ),
+                              View(
+                                {
+                                  class: "box-border text-sm",
+                                  attributes: {
+                                    n: "script-install-route-visibility",
+                                  },
+                                },
+                                [
+                                  route.public
+                                    ? "公开访问（无需 token）"
+                                    : "持有效访问 token 的订阅者可访问",
+                                ],
+                              ),
+                              View(
+                                {
+                                  as: "pre",
+                                  class:
+                                    "box-border m-0 whitespace-pre-wrap break-anywhere text-sm",
+                                  attributes: {
+                                    n: "script-install-route-parameters",
+                                  },
+                                },
+                                [
+                                  "参数：" +
+                                    JSON.stringify(route.parameters, null, 2),
+                                ],
+                              ),
+                              ...(route.allowed_hosts?.length
+                                ? [
+                                    View(
+                                      {
+                                        class:
+                                          "box-border break-anywhere text-sm",
+                                        attributes: {
+                                          n: "script-install-route-hosts",
+                                        },
+                                      },
+                                      [
+                                        "图片代理域名：" +
+                                          route.allowed_hosts.join("、"),
+                                      ],
+                                    ),
+                                  ]
+                                : []),
+                            ],
+                          );
+                        },
+                      }),
+                    ],
+                  ),
+                  FieldView(
+                    {
+                      semantic_name: "script-install-permissions-field",
+                      label: "申请的权限",
+                    },
+                    [
+                      View(
+                        {
+                          as: "pre",
+                          class:
+                            "box-border m-0 whitespace-pre-wrap break-anywhere text-sm",
+                          attributes: { n: "script-install-permissions" },
+                        },
+                        [
+                          read((metadata) =>
+                            metadata.permissions?.cookies?.length
+                              ? JSON.stringify(metadata.permissions, null, 2)
+                              : "未申请 Cookie 权限",
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  Show({
+                    when: read((metadata) => Boolean(metadata.config_schema)),
+                    ok: () =>
+                      FieldView(
+                        {
+                          semantic_name: "script-install-config-field",
+                          label: "配置声明（保存后可通过脚本的配置按钮填写）",
+                        },
+                        [
+                          View(
+                            {
+                              as: "pre",
+                              class:
+                                "box-border m-0 whitespace-pre-wrap break-anywhere text-sm",
+                              attributes: { n: "script-install-config" },
+                            },
+                            [
+                              read((metadata) =>
+                                JSON.stringify(metadata.config_schema, null, 2),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                  }),
+                  Field(
+                    {
+                      label: "源码预览",
+                      control_id: "script-install-source-code",
+                      attributes: { n: "script-install-code-field" },
+                    },
+                    [
+                      Textarea({
+                        value: read((_metadata, value) => value?.script || ""),
+                        rows: 8,
+                        readOnly: true,
+                        attributes: {
+                          n: "script-install-source-code",
+                          id: "script-install-source-code",
+                          readonly: true,
+                          "aria-label": "源码预览",
+                        },
+                      }),
+                    ],
+                  ),
+                  Field(
+                    {
+                      label: "版本号（发布安装时必填）",
+                      control_id: "script-install-version",
+                      attributes: { n: "script-install-version-field" },
+                    },
+                    [
+                      Input({
+                        value: vm$.state.draft_version,
+                        disabled: busy,
+                        placeholder: "例如 1.0.0",
+                        attributes: {
+                          n: "script-install-version",
+                          id: "script-install-version",
+                        },
+                        onInput: (event) =>
+                          vm$.methods.set_draft("version", event.target.value),
+                      }),
+                    ],
+                  ),
+                ],
+              ),
+          }),
+          View(
+            {
+              class: "box-border text-danger whitespace-pre-wrap text-sm",
+              attributes: { n: "script-install-error", role: "alert" },
+            },
+            [vm$.state.form_error],
+          ),
+        ],
+      ),
+    ],
+  );
 }
 
 function ScriptFormView({ store: vm$ }) {
@@ -964,12 +1634,20 @@ function ScriptFormView({ store: vm$ }) {
       },
       footer: [
         Show({
-          when: computed(vm$.state.editing_id, id => Boolean(id)),
-          ok: () => Button({
-            variant: "secondary", attributes: { n: "script-diff-button" },
-            disabled: computed(vm$.state.diff_available, available => !available),
-            onClick: vm$.methods.open_diff,
-          }, ["Diff变更"]),
+          when: computed(vm$.state.editing_id, (id) => Boolean(id)),
+          ok: () =>
+            Button(
+              {
+                variant: "secondary",
+                attributes: { n: "script-diff-button" },
+                disabled: computed(
+                  vm$.state.diff_available,
+                  (available) => !available,
+                ),
+                onClick: vm$.methods.open_diff,
+              },
+              ["Diff变更"],
+            ),
         }),
         Button(
           {
@@ -999,13 +1677,21 @@ function ScriptFormView({ store: vm$ }) {
             ),
           ],
         ),
-        View({
-          as: "span",
-          class: "box-border flex-none text-muted text-sm whitespace-nowrap",
-          attributes: { n: "script-draft-saved-at", role: "status" },
-        }, [computed(vm$.state.draft_saved_at, timestamp => timestamp
-          ? "最近保存：" + format_time(timestamp, { format: "YYYY-MM-DD HH:mm:ss" })
-          : "尚未保存")]),
+        View(
+          {
+            as: "span",
+            class: "box-border flex-none text-muted text-sm whitespace-nowrap",
+            attributes: { n: "script-draft-saved-at", role: "status" },
+          },
+          [
+            computed(vm$.state.draft_saved_at, (timestamp) =>
+              timestamp
+                ? "最近保存：" +
+                  format_time(timestamp, { format: "YYYY-MM-DD HH:mm:ss" })
+                : "尚未保存",
+            ),
+          ],
+        ),
         View(
           {
             class:
@@ -1069,7 +1755,10 @@ function ScriptFormView({ store: vm$ }) {
               {
                 class: "box-border",
                 as: "button",
-                onClick: () => notify("首次运行后，修改代码或链接会自动调试。使用真实抓取、Cookie 和在线设备；无需保存，不扣积分。"),
+                onClick: () =>
+                  notify(
+                    "首次运行后，修改代码或链接会自动调试。使用真实抓取、Cookie 和在线设备；无需保存，不扣积分。",
+                  ),
                 attributes: {
                   n: "script-live-debug-help",
                   type: "button",
@@ -1156,8 +1845,18 @@ function ScriptFormView({ store: vm$ }) {
               },
               attributes: { n: "script-code-pane" },
               onKeyDown(event) {
-                if (event.defaultPrevented || vm$.state.diff_open.value || vm$.state.cookie_consent.value.open) return;
-                if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
+                if (
+                  event.defaultPrevented ||
+                  vm$.state.diff_open.value ||
+                  vm$.state.cookie_consent.value.open
+                )
+                  return;
+                if (
+                  (event.ctrlKey || event.metaKey) &&
+                  !event.altKey &&
+                  !event.shiftKey &&
+                  event.key.toLowerCase() === "s"
+                ) {
                   event.preventDefault();
                   return vm$.methods.save_script("draft");
                 }
@@ -1333,26 +2032,41 @@ function ScriptLogEntryView({ log }) {
 function ScriptLogsDialogView({ store: vm$ }) {
   const open = computed(vm$.state.script_logs_route, Boolean);
   const modal = ModalViewModel({ onClose: vm$.methods.close_script_logs });
-  return Dialog({
-    open,
-    title: "执行日志",
-    description: combine({ route: vm$.state.script_logs_route, scripts: vm$.state.scripts }, ({ route, scripts }) => {
-      const script = scripts.find(script => script.id === route);
-      return script ? `${script.name} · ${script.path}` : route;
-    }),
-    attributes: { n: "script-logs-dialog", "aria-label": "执行日志" },
-    class: "box-border flex flex-col overflow-hidden",
-    style: { width: "min(960px, calc(100vw - 32px))", "max-height": "calc(100dvh - 32px)" },
-    bodyProps: { class: "box-border overflow-auto min-h-0" },
-    onMounted: modal.mount,
-    onUnmounted: modal.unmount,
-    onKeyDown: modal.keydown,
-    onClose: vm$.methods.close_script_logs,
-    footer: [Button({
-      variant: "secondary", attributes: { n: "script-logs-close-button" },
-      onClick: vm$.methods.close_script_logs,
-    }, ["关闭"])],
-  }, [ScriptLogsPanelView({ store: vm$ })]);
+  return Dialog(
+    {
+      open,
+      title: "执行日志",
+      description: combine(
+        { route: vm$.state.script_logs_route, scripts: vm$.state.scripts },
+        ({ route, scripts }) => {
+          const script = scripts.find((script) => script.id === route);
+          return script ? `${script.name} · ${script.path}` : route;
+        },
+      ),
+      attributes: { n: "script-logs-dialog", "aria-label": "执行日志" },
+      class: "box-border flex flex-col overflow-hidden",
+      style: {
+        width: "min(960px, calc(100vw - 32px))",
+        "max-height": "calc(100dvh - 32px)",
+      },
+      bodyProps: { class: "box-border overflow-auto min-h-0" },
+      onMounted: modal.mount,
+      onUnmounted: modal.unmount,
+      onKeyDown: modal.keydown,
+      onClose: vm$.methods.close_script_logs,
+      footer: [
+        Button(
+          {
+            variant: "secondary",
+            attributes: { n: "script-logs-close-button" },
+            onClick: vm$.methods.close_script_logs,
+          },
+          ["关闭"],
+        ),
+      ],
+    },
+    [ScriptLogsPanelView({ store: vm$ })],
+  );
 }
 
 /** 弹窗中的执行日志：最新一页 + before_id 翻页。 */
@@ -1503,7 +2217,10 @@ function ScriptLogsPanelView({ store }) {
 
 function ScriptCardView({ store, script, discovery }) {
   const vm$ = store;
-  const status_pending = computed(vm$.state.status_pending, pending => pending[script.id] || undefined);
+  const status_pending = computed(
+    vm$.state.status_pending,
+    (pending) => pending[script.id] || undefined,
+  );
   return View(
     {
       class: "box-border grid rounded-card bg-surface-raised min-w-0",
@@ -1530,146 +2247,169 @@ function ScriptCardView({ store, script, discovery }) {
               attributes: { n: "script-card-identity" },
             },
             [
-              View({
-                class: "box-border flex flex-wrap items-center gap-space-4 min-w-0 text-muted text-sm",
-                attributes: { n: "script-card-metadata" },
-              }, [
-                View({
-                  class: "box-border inline-flex flex-none items-center gap-space-2 text-text text-base whitespace-nowrap",
-                  attributes: { n: "script-card-platform" },
-                }, [
-                  Img({
-                    src: discovery_platform_icon_url(script.platform),
-                    class: "box-border block flex-none object-fit-contain",
-                    style: { width: "var(--frui-space-5)", height: "var(--frui-space-5)" },
-                    attributes: { n: "script-card-platform-icon", alt: "", "aria-hidden": "true",
-                      width: "20", height: "20", referrerpolicy: "no-referrer" },
-                  }),
-                  discovery_platform_label(script.platform),
-                ]),
-                View(
-                  {
-                    class: "box-border flex items-center min-w-0 break-anywhere",
-                    style: {
-                      gap: "5px",
+              View(
+                {
+                  class:
+                    "box-border flex flex-wrap items-center gap-space-4 min-w-0 text-muted text-sm",
+                  attributes: { n: "script-card-metadata" },
+                },
+                [
+                  View(
+                    {
+                      class:
+                        "box-border inline-flex flex-none items-center gap-space-2 text-text text-base whitespace-nowrap",
+                      attributes: { n: "script-card-platform" },
                     },
-                    attributes: {
-                      n: "script-card-website",
-                      "aria-label": "来源网站",
-                      title: "来源网站",
-                    },
-                  },
-                  [
-                    Icon("globe", 14),
-                    script.website_url
-                      ? Link(
-                          {
-                            class: "box-border",
-                            href: script.website_url,
-                            target: "_blank",
-                            attributes: {
-                              n: "script-card-website-link",
-                              rel: "noopener noreferrer",
-                            },
-                          },
-                          [script.url],
-                        )
-                      : script.url || "未填写",
-                  ],
-                ),
-                View(
-                  {
-                    class: "box-border flex items-center min-w-0 break-anywhere",
-                    style: {
-                      gap: "5px",
-                    },
-                    attributes: {
-                      n: "script-card-maintainers",
-                      "aria-label": "共享者",
-                      title: "共享者",
-                    },
-                  },
-                  [
-                    Icon("users", 14),
-                    View(
-                      {
-                        as: "span",
-                        class: "box-border inline-flex items-center flex-wrap",
+                    [
+                      Img({
+                        src: discovery_platform_icon_url(script.platform),
+                        class: "box-border block flex-none object-fit-contain",
                         style: {
-                          gap: "6px",
+                          width: "var(--frui-space-5)",
+                          height: "var(--frui-space-5)",
                         },
-                        attributes: { n: "script-card-maintainers-value" },
+                        attributes: {
+                          n: "script-card-platform-icon",
+                          alt: "",
+                          "aria-hidden": "true",
+                          width: "20",
+                          height: "20",
+                          referrerpolicy: "no-referrer",
+                        },
+                      }),
+                      discovery_platform_label(script.platform),
+                    ],
+                  ),
+                  View(
+                    {
+                      class:
+                        "box-border flex items-center min-w-0 break-anywhere",
+                      style: {
+                        gap: "5px",
                       },
-                      script.maintainers.length
-                        ? script.maintainers.flatMap((value, index) => [
-                            ...(index ? [", "] : []),
-                            typeof value === "string"
-                              ? value
-                              : View(
-                                  {
-                                    as: "span",
-                                    class:
-                                      "box-border inline-flex items-center flex-wrap",
-                                    style: {
-                                      gap: "6px",
+                      attributes: {
+                        n: "script-card-website",
+                        "aria-label": "来源网站",
+                        title: "来源网站",
+                      },
+                    },
+                    [
+                      Icon("globe", 14),
+                      script.website_url
+                        ? Link(
+                            {
+                              class: "box-border",
+                              href: script.website_url,
+                              target: "_blank",
+                              attributes: {
+                                n: "script-card-website-link",
+                                rel: "noopener noreferrer",
+                              },
+                            },
+                            [script.url],
+                          )
+                        : script.url || "未填写",
+                    ],
+                  ),
+                  View(
+                    {
+                      class:
+                        "box-border flex items-center min-w-0 break-anywhere",
+                      style: {
+                        gap: "5px",
+                      },
+                      attributes: {
+                        n: "script-card-maintainers",
+                        "aria-label": "共享者",
+                        title: "共享者",
+                      },
+                    },
+                    [
+                      Icon("users", 14),
+                      View(
+                        {
+                          as: "span",
+                          class:
+                            "box-border inline-flex items-center flex-wrap",
+                          style: {
+                            gap: "6px",
+                          },
+                          attributes: { n: "script-card-maintainers-value" },
+                        },
+                        script.maintainers.length
+                          ? script.maintainers.flatMap((value, index) => [
+                              ...(index ? [", "] : []),
+                              typeof value === "string"
+                                ? value
+                                : View(
+                                    {
+                                      as: "span",
+                                      class:
+                                        "box-border inline-flex items-center flex-wrap",
+                                      style: {
+                                        gap: "6px",
+                                      },
+                                      attributes: { n: "script-maintainer" },
                                     },
-                                    attributes: { n: "script-maintainer" },
-                                  },
-                                  [
-                                    ...(value.avatar
-                                      ? [
-                                          Img({
-                                            src: value.avatar,
-                                            class:
-                                              "box-border rounded-full object-cover",
-                                            style: {
-                                              width: "20px",
-                                              height: "20px",
+                                    [
+                                      ...(value.avatar
+                                        ? [
+                                            Img({
+                                              src: value.avatar,
+                                              class:
+                                                "box-border rounded-full object-cover",
+                                              style: {
+                                                width: "20px",
+                                                height: "20px",
+                                              },
+                                              attributes: {
+                                                n: "script-maintainer-avatar",
+                                                alt: "",
+                                                loading: "lazy",
+                                                referrerpolicy: "no-referrer",
+                                              },
+                                            }),
+                                          ]
+                                        : []),
+                                      value.url
+                                        ? Link(
+                                            {
+                                              class: "box-border",
+                                              href: value.url,
+                                              target: "_blank",
+                                              attributes: {
+                                                n: "script-maintainer-link",
+                                                rel: "noopener noreferrer",
+                                              },
                                             },
-                                            attributes: {
-                                              n: "script-maintainer-avatar",
-                                              alt: "",
-                                              loading: "lazy",
-                                              referrerpolicy: "no-referrer",
+                                            [value.nickname],
+                                          )
+                                        : View(
+                                            {
+                                              class: "box-border",
+                                              as: "span",
+                                              attributes: {
+                                                n: "script-maintainer-nickname",
+                                              },
                                             },
-                                          }),
-                                        ]
-                                      : []),
-                                    value.url
-                                      ? Link(
-                                          {
-                                            class: "box-border",
-                                            href: value.url,
-                                            target: "_blank",
-                                            attributes: {
-                                              n: "script-maintainer-link",
-                                              rel: "noopener noreferrer",
-                                            },
-                                          },
-                                          [value.nickname],
-                                        )
-                                      : View(
-                                          {
-                                            class: "box-border",
-                                            as: "span",
-                                            attributes: {
-                                              n: "script-maintainer-nickname",
-                                            },
-                                          },
-                                          [value.nickname],
-                                        ),
-                                  ],
-                                ),
-                          ])
-                        : ["未填写"],
-                    ),
-                  ],
-                ),
-                View(
-                  { class: "box-border", attributes: { n: "script-card-size" } },
-                  [Math.ceil(script.script_bytes / 1024) + " KB"],
-                ),
-              ]),
+                                            [value.nickname],
+                                          ),
+                                    ],
+                                  ),
+                            ])
+                          : ["未填写"],
+                      ),
+                    ],
+                  ),
+                  View(
+                    {
+                      class: "box-border",
+                      attributes: { n: "script-card-size" },
+                    },
+                    [Math.ceil(script.script_bytes / 1024) + " KB"],
+                  ),
+                ],
+              ),
               View(
                 {
                   class: "box-border text-muted break-anywhere",
@@ -1685,7 +2425,8 @@ function ScriptCardView({ store, script, discovery }) {
           ),
           View(
             {
-              class: "box-border flex flex-wrap items-center justify-end min-w-0 max-w-full",
+              class:
+                "box-border flex flex-wrap items-center justify-end min-w-0 max-w-full",
               style: {
                 gap: "var(--frui-space-2)",
                 "margin-left": "auto",
@@ -1693,44 +2434,77 @@ function ScriptCardView({ store, script, discovery }) {
               attributes: { n: "script-card-release" },
             },
             [
-              ...(script.draft ? [Badge({
-                tone: "warning",
-                class: "box-border flex-none whitespace-nowrap",
-                attributes: { n: "script-draft-status" },
-              }, ["存在草稿版本"])] : []),
-              ...(script.cookie_authorization.status !== "none"
-                ? [Badge({
-                    tone: script.cookie_authorization.status === "active" ? "success" : "danger",
-                    class: "box-border flex-none whitespace-nowrap",
-                    attributes: {
-                      n: "script-cookie-status",
-                      title: script.cookie_authorization.message,
-                    },
-                  }, [script.cookie_authorization.status === "active" ? "Cookie 已授权" : "Cookie 需要重新确认"])]
+              ...(script.draft
+                ? [
+                    Badge(
+                      {
+                        tone: "warning",
+                        class: "box-border flex-none whitespace-nowrap",
+                        attributes: { n: "script-draft-status" },
+                      },
+                      ["存在草稿版本"],
+                    ),
+                  ]
                 : []),
-              script.status === "draft" && !script.current_release_id ? Badge(
-                { tone: "warning", class: "box-border flex-none whitespace-nowrap",
-                  attributes: { n: "script-status", "aria-label": "草稿" } },
-                ["草稿"],
-              ) : Button(
-                {
-                  variant: "secondary",
-                  size: "small",
-                  icon: Icon("chevron-down", 14),
-                  icon_position: "end",
-                  class: "box-border flex-none whitespace-nowrap",
-                  attributes: {
-                    n: "script-status",
-                    "aria-label": (script.status === "draft" ? "草稿" : "正式版本 " + (script.version || "未编号")) + "，查看版本历史",
-                    "aria-haspopup": "dialog",
-                    title: script.status !== "draft" && script.script_hash
-                      ? "源码 SHA-256：" + script.script_hash
-                      : "查看版本历史",
-                  },
-                  onClick: () => vm$.methods.open_history(script.id),
-                },
-                [script.status === "draft" ? "草稿" : script.version || "未编号"],
-              ),
+              ...(script.cookie_authorization.status !== "none"
+                ? [
+                    Badge(
+                      {
+                        tone:
+                          script.cookie_authorization.status === "active"
+                            ? "success"
+                            : "danger",
+                        class: "box-border flex-none whitespace-nowrap",
+                        attributes: {
+                          n: "script-cookie-status",
+                          title: script.cookie_authorization.message,
+                        },
+                      },
+                      [
+                        script.cookie_authorization.status === "active"
+                          ? "Cookie 已授权"
+                          : "Cookie 需要重新确认",
+                      ],
+                    ),
+                  ]
+                : []),
+              script.status === "draft" && !script.current_release_id
+                ? Badge(
+                    {
+                      tone: "warning",
+                      class: "box-border flex-none whitespace-nowrap",
+                      attributes: { n: "script-status", "aria-label": "草稿" },
+                    },
+                    ["草稿"],
+                  )
+                : Button(
+                    {
+                      variant: "secondary",
+                      size: "small",
+                      icon: Icon("chevron-down", 14),
+                      icon_position: "end",
+                      class: "box-border flex-none whitespace-nowrap",
+                      attributes: {
+                        n: "script-status",
+                        "aria-label":
+                          (script.status === "draft"
+                            ? "草稿"
+                            : "正式版本 " + (script.version || "未编号")) +
+                          "，查看版本历史",
+                        "aria-haspopup": "dialog",
+                        title:
+                          script.status !== "draft" && script.script_hash
+                            ? "源码 SHA-256：" + script.script_hash
+                            : "查看版本历史",
+                      },
+                      onClick: () => vm$.methods.open_history(script.id),
+                    },
+                    [
+                      script.status === "draft"
+                        ? "草稿"
+                        : script.version || "未编号",
+                    ],
+                  ),
             ],
           ),
         ],
@@ -1839,20 +2613,38 @@ function ScriptCardView({ store, script, discovery }) {
             },
             [script.draft ? "编辑草稿" : "编辑"],
           ),
-          ...(script.config_schema ? [Button({
-            class: "box-border", attributes: { n: "script-config-button" },
-            onClick: () => vm$.config.methods.open(script),
-          }, ["配置"])] : []),
-          ...(script.kind === "rss" ? [Button({
-            class: "box-border",
-            attributes: { n: "script-source-create-button", "aria-haspopup": "dialog",
-              "aria-expanded": discovery.state.form_open },
-            disabled: discovery.state.saving,
-            onClick() {
-              discovery.methods.create_source();
-              return discovery.methods.start();
-            },
-          }, ["新增订阅源"])] : []),
+          ...(script.config_schema
+            ? [
+                Button(
+                  {
+                    class: "box-border",
+                    attributes: { n: "script-config-button" },
+                    onClick: () => vm$.config.methods.open(script),
+                  },
+                  ["配置"],
+                ),
+              ]
+            : []),
+          ...(script.kind === "rss"
+            ? [
+                Button(
+                  {
+                    class: "box-border",
+                    attributes: {
+                      n: "script-source-create-button",
+                      "aria-haspopup": "dialog",
+                      "aria-expanded": discovery.state.form_open,
+                    },
+                    disabled: discovery.state.saving,
+                    onClick() {
+                      discovery.methods.create_source();
+                      return discovery.methods.start();
+                    },
+                  },
+                  ["新增订阅源"],
+                ),
+              ]
+            : []),
           ...(script.cookie_authorization.status === "required"
             ? [
                 Button(
@@ -1873,7 +2665,10 @@ function ScriptCardView({ store, script, discovery }) {
               attributes: {
                 n: "script-logs-toggle-button",
                 "aria-haspopup": "dialog",
-                "aria-expanded": computed(vm$.state.script_logs_route, route => Boolean(route) && route === script.id),
+                "aria-expanded": computed(
+                  vm$.state.script_logs_route,
+                  (route) => Boolean(route) && route === script.id,
+                ),
               },
               onClick() {
                 return vm$.methods.toggle_script_logs(script.id);
@@ -1881,36 +2676,83 @@ function ScriptCardView({ store, script, discovery }) {
             },
             ["执行日志"],
           ),
-          View({
-            class: "box-border flex flex-wrap justify-end gap-space-2",
-            style: { "margin-inline-start": "auto" },
-            attributes: { n: "script-card-management-actions" },
-          }, [
-            ...(script.cookie_grant_id ? [Popconfirm({
-              title: `撤销脚本“${script.name}”的 Cookie 授权？脚本将无法使用这些 Cookie。`, confirmText: "确认撤销",
-              attributes: { n: "script-cookie-revoke-confirmation" },
-              onConfirm: () => vm$.methods.revoke_cookie_consent(script.id),
-              trigger: props => Button({ ...props, class: "box-border",
-                attributes: { ...props.attributes, n: "script-cookie-revoke" } }, ["撤销 Cookie 授权"]),
-            })] : []),
-            ...(script.status !== "draft" ? [Popconfirm({
-              title: script.draft
-                ? `脚本「${script.name}」存在草稿版本。退回草稿将用当前正式版本覆盖草稿，未发布的修改将丢失，正式路由也将停止服务。是否继续？`
-                : `将脚本「${script.name}」退回草稿？该脚本的所有正式路由将停止服务。`,
-              confirmText: "确认退回草稿", disabled: status_pending,
-              attributes: { n: "script-status-confirmation" },
-              onConfirm: () => vm$.methods.set_script_status(script.id, "draft"),
-              trigger: props => Button({ ...props, class: "box-border", variant: "secondary", disabled: status_pending,
-                attributes: { ...props.attributes, n: "script-status-button" } }, ["退回草稿"]),
-            })] : []),
-            Popconfirm({
-              title: `删除脚本“${script.name}”？该脚本的所有路由将立即 404。`,
-              attributes: { n: "script-delete-confirmation" },
-              onConfirm: () => vm$.methods.remove_script(script.id),
-              trigger: props => Button({ ...props, class: "box-border flex-none",
-                attributes: { ...props.attributes, n: "script-delete-button" } }, ["删除"]),
-            }),
-          ]),
+          View(
+            {
+              class: "box-border flex flex-wrap justify-end gap-space-2",
+              style: { "margin-inline-start": "auto" },
+              attributes: { n: "script-card-management-actions" },
+            },
+            [
+              ...(script.cookie_grant_id
+                ? [
+                    Popconfirm({
+                      title: `撤销脚本“${script.name}”的 Cookie 授权？脚本将无法使用这些 Cookie。`,
+                      confirmText: "确认撤销",
+                      attributes: { n: "script-cookie-revoke-confirmation" },
+                      onConfirm: () =>
+                        vm$.methods.revoke_cookie_consent(script.id),
+                      trigger: (props) =>
+                        Button(
+                          {
+                            ...props,
+                            class: "box-border",
+                            attributes: {
+                              ...props.attributes,
+                              n: "script-cookie-revoke",
+                            },
+                          },
+                          ["撤销 Cookie 授权"],
+                        ),
+                    }),
+                  ]
+                : []),
+              ...(script.status !== "draft"
+                ? [
+                    Popconfirm({
+                      title: script.draft
+                        ? `脚本「${script.name}」存在草稿版本。退回草稿将用当前正式版本覆盖草稿，未发布的修改将丢失，正式路由也将停止服务。是否继续？`
+                        : `将脚本「${script.name}」退回草稿？该脚本的所有正式路由将停止服务。`,
+                      confirmText: "确认退回草稿",
+                      disabled: status_pending,
+                      attributes: { n: "script-status-confirmation" },
+                      onConfirm: () =>
+                        vm$.methods.set_script_status(script.id, "draft"),
+                      trigger: (props) =>
+                        Button(
+                          {
+                            ...props,
+                            class: "box-border",
+                            variant: "secondary",
+                            disabled: status_pending,
+                            attributes: {
+                              ...props.attributes,
+                              n: "script-status-button",
+                            },
+                          },
+                          ["退回草稿"],
+                        ),
+                    }),
+                  ]
+                : []),
+              Popconfirm({
+                title: `删除脚本“${script.name}”？该脚本的所有路由将立即 404。`,
+                attributes: { n: "script-delete-confirmation" },
+                onConfirm: () => vm$.methods.remove_script(script.id),
+                trigger: (props) =>
+                  Button(
+                    {
+                      ...props,
+                      class: "box-border flex-none",
+                      attributes: {
+                        ...props.attributes,
+                        n: "script-delete-button",
+                      },
+                    },
+                    ["删除"],
+                  ),
+              }),
+            ],
+          ),
         ],
       ),
     ],
@@ -1983,8 +2825,15 @@ function ScriptListView({ store, discovery }) {
               }),
             ],
           ),
-          Button({ disabled: vm$.state.loading, style: { "align-self": "end", "justify-self": "end" },
-            attributes: { n: "script-list-refresh" }, onClick: vm$.methods.start }, ["刷新"]),
+          Button(
+            {
+              disabled: vm$.state.loading,
+              style: { "align-self": "end", "justify-self": "end" },
+              attributes: { n: "script-list-refresh" },
+              onClick: vm$.methods.start,
+            },
+            ["刷新"],
+          ),
         ],
       ),
       Show({
@@ -2042,10 +2891,12 @@ function ScriptListView({ store, discovery }) {
                   attributes: { n: "script-list-empty" },
                 },
                 [
-                  combine({ query: vm$.state.query, status: vm$.state.filter_status }, ({ query, status }) =>
-                    query.trim() || status !== "all"
-                      ? "没有匹配的脚本。"
-                      : "还没有脚本。点击“新增脚本”，保存后路由即时生效。",
+                  combine(
+                    { query: vm$.state.query, status: vm$.state.filter_status },
+                    ({ query, status }) =>
+                      query.trim() || status !== "all"
+                        ? "没有匹配的脚本。"
+                        : "还没有脚本。点击“新增脚本”，保存后路由即时生效。",
                   ),
                 ],
               );
@@ -2073,10 +2924,19 @@ function ScriptListView({ store, discovery }) {
 function ScriptEditorView({ store }) {
   return View({ class: "box-border", attributes: { n: "script-editor" } }, [
     Show({ when: store.state.form_open, ok: () => ScriptFormView({ store }) }),
-    Show({ when: store.state.install_open, ok: () => ScriptInstallView({ store }) }),
-    Show({ when: computed(store.state.history, value => value.open), ok: () => ScriptHistoryView({ store }) }),
+    Show({
+      when: store.state.install_open,
+      ok: () => ScriptInstallView({ store }),
+    }),
+    Show({
+      when: computed(store.state.history, (value) => value.open),
+      ok: () => ScriptHistoryView({ store }),
+    }),
     Show({ when: store.state.diff_open, ok: () => ScriptDiffView({ store }) }),
-    Show({ when: store.config.state.open, ok: () => ScriptConfigView({ model: store.config }) }),
+    Show({
+      when: store.config.state.open,
+      ok: () => ScriptConfigView({ model: store.config }),
+    }),
     ScriptCookieConsentView({ store }),
   ]);
 }
@@ -2130,9 +2990,17 @@ function ScriptApplicationView(embedded = false) {
         when: computed(vm$.state.script_logs_route, Boolean),
         ok: () => ScriptLogsDialogView({ store: vm$ }),
       }),
-      View({ class: "box-border text-success", attributes: { n: "script-source-status", role: "status" } },
-        [discovery.state.form_message]),
-      Show({ when: discovery.state.form_open, ok: () => SourceFormView({ store: discovery }) }),
+      View(
+        {
+          class: "box-border text-success",
+          attributes: { n: "script-source-status", role: "status" },
+        },
+        [discovery.state.form_message],
+      ),
+      Show({
+        when: discovery.state.form_open,
+        ok: () => SourceFormView({ store: discovery }),
+      }),
     ],
   );
   const page_options = {
@@ -2140,9 +3008,19 @@ function ScriptApplicationView(embedded = false) {
     eyebrow: "Scripts",
     title: "脚本管理",
     actions: [
-      Button({ variant: "secondary", disabled: vm$.state.saving,
-        attributes: { n: "script-install-button", "aria-haspopup": "dialog", "aria-expanded": vm$.state.install_open },
-        onClick: vm$.methods.open_install }, ["安装脚本"]),
+      Button(
+        {
+          variant: "secondary",
+          disabled: vm$.state.saving,
+          attributes: {
+            n: "script-install-button",
+            "aria-haspopup": "dialog",
+            "aria-expanded": vm$.state.install_open,
+          },
+          onClick: vm$.methods.open_install,
+        },
+        ["安装脚本"],
+      ),
       Button(
         {
           class: "box-border",
