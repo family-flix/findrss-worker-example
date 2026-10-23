@@ -36,6 +36,7 @@ function FilePickerViewModel(props = {}) {
     subscribe_source(props.loading, sync),
   ];
   return {
+    store,
     state,
     methods: {
       choose(files) {
@@ -86,6 +87,7 @@ function FilePicker({
   const error = computed(state, value => value.invalid_files.length ? `不支持的文件类型，仅支持 ${accept}` : "");
   let input_element;
   return ui.FilePickerPrimitive.Root({
+    store: model.store,
     class: atomic_classes(["min-width-0", custom_class].filter(Boolean).join(" ")),
     attributes: {
       n: `${name}-root`
@@ -97,6 +99,7 @@ function FilePicker({
     },
   }, [
     ui.FilePickerPrimitive.Input({
+      store: model.store,
       accept,
       multiple,
       disabled: blocked,

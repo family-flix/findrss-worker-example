@@ -1469,6 +1469,28 @@ test("Cookie 两栏随域名选择更新，切换保留输入，重新读取更�
   root.onUnmounted();
 });
 
+test("新增订阅弹窗可选择头像，并将文件同步到草稿", () => {
+  ui.DOM = {};
+  context.File = File;
+  context.document = { querySelector: () => null, addEventListener() {}, removeEventListener() {} };
+  context.FindRSSAdminAuth = { fetch: async () => Response.json({ scripts: [] }) };
+  context.FindRSSAdminShell = {};
+  vm.runInContext("(() => {\n" + page_source("discovery.js") +
+    "\nglobalThis.discovery_avatar_model = DiscoveryAdminViewModel(); globalThis.discovery_avatar_view = () => SourceFormView({ store: discovery_avatar_model }); })();", context);
+  const model = context.discovery_avatar_model;
+  model.methods.create_source();
+  const view = context.discovery_avatar_view();
+  try {
+    const input = find(view, "discovery-source-avatar-input");
+    assert.ok(input);
+    const file = new File(["avatar"], "avatar.png", { type: "image/png" });
+    const target = { files: [file], value: "avatar.png" };
+    input.events.onChange({ target });
+    assert.equal(model.state.avatar_file.value, file);
+    assert.equal(target.value, "");
+  } finally { view.onUnmounted(); }
+});
+
 test("订阅源 JSON 弹窗复用 FilePicker 拖拽区，读取文件后由按钮提交", async () => {
   const writes = [];
   context.document = { querySelector: () => null, addEventListener() {}, removeEventListener() {} };
