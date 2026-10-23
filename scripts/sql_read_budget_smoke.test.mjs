@@ -29,6 +29,10 @@ test("统计冷启动、目录调度、设备心跳和任务流转的实际 SQL 
     import { RepositoryScript } from "./server/repository/script.js";
     import { RepositoryCall } from "./server/repository/call.js";
     import { RepositoryDevice } from "./server/repository/device.js";
+    import { RepositoryAccessToken } from "./server/repository/access_token.js";
+    import { RepositoryDeviceToken } from "./server/repository/device_token.js";
+    import { RepositoryMcpToken } from "./server/repository/mcp_token.js";
+    import { RepositoryClip } from "./server/repository/clip.js";
     import { RepositoryScriptRelease } from "./server/repository/script_release.js";
     import { ScriptSourceStore } from "./server/infra/script_source_store.js";
     import { ServiceDiscovery } from "./server/service/durable_object/discovery.js";
@@ -59,6 +63,17 @@ test("统计冷启动、目录调度、设备心跳和任务流转的实际 SQL 
         }
         function measure(label, run) { cursors.length = 0; run(); record(label); }
         async function measure_async(label, run) { cursors.length = 0; await run(); record(label); }
+        native.exec("INSERT INTO device_tokens(id,name,token_hash,token_hint,encrypted_token,created_at) VALUES ('budget-device','Device','budget-device','hint','encrypted',1)");
+        native.exec("INSERT INTO mcp_tokens(id,name,token_hash,token_hint,scopes_json,resource,created_at,expires_at) VALUES ('budget-mcp','MCP','budget-mcp','hint','[]','https://example.com/mcp',1,9999999999999)");
+        for (const [table, id, Repository] of [['access_tokens','token-1',RepositoryAccessToken],['device_tokens','budget-device',RepositoryDeviceToken],['mcp_tokens','budget-mcp',RepositoryMcpToken]]) {
+          measure(table+'_180_uses_before_throttle', () => {
+            for(let i=1;i<=180;i++) sql.exec('UPDATE '+table+' SET last_used_at = ? WHERE id = ?',i*20000,id);
+          });
+          native.exec('UPDATE '+table+' SET last_used_at = NULL WHERE id = ?',id);
+          measure(table+'_180_uses_one_hour', () => {
+            for(let i=1;i<=180;i++) new Repository({sql}).set_last_used(id,i*20000);
+          });
+        }
         const repo = { discovery: new RepositoryDiscoverySource({sql}), platforms: new RepositoryPlatform({sql}), tags: new RepositoryTag({sql}) };
         const discovery = new ServiceDiscovery({repo});
         const tasks = new RepositoryBackgroundTasks({sql});
@@ -91,6 +106,24 @@ test("统计冷启动、目录调度、设备心跳和任务流转的实际 SQL 
           await catalog.ensure_catalog();
         });
         measure('scheduler_1000_calls', () => { for(let i=0;i<1000;i++) repo.discovery.snapshot_schedule(); });
+        repo.discovery.snapshot_adaptive('source-1',600);
+        measure('adaptive_1000_unchanged_intervals', () => {
+          for(let i=0;i<1000;i++) repo.discovery.snapshot_adaptive('source-1',600);
+        });
+        repo.discovery.snapshot_save('source-1','https://example.com/feed/1',[],0,'offline');
+        native.exec("INSERT INTO clips(id,title,url,selector,config_version,created_at,error) VALUES ('budget-clip','Clip','https://example.com','main','current',1,'offline')");
+        measure('snapshot_1000_unchanged_failures', () => {
+          const clips = new RepositoryClip({sql});
+          for(let i=0;i<1000;i++) {
+            repo.discovery.snapshot_save('source-1','https://example.com/feed/1',[],0,'offline');
+            clips.failure('budget-clip','offline','current');
+          }
+        });
+        const statistics = new RepositoryStatistics({sql});
+        statistics.record_calls(['source-1']);
+        measure('source_1000_access_counts', () => {
+          for(let i=0;i<1000;i++) statistics.record_calls(['source-1']);
+        });
         seed("INSERT INTO rss_public_feeds(key,pathname,query_json,self_url) SELECT 'feed-'||i,'/feed/'||i,'[]','https://example.com/rss/feed/'||i FROM n", count);
         measure('rss_registration_existing_after_restart', () => {
           const feeds = new RepositoryRssRouteCache({sql});
@@ -109,6 +142,39 @@ test("统计冷启动、目录调度、设备心跳和任务流转的实际 SQL 
         measure('cache_cleanup', () => new RepositoryRssRouteCache({sql}).delete_expired(100));
         seed("INSERT INTO rss_route_cache_chunks(key,chunk_index,body) SELECT 'public-snapshot:'||i,0,'{}' FROM n", count);
         measure('cache_cleanup_with_legacy_chunks', () => new RepositoryRssRouteCache({sql}).delete_expired(100));
+        measure('idle_1000_maintenance_sweeps', () => {
+          const calls = new RepositoryCall({sql}), cache = new RepositoryRssRouteCache({sql});
+          for(let i=0;i<1000;i++) {
+            calls.sweep_expired(0,3); calls.delete_completed_before(0); cache.delete_expired(0);
+          }
+        });
+        const xml_cache = new RepositoryRssRouteCache({sql});
+        const xml_entry = {key:'public-snapshot:write-budget',output_json:'',object_key:'rss/snapshots/test/feed.json',invoked:0,expires_at:0,created_at:1,saved_at:1};
+        native.exec('CREATE INDEX rss_route_cache_expiry ON rss_route_cache(expires_at)');
+        measure('xml_pointer_insert_before_upgrade', () => xml_cache.write(xml_entry));
+        measure('xml_pointer_update_before_upgrade', () => xml_cache.write({...xml_entry,saved_at:2}));
+        native.exec('UPDATE api_schema_version SET version = 3');
+        measure('schema_v4_cache_index_upgrade', () => bootstrap(ctx));
+        if(native.exec("SELECT name FROM sqlite_master WHERE name = 'rss_route_cache_expiry'").toArray().length) throw new Error('Redundant XML expiry index survived upgrade');
+        measure('schema_v4_cache_index_upgrade_second_run', () => bootstrap(ctx));
+        measure('xml_pointer_insert', () => xml_cache.write({...xml_entry,key:'public-snapshot:write-budget-new'}));
+        measure('xml_pointer_update', () => xml_cache.write({...xml_entry,saved_at:3}));
+        seed("INSERT INTO rss_route_cache(key,output_json,invoked,expires_at,created_at) SELECT 'public-snapshot:refresh-budget-'||i,'{}',0,0,1 FROM n",count);
+        const snapshot_tasks = new RepositoryBackgroundTasks({sql});
+        snapshot_tasks.insert({id:'refresh-warm',kind:'snapshot',title:'Refresh',target:'target',started_at:100000});
+        snapshot_tasks.finish('refresh-warm','completed','',100000);
+        measure('snapshot_existing_refreshes', () => {
+          const feeds = new RepositoryRssRouteCache({sql});
+          for(let i=1;i<=count;i++) {
+            const now = 100000+i;
+            snapshot_tasks.insert({id:'refresh-'+i,kind:'snapshot',title:'Refresh',target:'target',source_id:'source-'+i,started_at:now});
+            repo.discovery.snapshot_attempt('source-'+i,'https://example.com/feed/'+i,now);
+            feeds.public_attempt('feed-'+i,now);
+            xml_cache.write({...xml_entry,key:'public-snapshot:refresh-budget-'+i,saved_at:now});
+            repo.discovery.snapshot_save('source-'+i,'https://example.com/feed/'+i,[],now);
+            snapshot_tasks.finish('refresh-'+i,'completed','',now);
+          }
+        });
         for (const name of ['calls_recent', 'calls_publisher_recent', 'discovery_sources_recent', 'discovery_sources_public_order']) native.exec('DROP INDEX ' + name);
         native.exec('UPDATE api_schema_version SET version = 2');
         measure('schema_v3_index_upgrade', () => {
@@ -188,6 +254,21 @@ test("统计冷启动、目录调度、设备心跳和任务流转的实际 SQL 
     for (const report of result.reports) console.log(JSON.stringify({ sources: count, ...report }));
     const reads = label => result.reports.find(report => report.label === label).rows_read;
     const writes = label => result.reports.find(report => report.label === label).rows_written;
+    for (const table of ['access_tokens','device_tokens','mcp_tokens']) {
+      assert.equal(writes(table+'_180_uses_before_throttle'),180);
+      assert.equal(writes(table+'_180_uses_one_hour'),12);
+    }
+    assert.equal(writes('adaptive_1000_unchanged_intervals'),0);
+    assert.equal(writes('snapshot_1000_unchanged_failures'),0);
+    assert.equal(writes('source_1000_access_counts'),1000);
+    assert.equal(writes('idle_1000_maintenance_sweeps'),0);
+    assert.equal(writes('xml_pointer_insert_before_upgrade'),3);
+    assert.equal(writes('xml_pointer_update_before_upgrade'),2);
+    assert.equal(writes('xml_pointer_insert'),2);
+    assert.equal(writes('xml_pointer_update'),1);
+    assert.equal(writes('schema_v4_cache_index_upgrade'),1);
+    assert.equal(writes('schema_v4_cache_index_upgrade_second_run'),0);
+    assert.equal(writes('snapshot_existing_refreshes'),count * 13);
     assert.ok(writes('unused_write_indexes_upgrade') <= 3);
     assert.equal(writes('write_upgrade_second_run'), 0);
     assert.equal(writes('device_180_heartbeats_before_upgrade'), 360);

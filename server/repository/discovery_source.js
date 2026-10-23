@@ -128,7 +128,7 @@ export class RepositoryDiscoverySource {
   }
 
   snapshot_adaptive(id, interval) {
-    this.sql.exec("UPDATE discovery_source_snapshots SET adaptive_interval = ? WHERE source_id = ?", interval, id);
+    this.sql.exec("UPDATE discovery_source_snapshots SET adaptive_interval = ? WHERE source_id = ? AND adaptive_interval != ?", interval, id, interval);
     const row = this.snapshot_schedule_state.rows?.get(id);
     if (row?.snapshot_attempted_at != null) row.adaptive_interval = interval;
   }
@@ -162,7 +162,7 @@ export class RepositoryDiscoverySource {
   }
 
   snapshot_save(id, feed_url, articles, now, error = "", fingerprint = "") {
-    if (error) this.sql.exec("UPDATE discovery_source_snapshots SET error = ? WHERE source_id = ? AND feed_url = ?", error, id, feed_url);
+    if (error) this.sql.exec("UPDATE discovery_source_snapshots SET error = ? WHERE source_id = ? AND feed_url = ? AND error != ?", error, id, feed_url, error);
     else this.sql.exec("UPDATE discovery_source_snapshots SET articles_json = ?, saved_at = ?, error = '', poll_fingerprint = ? WHERE source_id = ? AND feed_url = ?",
       JSON.stringify(articles), now, fingerprint, id, feed_url);
   }

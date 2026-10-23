@@ -17,6 +17,22 @@ function setup() {
   return { service, saved: () => saved };
 }
 function request(cookies) { return new Request('https://local/api/cookies/update', { method: 'POST', body: JSON.stringify({ data: JSON.stringify(cookies), crypto_type: 'none' }) }); }
+test('重复 Cookie 同步不写库或清缓存，值变化和清空仍立即保存', async t => {
+  const ctx = setup();
+  const put = t.mock.method(ctx.service.repo.rss_cookies, 'put');
+  const invalidate = t.mock.method(ctx.service, 'invalidate_routes');
+  const cookie = { domain: '.example.com', name: 'sid', value: 'original', path: '/' };
+  await ctx.service.update_rss_cookies(request([cookie]));
+  for (let index = 0; index < 100; index++) await ctx.service.update_rss_cookies(request([cookie]));
+  assert.equal(put.mock.calls.length, 1);
+  assert.equal(invalidate.mock.calls.length, 1);
+  await ctx.service.update_rss_cookies(request([{ ...cookie, value: 'changed' }]));
+  assert.equal(ctx.saved()[0].value, 'changed');
+  await ctx.service.update_rss_cookies(request([]));
+  assert.deepEqual(ctx.saved(), []);
+  assert.equal(put.mock.calls.length, 3);
+  assert.equal(invalidate.mock.calls.length, 3);
+});
 test('Cookie 管理读取需要管理员身份，读取和编辑复用已有存储', async () => {
   const { route } = await import('../durable_object_router.js');
   const { default: worker } = await import('../api.js');
@@ -133,6 +149,7 @@ test('全为无名 Cookie 不清空存储，危险 Cookie 仍拒绝；显式空�
   assert.equal(ctx.saved(), undefined);
   await assert.rejects(ctx.service.update_rss_cookies(request([{ name: 'sessionid', value: 'a\r\nb', domain: '.douyin.com' }])), /invalid/);
   assert.equal(ctx.saved(), undefined);
+  await ctx.service.update_rss_cookies(request([{ domain: '.douyin.com', name: 'sessionid', value: 'previous' }]));
   const result = await ctx.service.update_rss_cookies(request([]));
   assert.equal(result.count, 0);
   assert.deepEqual(ctx.saved(), []);

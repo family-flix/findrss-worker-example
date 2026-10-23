@@ -92,6 +92,17 @@ test("定时刷新沿用最近的访问域名，重建服务后从持久化存�
   assert.match(app.calls.at(-1).request.headers.get("X-Feed-Public-URL"), /^https:\/\/findrss\.litao\.workers\.dev\//);
 });
 
+test("相同访问域名在服务重建后不重复写入，切换域名仍立即持久化", async t => {
+  const app = setup();
+  const put = t.mock.method(app.dependencies.storage, "put", async (key, value) => app.values.set(key, value));
+  await app.service.remember_public_origin("https://findrss.cloud");
+  await new ServiceDiscovery(app.dependencies).remember_public_origin("https://findrss.cloud");
+  assert.equal(put.mock.calls.length, 1);
+  await new ServiceDiscovery(app.dependencies).remember_public_origin("https://other.example");
+  assert.equal(put.mock.calls.length, 2);
+  assert.equal(app.values.get("discovery_public_origin"), "https://other.example");
+});
+
 test("匿名读取公开目录也能提供定时刷新域名，其他接口的透传头不会改写它", async () => {
   const app = setup();
   for (const [origin, path] of [

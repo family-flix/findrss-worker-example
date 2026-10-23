@@ -42,6 +42,30 @@ function fixture(public_source = true, social_routes = []) {
     set_public(value) { public_source = value; }, fail(value = true) { fail = value; } };
 }
 
+for (const background_tasks of [false, true]) test(`自动 RSS 刷新只写一次尝试时间，失败不会立即重试（后台任务：${background_tasks}）`, async t => {
+  const f = fixture();
+  t.after(() => f.db.close());
+  if (background_tasks) f.service.app.background_tasks = new ServiceBackgroundTasks({ repo: new RepositoryBackgroundTasks(f), wait_until: f.ports.wait_until });
+  await f.serve("rss", undefined, true);
+  const key = f.repo.public_schedule()[0].key;
+  f.repo.public_attempt(key, 0);
+  const attempt = t.mock.method(f.repo, "public_attempt");
+  await f.service.refresh_due_snapshots();
+  assert.equal(attempt.mock.calls.length, 1);
+  assert.ok(f.repo.public_schedule()[0].attempted_at > 0);
+  f.repo.public_attempt(key, 0);
+  attempt.mock.resetCalls();
+  f.fail();
+  await f.service.refresh_due_snapshots();
+  assert.equal(attempt.mock.calls.length, 1);
+  assert.ok(f.repo.public_schedule()[0].attempted_at > 0);
+  const calls = f.calls;
+  await f.service.refresh_due_snapshots();
+  assert.equal(f.calls, calls);
+  assert.equal(attempt.mock.calls.length, 1);
+  assert.match((await f.serve()).body, /版本/);
+});
+
 for (const public_source of [true, false]) test(`${public_source ? "公开" : "私密"} XML 刷新计算图片元数据并持久保存，RSS/Atom 和读取共用结果`, async t => {
   const f = fixture(public_source); t.after(() => f.db.close());
   f.row.script = `export const route = { path: "/snapshot/:id", async handler() {
@@ -330,7 +354,7 @@ test("15:44 生成的 XML 在 15:54 Cookie 同步、清理和重启后仍可读�
   await f.serve("rss", {}, true);
   const key = "public-snapshot:" + rss_route_cache_key("/snapshot/1", []);
   const saved_at = now;
-  f.service.repo.rss_cookies = { put() {} };
+  f.service.repo.rss_cookies = { get: () => [], put() {} };
   f.service.app.cookie_push_settings = { decrypt: async body => body };
   now += RSS_ROUTE_CACHE_TTL_MS;
   await f.service.update_rss_cookies(new Request("https://internal/cookies", {

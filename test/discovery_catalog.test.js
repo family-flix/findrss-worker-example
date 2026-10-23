@@ -41,6 +41,21 @@ function fixture() {
 const row = index => ({ id: String(index), title: "源" + index, feed_url: "https://example.com/feed/" + index,
   description: "", website: "", category: "technology", tags_json: '["文章"]', enabled: 1, require_token: 0, source_type: "website" });
 
+test("目录升级标记只补写缺失项，重复发布和重建不重写已完成的升级", async t => {
+  const f = fixture();
+  const put = t.mock.method(f.dependencies.storage, "put", async (key, value) => f.metadata.set(key, value));
+  const migration_writes = () => put.mock.calls.filter(call => /^discovery_catalog_.*_v1$/.test(call.arguments[0])).length;
+  await f.service.ensure_catalog();
+  assert.equal(migration_writes(), 5);
+  await f.service.publish_catalog();
+  await new ServiceDiscovery(f.dependencies).publish_catalog();
+  assert.equal(migration_writes(), 5);
+  f.metadata.delete("discovery_catalog_public_sources_v1");
+  await new ServiceDiscovery(f.dependencies).ensure_catalog();
+  assert.equal(migration_writes(), 6);
+  assert.equal(f.metadata.get("discovery_catalog_public_sources_v1"), true);
+});
+
 test("首次发布读取完整 1000 条目录，排除下架源和非公开源，不混入管理字段", async () => {
   const f = fixture();
   for (let index = 0; index < 1000; index++) f.sources.set(String(index), row(index));

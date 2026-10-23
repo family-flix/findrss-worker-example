@@ -226,6 +226,8 @@ export class APIDurableObject extends DurableObject {
       // 当前查询不使用这两个索引，保留它们会放大任务和设备心跳的写入。
       this.ctx.storage.sql.exec("DROP INDEX IF EXISTS calls_access_token");
       this.ctx.storage.sql.exec("DROP INDEX IF EXISTS devices_status");
+      // 普通缓存已有部分索引，永久 XML 不需要维护过期索引。
+      this.ctx.storage.sql.exec("DROP INDEX IF EXISTS rss_route_cache_expiry");
       // calls_coalesce 依赖 calls.coalesce_key（上面 ALTER 补的列），必须排在 ALTER 之后。
       // 部分索引——绝大多数行的 coalesce_key 是 NULL，不该进索引。
       this.ctx.storage.sql.exec(

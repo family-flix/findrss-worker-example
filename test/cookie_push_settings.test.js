@@ -33,7 +33,7 @@ function fixture(context) {
   const scripts = Object.create(ServiceScript.prototype);
   const app = { cookie_push_settings: settings, scripts };
   scripts.app = app;
-  scripts.repo = { rss_cookies: { put: cookies => { saved = cookies; } } };
+  scripts.repo = { rss_cookies: { get: () => saved || [], put: cookies => { saved = cookies; } } };
   scripts.invalidate_routes = () => {};
   const env = { ADMIN_PASSWORD: "test-admin", API: { getByName: () => ({ fetch: request => route(request, app) }) } };
   const send = (method = "GET", body, authorized = true, path = "/admin/api/settings/cookies") => worker.fetch(new Request("https://local" + path, {

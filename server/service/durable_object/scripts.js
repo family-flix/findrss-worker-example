@@ -199,7 +199,7 @@ export class ServiceScript {
       try {
         await this.serve_rss_route("rss", source.pathname, new Request(target, {
           headers: { "X-Feed-Public-URL": source.self_url },
-        }), { refresh: true });
+        }), { refresh: true, attempt_recorded: true });
       } catch (error) {
         // 停用或改成私密后只移除定时任务，XML 继续保留。
         if (error.status === 401 || error.status === 404) {
@@ -853,8 +853,10 @@ export class ServiceScript {
       throw do_error(failure instanceof Error ? failure.message : String(failure), 400);
     }
     const { normalized, skipped } = normalize_rss_cookies(cookies);
-    this.repo.rss_cookies.put(normalized, Date.now());
-    this.invalidate_routes();
+    if (JSON.stringify(normalized) !== JSON.stringify(this.rss_cookies())) {
+      this.repo.rss_cookies.put(normalized, Date.now());
+      this.invalidate_routes();
+    }
     return { updated: true, count: normalized.length, skipped, action: "done", code: 0, msg: "成功", data: { count: normalized.length, skipped } }
   }
 
@@ -1233,10 +1235,10 @@ export class ServiceScript {
    * @param {string} format
    * @param {string} route_pathname
    * @param {Request} request
-   * @param {{ refresh?: boolean }} [options]
+   * @param {{ refresh?: boolean, signal?: AbortSignal, attempt_recorded?: boolean }} [options]
    * @returns {Promise<{ body: string, headers: Record<string, string> }>}
    */
-  async serve_rss_route(format, route_pathname, request, { refresh = false, signal } = {}) {
+  async serve_rss_route(format, route_pathname, request, { refresh = false, signal, attempt_recorded = false } = {}) {
     signal?.throwIfAborted();
     const debug_request = format === "debug";
     if (
@@ -1341,7 +1343,7 @@ export class ServiceScript {
       return this.app.background_tasks.start(cache_key, {
         kind: "snapshot", title: "刷新 XML 快照：" + (metadata.name || route_pathname), target: route_pathname + request_url.search,
         source_id: source?.id || "",
-      }, signal => this.serve_rss_route(format, route_pathname, request, { refresh, signal })).promise;
+      }, signal => this.serve_rss_route(format, route_pathname, request, { refresh, signal, attempt_recorded })).promise;
     }
     const self_url = (request.headers.get("X-Feed-Public-URL") ?? "").trim();
     if (snapshot && feed_public && !this.public_registered.has(cache_key)) {
@@ -1351,7 +1353,7 @@ export class ServiceScript {
       this.public_registered.add(cache_key);
       await this.ports.schedule_alarm?.();
     }
-    if (snapshot && feed_public && refresh) this.repo.rss_route_cache.public_attempt(cache_key, Date.now());
+    if (snapshot && feed_public && refresh && !attempt_recorded) this.repo.rss_route_cache.public_attempt(cache_key, Date.now());
     if (snapshot && !refresh && request_url.pathname.startsWith("/_public/feed/")) {
       const stored = await this.ports.route_cache.resolve(cache_key, Date.now());
       const body = stored?.rendered?.get(format + "\n");

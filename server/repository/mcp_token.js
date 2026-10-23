@@ -14,7 +14,7 @@ export class RepositoryMcpToken {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, row.id, row.name, row.token_hash, row.token_hint, row.scopes_json, row.resource, row.created_at, row.expires_at);
   }
   revoke(id, now) { this.sql.exec("UPDATE mcp_tokens SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?", now, id); }
-  set_last_used(id, now) { this.sql.exec("UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?", now, id); }
+  set_last_used(id, now) { this.sql.exec("UPDATE mcp_tokens SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)", now, id, now - 300000); }
   record_call(id, tool_name, status, now) {
     this.sql.exec("INSERT INTO mcp_calls (token_id, tool_name, status, created_at) VALUES (?, ?, ?, ?)", id, tool_name, status, now);
     this.sql.exec("DELETE FROM mcp_calls WHERE id < (SELECT id FROM mcp_calls ORDER BY id DESC LIMIT 1 OFFSET 999)");

@@ -13,7 +13,7 @@ export class RepositoryDeviceToken {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, row.id, row.name, row.note, row.token_hash,
     row.token_hint, row.encrypted_token, row.created_at, row.expires_at);
   }
-  set_last_used(id, now) { this.sql.exec("UPDATE device_tokens SET last_used_at = ? WHERE id = ?", now, id); }
+  set_last_used(id, now) { this.sql.exec("UPDATE device_tokens SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)", now, id, now - 300000); }
   revoke(id, now) { this.sql.exec("UPDATE device_tokens SET revoked_at = ?, encrypted_token = '' WHERE id = ?", now, id); }
   update_note(id, note) { this.sql.exec("UPDATE device_tokens SET note = ? WHERE id = ?", note, id); }
 }

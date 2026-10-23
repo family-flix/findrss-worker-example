@@ -23,7 +23,7 @@ export function migrate_script_tables(sql) {
 }
 
 // 修改 schema 或启动迁移时递增；已完成的迁移不在每次 DO 唤醒时重跑。
-export const API_SCHEMA_VERSION = 3;
+export const API_SCHEMA_VERSION = 4;
 
 /** 本模块 DDL 里恰好这些表。 @type {readonly string[]} */
 export const API_TABLE_NAMES = Object.freeze([
@@ -501,8 +501,6 @@ export const API_SCHEMA_SQL = `
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL
   );
-  CREATE INDEX IF NOT EXISTS rss_route_cache_expiry
-    ON rss_route_cache(expires_at);
   CREATE INDEX IF NOT EXISTS rss_route_cache_temporary_expiry
     ON rss_route_cache(expires_at, key)
     WHERE key NOT LIKE 'public-snapshot:%' AND key NOT LIKE 'private-snapshot:%';

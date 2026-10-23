@@ -288,7 +288,8 @@ export class RepositoryAccessToken {
 
   /** @param {string} id @param {number} now @returns {void} */
   set_last_used(id, now) {
-    this.sql.exec("UPDATE access_tokens SET last_used_at = ? WHERE id = ?", now, id);
+    // 使用时间只做展示；限流写入不缓存鉴权结果，重建实例后也沿用数据库检查点。
+    this.sql.exec("UPDATE access_tokens SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)", now, id, now - 300000);
   }
 
   /** @param {string} id @param {number} expires_at @returns {void} */

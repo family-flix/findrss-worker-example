@@ -71,7 +71,7 @@ export class ServiceDiscovery {
   async remember_public_origin(public_url) {
     const origin = http_origin(public_url);
     if (this.public_origin || !origin || origin === this.last_public_origin) return;
-    await this.storage?.put("discovery_public_origin", origin);
+    if (origin !== await this.storage?.get("discovery_public_origin")) await this.storage?.put("discovery_public_origin", origin);
     this.last_public_origin = origin;
   }
 
@@ -220,11 +220,11 @@ export class ServiceDiscovery {
           if (revision !== this.catalog_revision) continue;
           await this.storage.delete("discovery_catalog_dirty");
           await this.storage.delete("discovery_catalog_due_at");
-          await this.storage.put("discovery_catalog_lazy_avatars_v1", true);
-          await this.storage.put("discovery_catalog_platforms_v1", true);
-          await this.storage.put("discovery_catalog_script_tags_v1", true);
-          await this.storage.put("discovery_catalog_public_sources_v1", true);
-          await this.storage.put("discovery_catalog_public_avatars_v1", true);
+          if (!this.catalog_checked) {
+            for (const key of ["discovery_catalog_lazy_avatars_v1", "discovery_catalog_platforms_v1", "discovery_catalog_script_tags_v1", "discovery_catalog_public_sources_v1", "discovery_catalog_public_avatars_v1"]) {
+              if (!await this.storage.get(key)) await this.storage.put(key, true);
+            }
+          }
         } while (revision !== this.catalog_revision);
         this.catalog_checked = true;
         this.catalog_retry_at = null;

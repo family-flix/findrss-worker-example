@@ -2,10 +2,68 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { RepositoryDevice } from "../server/repository/device.js";
 import { RepositoryCall } from "../server/repository/call.js";
+import { RepositoryAccessToken } from "../server/repository/access_token.js";
+import { RepositoryDeviceToken } from "../server/repository/device_token.js";
+import { RepositoryMcpToken } from "../server/repository/mcp_token.js";
+import { RepositoryDiscoverySource } from "../server/repository/discovery_source.js";
+import { RepositoryClip } from "../server/repository/clip.js";
 import { ServiceDevice } from "../server/service/durable_object/devices.js";
 import { ServiceTask } from "../server/service/durable_object/tasks.js";
 import { CallModel } from "../server/domain/call.js";
 import { snapshot_store } from "./support/snapshot_store.js";
+
+for (const [table, Repository, seed] of [
+  ["access_tokens", RepositoryAccessToken, "INSERT INTO access_tokens(id,user_id,name,token_hash,token_hint,created_at) VALUES ('token','user','Token','hash','hint',1)"],
+  ["device_tokens", RepositoryDeviceToken, "INSERT INTO device_tokens(id,name,token_hash,token_hint,encrypted_token,created_at) VALUES ('token','Token','hash','hint','encrypted',1)"],
+  ["mcp_tokens", RepositoryMcpToken, "INSERT INTO mcp_tokens(id,name,token_hash,token_hint,scopes_json,resource,created_at,expires_at) VALUES ('token','Token','hash','hint','[]','https://example.com/mcp',1,9999999999999)"],
+]) test(table + " 使用时间五分钟最多写一次，重建不重置限流，写入失败可重试", t => {
+  const store = snapshot_store();
+  t.after(() => store.db.close());
+  store.db.exec(seed);
+  let writes = 0, fail = false;
+  const sql = { exec(query, ...args) {
+    if (fail) throw new Error("storage unavailable");
+    writes += Number(store.db.prepare(query).run(...args).changes);
+  } };
+  for (let index = 0; index < 1000; index++) new Repository({ sql }).set_last_used("token", 1000000);
+  assert.equal(writes, 1);
+  new Repository({ sql }).set_last_used("token", 1299999);
+  assert.equal(writes, 1);
+  new Repository({ sql }).set_last_used("token", 1300000);
+  assert.equal(writes, 2);
+  fail = true;
+  assert.throws(() => new Repository({ sql }).set_last_used("token", 1600000), /storage unavailable/);
+  fail = false;
+  new Repository({ sql }).set_last_used("token", 1600000);
+  assert.equal(writes, 3);
+  assert.equal(store.db.prepare("SELECT last_used_at FROM " + table + " WHERE id = 'token'").get().last_used_at, 1600000);
+});
+
+test("重复抓取错误与未变化的学习间隔不写库，保留成功快照并拒绝旧地址及旧配置", t => {
+  const store = snapshot_store();
+  t.after(() => store.db.close());
+  store.db.exec("INSERT INTO discovery_source_snapshots(source_id,feed_url,articles_json,saved_at) VALUES ('source','https://example.com/feed','[{\"title\":\"previous\"}]',123)");
+  store.db.exec("INSERT INTO clips(id,title,url,selector,config_version,created_at) VALUES ('clip','Clip','https://example.com','main','current',1)");
+  let writes = 0;
+  const sql = { exec(query, ...args) { writes += Number(store.db.prepare(query).run(...args).changes); } };
+  const sources = new RepositoryDiscoverySource({ sql }), clips = new RepositoryClip({ sql });
+  for (let index = 0; index < 1000; index++) {
+    sources.snapshot_save('source','https://example.com/feed',[],0,'offline');
+    sources.snapshot_adaptive('source',600);
+    clips.failure('clip','offline','current');
+  }
+  assert.equal(writes, 3);
+  sources.snapshot_save('source','https://example.com/old',[],0,'old feed');
+  clips.failure('clip','old config','previous');
+  assert.equal(writes, 3);
+  const snapshot = new RepositoryDiscoverySource(store).snapshot_get('source');
+  assert.equal(snapshot.articles_json, '[{"title":"previous"}]');
+  assert.equal(snapshot.saved_at, 123);
+  assert.equal(snapshot.adaptive_interval, 600);
+  sources.snapshot_save('source','https://example.com/feed',[],0,'new failure');
+  clips.failure('clip','new failure','current');
+  assert.equal(writes, 5);
+});
 
 function fixture(t) {
   const store = snapshot_store();

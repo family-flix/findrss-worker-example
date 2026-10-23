@@ -20,7 +20,7 @@ export class RepositoryClip {
       row.enabled, row.poll_policy_json, row.poll_updated_at, row.config_version, row.id);
   }
   attempt(id, now) { this.sql.exec("UPDATE clips SET attempted_at = ? WHERE id = ?", now, id); }
-  failure(id, error, version) { this.sql.exec("UPDATE clips SET error = ? WHERE id = ? AND config_version = ?", error, id, version); }
+  failure(id, error, version) { this.sql.exec("UPDATE clips SET error = ? WHERE id = ? AND config_version = ? AND error != ?", error, id, version, error); }
   save(row) {
     this.sql.exec(`UPDATE clips SET html = ?, object_key = ?, node = ?, width = ?, height = ?,
       byte_size = ?, image_missing = ?, saved_at = ?, fingerprint = ?, adaptive_interval = ?, error = '' WHERE id = ?`,
