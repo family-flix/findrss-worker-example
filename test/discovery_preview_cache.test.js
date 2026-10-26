@@ -126,6 +126,105 @@ test("预览保存为私密源只复用私密 XML，不进入公开目录，清�
   assert.equal(f.executions, 1);
 });
 
+for (const initially_public of [false, true]) test(`切换${initially_public ? "公开" : "私密"}源复用持久 XML 和抓取计划，仅更新广场预览`, async t => {
+  const f = fixture(t);
+  const feed_url = "{{hostname}}/atom/preview/1?a=1&b=2";
+  const data = await (await f.preview(feed_url)).json();
+  const source = await f.save(feed_url, data.preview_id, { require_token: !initially_public });
+  f.repo.discovery.snapshot_save(source.id, feed_url, [], 0, "上次抓取失败");
+  f.repo.discovery.snapshot_adaptive(source.id, 420);
+  const snapshot = f.repo.discovery.snapshot_get(source.id);
+  const next_at = f.app.discovery.scheduled_sources().find(row => row.id === source.id).next_at;
+  const original_rss = (await f.serve("rss", "valid-token-id")).body;
+  const original_atom = (await f.serve("atom", "valid-token-id")).body;
+  const route_key = rss_route_cache_key("/preview/1", new URLSearchParams("b=2&a=1"));
+  const saved_at = f.ports.route_cache.inspect((initially_public ? "public-snapshot:" : "private-snapshot:") + route_key).saved_at;
+  t.mock.method(globalThis, "fetch", async () => { assert.fail("切换公开性不得请求上游或封面"); });
+  f.app.discovery.load_snapshot = async () => { assert.fail("切换公开性不得重新抓取 XML"); };
+  for (const is_public of [!initially_public, initially_public]) {
+    const result = await f.app.discovery.update_discovery_source(new Request("https://internal/source", {
+      method: "PATCH", body: JSON.stringify({ require_token: !is_public }),
+    }), source.id);
+    assert.equal(result.source.require_token, !is_public);
+    const { articles_json, ...status } = f.repo.discovery.snapshot_get(source.id);
+    const { articles_json: previous_articles, ...previous_status } = snapshot;
+    assert.deepEqual(status, previous_status);
+    assert.equal(f.app.discovery.scheduled_sources().find(row => row.id === source.id).next_at, next_at);
+    if (is_public) assert.equal(f.published.sources[0].snapshot.articles[0].title, "预览文章");
+    else {
+      assert.deepEqual(f.published.sources, []);
+      assert.deepEqual(result.source.snapshot.articles, []);
+      await assert.rejects(f.serve(), { status: 401 });
+    }
+    const key = (is_public ? "public-snapshot:" : "private-snapshot:") + route_key;
+    assert.equal(f.ports.route_cache.inspect(key).saved_at, saved_at);
+    f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo.rss_route_cache, object_store: f.object_store });
+    f.app.discovery.route_cache = f.ports.route_cache;
+    assert.equal((await f.serve("rss", is_public ? "" : "valid-token-id")).body, original_rss);
+    assert.equal((await f.serve("atom", is_public ? "" : "valid-token-id")).body, original_atom);
+    await f.app.discovery.refresh_due_snapshots();
+    assert.equal(f.executions, 1);
+  }
+});
+
+test("切换公开性时没有已有 XML 也不主动抓取，改变地址仍清除旧广场快照", async t => {
+  const f = fixture(t);
+  const feed_url = "{{hostname}}/rss/preview/1?a=1&b=2";
+  const source = await f.save(feed_url, "", { poll_policy: { mode: "manual" } });
+  for (const require_token of [false, true]) {
+    await f.app.discovery.update_discovery_source(new Request("https://internal/source", {
+      method: "PATCH", body: JSON.stringify({ require_token }),
+    }), source.id);
+    assert.equal(f.executions, 0);
+    assert.equal(f.repo.discovery.snapshot_get(source.id), undefined);
+  }
+  f.repo.discovery.snapshot_attempt(source.id, feed_url, 123);
+  f.repo.discovery.snapshot_save(source.id, feed_url, [{ title: "旧文章" }], 123);
+  await f.app.discovery.update_discovery_source(new Request("https://internal/source", {
+    method: "PATCH", body: JSON.stringify({ feed_url: "{{hostname}}/rss/preview/2" }),
+  }), source.id);
+  assert.equal(f.repo.discovery.snapshot_get(source.id), undefined);
+});
+
+test("再次公开复用私密期间更新的 XML，覆盖旧公开缓存且不重新采集", async t => {
+  const f = fixture(t);
+  const feed_url = "{{hostname}}/rss/preview/1?a=1&b=2";
+  const data = await (await f.preview(feed_url)).json();
+  const source = await f.save(feed_url, data.preview_id, { require_token: false });
+  const patch = require_token => f.app.discovery.update_discovery_source(new Request("https://internal/source", {
+    method: "PATCH", body: JSON.stringify({ require_token }),
+  }), source.id);
+  await patch(true);
+  f.row.script = f.row.script.replace("预览文章", "新版文章");
+  await f.app.scripts.serve_rss_route("rss", "/preview/1", new Request(
+    "https://internal/_admin/feed/rss/preview/1?b=2&a=1"), { refresh: true });
+  assert.equal(f.executions, 2);
+  await patch(false);
+  assert.equal(f.published.sources[0].snapshot.articles[0].title, "新版文章");
+  assert.match((await f.serve()).body, /新版文章/);
+  assert.equal(f.executions, 2);
+});
+
+test("复用 XML 写入失败或脚本权限失效时，保留私密状态与原快照，不发布文章", async t => {
+  const f = fixture(t);
+  const feed_url = "{{hostname}}/rss/preview/1?a=1&b=2";
+  const data = await (await f.preview(feed_url)).json();
+  const source = await f.save(feed_url, data.preview_id);
+  const snapshot = f.repo.discovery.snapshot_get(source.id);
+  const publish = () => f.app.discovery.update_discovery_source(new Request("https://internal/source", {
+    method: "PATCH", body: '{"require_token":false}',
+  }), source.id);
+  f.bucket.fail_next({ op: "put" });
+  await assert.rejects(publish(), /put failed/);
+  f.app.discovery.check_cookie_permissions = async () => { throw Object.assign(new Error("Cookie 权限已撤销"), { status: 409 }); };
+  await assert.rejects(publish(), { status: 409 });
+  assert.equal(f.repo.discovery.find(source.id).require_token, 1);
+  assert.deepEqual(f.repo.discovery.snapshot_get(source.id), snapshot);
+  assert.deepEqual(f.published.sources, []);
+  await assert.rejects(f.serve(), { status: 401 });
+  assert.equal(f.executions, 1);
+});
+
 test("外部源读取一次即可保存广场快照，地址改变或临时缓存过期时不复用", async t => {
   const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });

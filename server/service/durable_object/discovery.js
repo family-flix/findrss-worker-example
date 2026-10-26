@@ -586,6 +586,35 @@ export class ServiceDiscovery {
       const conflict = DiscoverySourceModel.duplicate_reason();
       throw do_error(conflict.message, conflict.status);
     }
+    let preview_articles = null;
+    if (existing.feed_url === source.feed_url && Boolean(existing.require_token) !== source.require_token && this.route_cache) {
+      const address = SourceAddressModel(source.feed_url);
+      if (address.is_route()) {
+        const feed_url = address.resolve(await this.snapshot_origin("") || "https://template.invalid");
+        const url = new URL(feed_url);
+        url.searchParams.delete("token");
+        const route_key = rss_route_cache_key(address.route_pathname, url.searchParams);
+        const previous_key = (existing.require_token ? "private-snapshot:" : "public-snapshot:") + route_key;
+        const key = (source.require_token ? "private-snapshot:" : "public-snapshot:") + route_key;
+        const cached = await this.route_cache.resolve(previous_key, Date.now());
+        if (cached) {
+          const value = { ...cached, expires_at: 0, saved_at: this.route_cache.inspect(previous_key).saved_at };
+          // 公开性只改变访问权限，复用 XML 和原抓取时间，不执行脚本或抓取封面。
+          const xml = cached.rendered?.get(address.format + "\n");
+          if (!source.require_token && xml !== undefined) {
+            const selected = RssRouteSelectionModel(this.repo.scripts.list().filter(row => ScriptModel.fromRow(row).is_servable()), address.route_pathname).best();
+            if (!selected) throw do_error("订阅源路由已失效", 404);
+            await this.check_cookie_permissions?.(selected.row.route);
+            preview_articles = await discovery_snapshot_articles(xml, feed_url, async () => null);
+          }
+          await this.route_cache.persist(key, value);
+          this.route_cache.put(key, value, Date.now());
+        }
+      }
+      const latest = this.repo.discovery.find(source_id);
+      if (!latest || JSON.stringify(DiscoverySourceModel.fromRow(latest).toValue()) !== JSON.stringify(current.toValue()))
+        throw do_error("订阅源已变更，请重新读取后再编辑", 409);
+    }
     this.repo.discovery.update({
       id: source_id,
       title: source.title,
@@ -605,7 +634,8 @@ export class ServiceDiscovery {
       poll_updated_at: JSON.stringify(current.poll_policy) === JSON.stringify(source.poll_policy) ? Number(existing.poll_updated_at || 0) : Date.now(),
       updated_at: Date.now(),
     });
-    if (existing.feed_url !== source.feed_url || Boolean(existing.require_token) !== source.require_token) this.repo.discovery.snapshot_delete(source_id);
+    if (existing.feed_url !== source.feed_url) this.repo.discovery.snapshot_delete(source_id);
+    else if (preview_articles) this.repo.discovery.snapshot_save_articles(source_id, preview_articles);
     this.statistics?.invalidate_sources();
     if (existing.feed_url !== source.feed_url || (existing.social_url || "") !== source.social_url || Boolean(existing.require_token) !== source.require_token || Boolean(existing.enabled) !== source.enabled) this.route_cache?.invalidate_all?.();
     await this.publish_catalog();

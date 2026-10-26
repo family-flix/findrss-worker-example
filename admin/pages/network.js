@@ -8,7 +8,7 @@ const { View, Badge, Button, Input, Select, For, Show, CodeEditor, computed, com
 
 function NetworkTestPage({ view } = {}) {
   const model = NetworkTestModel();
-  const { state, methods } = model;
+  const { state, methods, user_agent_options } = model;
   let stop_show, stop_hide;
   const cookie_disabled = combine({ busy: state.busy, loading: state.cookies_loading }, state => state.busy || state.loading);
   const copy_label = combine({ copying: state.copying, copied: state.copied }, state => state.copying ? "正在复制…" : state.copied ? "已复制 curl 命令" : "复制 curl 命令");
@@ -31,7 +31,7 @@ function NetworkTestPage({ view } = {}) {
       },
       onUnmounted() { stop_show?.(); stop_hide?.(); methods.leave(); } }, [
       View({ class: "text-muted text-sm", attributes: { n: "network-description" } }, [
-        "可选择入口 Worker 或脚本宿主发起 GET 请求，默认使用起点示例的请求头。可修改网址和请求头，比较访问结果。",
+        "可选择入口 Worker 或脚本宿主发起 GET 请求，默认使用桌面浏览器 User-Agent。复现脚本请求时，请填写相同网址和请求头。",
       ]),
       Input({ label: "目标网址", value: state.url, disabled: state.busy, placeholder: "https://example.com/",
         help: "修改网址后会自动填入 Referer，仍可在下方手动编辑。",
@@ -98,9 +98,15 @@ function NetworkTestPage({ view } = {}) {
             Input({ value: row.key, disabled: state.busy, placeholder: "请求头名称，如 User-Agent",
               attributes: { n: "network-header-key-" + row.id, "aria-label": "请求头名称", spellcheck: "false" },
               onInput: event => methods.update_header(row.id, "key", event.target.value) }),
-            Input({ value: row.value, disabled: state.busy, placeholder: "请求头值",
-              attributes: { n: "network-header-value-" + row.id, "aria-label": "请求头值", spellcheck: "false" },
-              onInput: event => methods.update_header(row.id, "value", event.target.value) }),
+            View({ class: "grid min-w-0 gap-space-2", attributes: { n: "network-header-value-field-" + row.id } }, [
+              Input({ value: row.value, disabled: state.busy, placeholder: "请求头值",
+                attributes: { n: "network-header-value-" + row.id, "aria-label": "请求头值", spellcheck: "false" },
+                onInput: event => methods.update_header(row.id, "value", event.target.value) }),
+              Show({ when: computed(row.key, key => key.trim().toLowerCase() === "user-agent"), ok: () =>
+                Select({ value: "", disabled: state.busy, options: user_agent_options, placeholder: "选择内置 User-Agent",
+                  attributes: { n: "network-user-agent-preset-" + row.id, "aria-label": "选择内置 User-Agent" },
+                  onChange: event => methods.update_header(row.id, "value", event.target.value) }) }),
+            ]),
             Popconfirm({ title: "确认删除此请求头？", disabled: state.busy,
               attributes: { n: "network-header-remove-confirm-" + row.id },
               onConfirm: () => methods.remove_header(row.id),

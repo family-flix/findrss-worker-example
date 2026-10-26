@@ -165,13 +165,16 @@ export function fetch_cover_metadata(url, decode = decode_cover, signal) { retur
 
 export async function discovery_snapshot_articles(xml, feed_url, dimensions_for = fetch_cover_metadata) {
   const feed = discovery_feed_preview(xml, feed_url);
+  const origin = new URL(feed_url).origin;
   const covers = new Map();
   return Promise.all(feed.articles.slice(0, 3).map(async (article, index) => {
-    const cover_url = public_http_url(article.thumbnail) || "";
+    const public_cover = public_http_url(article.thumbnail);
+    // 同源图片代理可在本地展示，出站读取仍只接受公网地址。
+    const cover_url = public_cover || (article.thumbnail.length <= 2048 && article.thumbnail.startsWith(origin + "/") ? article.thumbnail : "");
     if (cover_url && !covers.has(cover_url)) covers.set(cover_url,
       article.thumbnail_width && article.thumbnail_height
         ? Promise.resolve({ width: article.thumbnail_width, height: article.thumbnail_height, blurhash: article.thumbnail_blurhash || "" })
-        : Promise.resolve().then(() => dimensions_for(cover_url)).catch(() => null));
+        : public_cover ? Promise.resolve().then(() => dimensions_for(cover_url)).catch(() => null) : null);
     const dimensions = cover_url ? await covers.get(cover_url) : null;
     return { id: String(index), title: String(article.title || "无标题").slice(0, 180),
       link: public_http_url(article.link) || "", published_at: Number(article.published_at) || 0,

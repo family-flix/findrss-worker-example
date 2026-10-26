@@ -8,6 +8,22 @@ const set_headers = (model, headers) => {
   for (const [key, value] of Object.entries(headers)) model.methods.add_header(key, value);
 };
 
+test("更换目标网址后测试与 curl 默认使用桌面 UA，避免微博跳转移动站", async () => {
+  const calls = [];
+  const model = NetworkTestModel({ ui, clipboard: { writeText: async () => {} }, fetch_impl: async (url, options) => {
+    calls.push(JSON.parse(options.body));
+    return Response.json(url.endsWith("/curl") ? { command: "curl" } : { status: 200 });
+  } });
+  model.methods.set("url", "https://weibo.com/u/3957220798");
+  await model.methods.run();
+  await model.methods.copy_curl();
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    assert.match(call.headers["User-Agent"], /Macintosh.*Chrome\//);
+    assert.doesNotMatch(call.headers["User-Agent"], /iPhone|Mobile|Android/);
+  }
+});
+
 test("执行位置默认 Worker，可切换脚本宿主，测试和 curl 均发送到对应位置", async () => {
   const calls = [];
   const model = NetworkTestModel({ ui, clipboard: { writeText: async () => {} }, fetch_impl: async (url, options) => {

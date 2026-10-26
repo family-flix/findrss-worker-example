@@ -1,6 +1,12 @@
 import { ScriptDebugOutputModel } from "../components/script_output.js";
 
 const empty_preview = Object.freeze({ kind: "text", mode: "text/plain", formatted: "", src: "", file: null, message: "" });
+const user_agent_options = [
+  { label: "Chrome（macOS）", value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36" },
+  { label: "Chrome（Windows）", value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36" },
+  { label: "Safari（iPhone）", value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1" },
+  { label: "Chrome（Android）", value: "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36" },
+];
 
 function NetworkTestModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) => window.FindRSSAdminAuth.fetch(...args), object_urls = URL, clipboard = globalThis.navigator?.clipboard } = {}) {
   let next_header_id = 0;
@@ -15,7 +21,7 @@ function NetworkTestModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) =
       Referer: "https://m.qidian.com/book/1036526469/",
       Accept: "text/html,application/xhtml+xml",
       "Accept-Language": "zh-CN,zh;q=0.9",
-      "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+      "User-Agent": user_agent_options[0].value,
     }).map(([key, value]) => header_row(key, value))),
     busy: ui.ref(false), copying: ui.ref(false), copied: ui.ref(false), error: ui.ref(""), result: ui.ref(null), preview: ui.ref(empty_preview),
   };
@@ -176,7 +182,7 @@ function NetworkTestModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) =
       if (controller === active) { controller = null; state.busy.as(false); state.copying.as(false); }
     }
   }
-  return { state, methods };
+  return { state, methods, user_agent_options };
 }
 
 export { NetworkTestModel };

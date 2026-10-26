@@ -241,6 +241,17 @@ test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使�
   vm.runInContext(network_bundle.outputFiles[0].text, context);
   const root = context.NetworkTestModule.NetworkTestPage();
   try {
+    assert.equal(find(root, "network-user-agent-preset-0"), null);
+    const user_agent_preset = find(root, "network-user-agent-preset-3");
+    assert.ok(user_agent_preset);
+    const user_agent_input = find(root, "network-header-value-3");
+    user_agent_input.onMounted({ target: { get$elm: () => ({ setAttribute() {}, removeAttribute() {} }) } });
+    const windows_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
+    user_agent_preset.events.onClick();
+    find(root, "network-user-agent-preset-3-option-" + windows_user_agent).events.onClick();
+    await new Promise(setImmediate);
+    const selected_user_agent = user_agent_input.state.value;
+    assert.equal(selected_user_agent, windows_user_agent);
     assert.equal(find(root, "network-transport").state.attributes["aria-labelledby"], "network-transport-label");
     const transport = find(root, "network-transport");
     for (const key of ["ArrowDown", "ArrowDown", "Enter"]) transport.events.onKeyDown({ key, preventDefault() {}, stopPropagation() {} });
@@ -263,6 +274,7 @@ test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使�
     assert.deepEqual(submitted[0].cookie_domains, [".example.com"]);
     assert.equal(submitted[0].transport, "tcp");
     assert.equal(submitted[0].headers.Referer, "https://www.example.com/");
+    assert.equal(submitted[0].headers["User-Agent"], selected_user_agent);
     const actions = find(root, "network-actions");
     assert.ok(find(actions, "network-test-start"));
     const copy_button = find(actions, "network-copy-curl");
@@ -271,7 +283,17 @@ test("网络测试实际视图筛选并勾选 Cookie，最终及逐跳状态使�
     await new Promise(setImmediate);
     assert.deepEqual(copied, ["curl 'https://www.example.com/'"]);
     assert.equal(submitted.at(-1).transport, "tcp");
+    assert.equal(submitted.at(-1).headers["User-Agent"], selected_user_agent);
     assert.equal(copy_button.state.attributes["aria-label"], "已复制 curl 命令");
+    user_agent_input.events.onInput({ target: { value: "custom-user-agent" } });
+    await copy_button.events.onClick();
+    await new Promise(setImmediate);
+    assert.equal(submitted.at(-1).headers["User-Agent"], "custom-user-agent");
+    const user_agent_key = find(root, "network-header-key-3");
+    user_agent_key.events.onInput({ target: { value: "Accept-Encoding" } });
+    assert.equal(find(root, "network-user-agent-preset-3"), null);
+    user_agent_key.events.onInput({ target: { value: " user-AGENT " } });
+    assert.ok(find(root, "network-user-agent-preset-3"));
     assert.ok(find(root, "network-curl-help"));
     await find(root, "network-header-add").events.onClick();
     const header_row = find(root, "network-header-row-4");

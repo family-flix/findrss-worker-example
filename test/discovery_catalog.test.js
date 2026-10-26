@@ -78,7 +78,7 @@ test("首次发布读取完整 1000 条目录，排除下架源和非公开源�
   await f.service.ensure_catalog(); assert.equal(f.bucket.calls.put, writes);
 });
 
-test("增删改、快照和头像变化均发布，收紧权限清掉旧文章", async () => {
+test("增删改、快照和头像变化均发布，切换公开性只改变目录展示并保留快照", async () => {
   const f = fixture();
   const created = await f.service.create_discovery_source(request({ title: "源", feed_url: "https://example.com/feed", tags: ["文章"], require_token: false }));
   const id = created.data.source.id;
@@ -94,7 +94,7 @@ test("增删改、快照和头像变化均发布，收紧权限清掉旧文章",
   assert.equal((await f.published()).sources.length, 0);
   await f.service.update_discovery_source(request({ require_token: false }), id);
   const republished = (await f.published()).sources[0];
-  assert.equal(republished.title, "改名"); assert.deepEqual(republished.snapshot.articles, []);
+  assert.equal(republished.title, "改名"); assert.deepEqual(republished.snapshot.articles, [{ title: "新文章" }]);
   await f.service.update_discovery_source(request({ enabled: false }), id);
   assert.equal((await f.published()).sources.length, 0);
   await f.service.delete_discovery_source(id);

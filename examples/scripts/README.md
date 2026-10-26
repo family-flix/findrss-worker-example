@@ -45,6 +45,7 @@
 | [69 书吧](rss/69shuba.js) | `/69shuba/book/:book_id` | 完整章节目录，不抓取正文；ID 来自 `/book/<ID>.htm` |
 | [天天看书](rss/ttk.js) | `/ttk/book/:book_id` | 完整章节目录，不抓取正文；标识来自 `/novel/` 后的路径，不含 `.html` |
 | [Apple App Store](rss/apple.js) | `/apple/apps/update/:country/:id/:platform?` | 应用版本更新；使用 App Store 链接中的地区与应用 ID |
+| [GitHub](rss/github.js) | `/github/:org/:pro/release` | 公开仓库最近的发布列表、版本标题与更新说明；无需 Cookie 或 API Token |
 
 抖音支持 `?count=18&max_cursor=0`（每页最多 30 条），Telegram 支持 `?before=<消息 ID>`，微信公众号和视频号支持 `?offset=<游标>`。微信公众号也可使用 `/rss/wxmp?username=wow36kr`，与 `/rss/wxmp/wow36kr` 等价；图片代理需配置 `FINDRSS_HOSTNAME`。
 
@@ -53,6 +54,8 @@ YouTube 普通视频根据页面中英文相对时间估算发布时间，月、
 番茄小说正文路径为 `/fanqienovel/chapter/:chapter_id`，起点正文路径为 `/qidian/chapter/:book_id/:chapter_id`，直接返回 HTML，无需加 `/rss` 或 `/atom` 前缀。
 
 ## 路由与参数说明
+
+`rss/github.js` 读取 GitHub 的 Releases Atom 订阅。例如 `/rss/github/ltaoo/wx_channels_download/release`，Atom 地址为 `/atom/github/ltaoo/wx_channels_download/release`；`org` 为用户或组织名，`pro` 为仓库名。返回上游订阅包含的最近发布，保留预发布条目、更新说明 HTML、代码缩进及原文链接；上游仅提供更新时间时保留 `updated`，不补造发布时间。只读取公开仓库，不需要导入 GitHub Cookie。
 
 `rss/apple.js` 参考 RSSHub 的 Apple Apps 路由，订阅 App Store 应用的版本更新。例如 `/rss/apple/apps/update/us/id408709785`；末尾可添加 `/ios`、`/macos`、`/tvos` 筛选平台，缺省或 `all` 合并全部平台，不支持的平台也按上游逻辑回退为全部平台。`?limit=100` 控制返回数量（1–1000，默认 100）。应用 ID 支持带 `id` 前缀或纯数字；地区和 ID 从 App Store 应用链接中获取。更新说明保留换行，条目按真实发布时间排序，平台和版本共同组成稳定 ID。
 

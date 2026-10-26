@@ -155,7 +155,7 @@ test("示例脚本省略默认地球图标，品牌 SVG 保留自绘或仓库图
         assert.doesNotMatch(svg, /<image\b/);
         continue;
       }
-      const key = ["bilibili", "douyin", "wxchannels", "wxmp", "zhihu", "x", "xiaohongshu", "weibo", "kuaishou", "youtube", "telegram", "qidian", "fanqienovel"]
+      const key = stem === "github" ? stem : ["bilibili", "douyin", "wxchannels", "wxmp", "zhihu", "x", "xiaohongshu", "weibo", "kuaishou", "youtube", "telegram", "qidian", "fanqienovel"]
         .find(key => stem === key || stem.startsWith(key + "_")) || "website";
       const expected_icon = key === "website" ? "" : (await readFile(new URL(`../public/platform-icons/${key}.svg`, import.meta.url), "utf8")).trim();
       assert.equal(compiled.metadata.platform.icon, expected_icon, kind + "/" + name);

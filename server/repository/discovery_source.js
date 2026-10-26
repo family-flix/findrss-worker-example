@@ -172,6 +172,10 @@ export class RepositoryDiscoverySource {
     this.sql.exec("DELETE FROM discovery_source_snapshots WHERE source_id = ?", id);
   }
 
+  snapshot_save_articles(id, articles) {
+    this.sql.exec("UPDATE discovery_source_snapshots SET articles_json = ? WHERE source_id = ?", JSON.stringify(articles), id);
+  }
+
   /** @param {string} id @returns {Record<string, unknown> | undefined} */
   find(id) {
     return this.sql

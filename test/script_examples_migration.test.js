@@ -44,6 +44,8 @@ test('所有脚本按用户的 RSS 标记分类，保持路由并采用全局基
     ] : name === "youtube.js" ? ["/youtube/:handle", "/youtube/:handle/shorts"] : old.metadata.routes.map(route => route.path);
     assert.deepEqual(compiled.metadata.routes.map(route => route.path), paths, name);
   }
+  expected.rss.push('github.js');
+  expected.rss.sort();
   for (const kind of ['hot', 'rss']) assert.deepEqual((await readdir(new URL(kind + '/', base))).filter(name => name.endsWith('.js')).sort(), expected[kind]);
 });
 

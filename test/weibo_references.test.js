@@ -21,6 +21,26 @@ const status = (id, text, extra = {}) => ({ idstr: id, mblogid: 'B' + id, text_r
 const html = statuses => '<script type="application/json">' + JSON.stringify(statuses) + '</script>';
 const proxy = url => 'https://feeds.example/img/weibo?url=' + encodeURIComponent(url.replace('/large/', '/orj360/'));
 
+test('微博列表接口登录失效和拒绝访问保留明确错误，不误报 HTML 缺少列表', async t => {
+  const saved = globalThis.fetch;
+  t.after(() => { globalThis.fetch = saved; });
+  for (const [ok, code, message] of [
+    [-100, 'UPSTREAM_AUTH_REQUIRED', /重新登录.*-100/],
+    [0, 'UPSTREAM_ACCESS_DENIED', /拒绝访问/],
+    [false, 'UPSTREAM_ACCESS_DENIED', /拒绝访问/],
+  ]) {
+    globalThis.fetch = async url => url.includes('/ajax/statuses/mymblog?')
+      ? Response.json({ ok, url: 'https://passport.weibo.com/' }) : new Response('<html>请登录</html>');
+    await assert.rejects(run(), error => {
+      assert.equal(error.problem.code, code);
+      assert.match(error.problem.error, message);
+      assert.match(error.problem.error, /Cookie/);
+      assert.doesNotMatch(error.message, /HTML 不含列表/);
+      return true;
+    });
+  }
+});
+
 test('微博真实“哇哦”样本补取直接父帖，逐层分离转发语并保留原帖视频', async t => {
   const saved = globalThis.fetch;
   t.after(() => { globalThis.fetch = saved; });
@@ -172,6 +192,8 @@ test('微博转发、回复和多层引用独立保留正文、作者、链接�
   assert.doesNotMatch(repost.content, /原微博|blockquote/);
   assert.equal(repost.enclosure, undefined);
   assert.deepEqual(repost.images, [proxy('https://wx1.sinaimg.cn/large/own.jpg')]);
+  assert.equal(repost.image, proxy('https://wx1.sinaimg.cn/large/own.jpg'));
+  assert.equal(reply.image, undefined);
   assert.equal(repost.link, 'https://weibo.com/123/B200');
   for (const item of [repost, reply]) {
     const ref = item.references[0];
@@ -194,6 +216,59 @@ test('微博转发、回复和多层引用独立保留正文、作者、链接�
     assert.equal(parsed.articles[0].references[0].item.summary, '原微博[月亮]');
     assert.equal(parsed.articles[0].video_url, '');
   }
+});
+
+test('微博只用当前帖图片作封面，原帖媒体保留在引用子项', async t => {
+  const saved = globalThis.fetch;
+  t.after(() => { globalThis.fetch = saved; });
+  const first = 'https://wx1.sinaimg.cn/large/first.jpg';
+  const second = 'https://wx2.sinaimg.cn/large/second.jpg';
+  const original = status('100', '原帖图集', { pic_ids: ['one', 'two'], pic_infos: {
+    one: { largest: { url: first } }, two: { large: { url: second } },
+  } });
+  globalThis.fetch = async url => new Response(url.includes('/ajax/profile/') ? '{}' : html([
+    original,
+    status('200', '我的转发', { retweeted_status: original }),
+    status('201', '只有文字[月亮]'),
+    status('202', '原帖已删除', { retweeted_status: { ...original, deleted: true } }),
+  ]));
+  const feed = JSON.parse((await run()).output);
+  assert.equal(feed.items[0].image, proxy(first));
+  assert.deepEqual(feed.items[0].images, [proxy(first), proxy(second)]);
+  assert.equal(feed.items[1].image, undefined);
+  assert.equal(feed.items[2].image, undefined);
+  assert.equal(feed.items[3].image, undefined);
+  assert.deepEqual(feed.items[1].images, []);
+  assert.doesNotMatch(feed.items[1].content, /first\.jpg|second\.jpg|原帖图集/);
+  assert.deepEqual(feed.items[1].references[0].item.images, [proxy(first), proxy(second)]);
+  for (const format of ['rss', 'atom']) {
+    const xml = FeedModel(feed).render(format);
+    assert.equal(XMLValidator.validate(xml), true);
+    const articles = create_feed_parser(XMLParser, XMLValidator).parse_feed_document(xml, 'https://feeds.example/feed').articles;
+    assert.equal(articles[0].thumbnail, proxy(first));
+    assert.equal(articles[1].thumbnail, '');
+    assert.deepEqual(articles[1].references[0].item.images, [proxy(first), proxy(second)]);
+  }
+});
+
+test('微博 Live Photo 样本从自身 pic_infos 提取静态封面', async t => {
+  const saved = globalThis.fetch;
+  t.after(() => { globalThis.fetch = saved; });
+  const pic_id = '0085qV8vgy1ii4453qtksj30u01hc7l2';
+  const cover = 'https://wx3.sinaimg.cn/large/' + pic_id + '.jpg';
+  const post = status('5354632532460363', '度数加深了,竟看不清手机里的自己。', {
+    mblogid: 'RmVeZak3h', user: { idstr: '7409360499', screen_name: '小蓝蓝plus' },
+    pic_ids: [pic_id], pic_infos: { [pic_id]: {
+      type: 'livephoto', largest: { url: cover, width: 1080, height: 1920 },
+      video: 'https://video.weibo.com/media/play?livephoto=https%3A%2F%2Fus.sinaimg.cn%2Fphoto.mov',
+    } },
+  });
+  globalThis.fetch = async url => url.includes('/ajax/statuses/mymblog?')
+    ? Response.json({ ok: 1, data: { list: [post] } }) : new Response('{}');
+  const item = JSON.parse((await run()).output).items[0];
+  assert.equal(item.image, proxy(cover));
+  assert.deepEqual(item.images, [proxy(cover)]);
+  assert.match(item.content, /0085qV8vgy1ii4453qtksj30u01hc7l2\.jpg/);
 });
 
 test('微博原帖详情按 ID 去重查询，查询失败和明确已删除的原微博保留引用', async t => {
@@ -268,6 +343,7 @@ test('微博旧 HTML 转发卡片直接返回原微博子项，各自链接与�
   assert.equal(original.link, 'https://weibo.com/456/B100');
   assert.equal(original.published, new Date(1792198800000).toISOString());
   assert.deepEqual(original.images, [proxy('https://wx1.sinaimg.cn/large/original.jpg')]);
+  assert.equal(item.image, undefined);
 });
 
 test('微博引用保留独立原帖，回复、转发和引用可同时记录且不把提及当作引用', async t => {

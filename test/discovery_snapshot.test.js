@@ -69,6 +69,37 @@ test("只保存三篇文章，封面尺寸失败不影响文章，同一封面�
   assert.equal(failed[0].cover_width, 0); assert.equal(failed[0].title, "标题0");
 });
 
+test("Discover 保留本地同源图片代理封面，复用 XML 元数据且不请求本地网络", async () => {
+  for (const origin of ["http://127.0.0.1:8787", "http://localhost:8787", "http://[::1]:8787"]) {
+    const cover = origin + "/img/weibo?url=https%3A%2F%2Fwx3.sinaimg.cn%2Forj360%2F0085qV8vgy1ii4453qtksj30u01hc7l2.jpg";
+    for (const metadata of ['', ' width="1080" height="1920" blurhash="hash"']) {
+      const xml = '<rss xmlns:media="http://search.yahoo.com/mrss/"><channel><item><title>度数加深了</title>' +
+        '<media:thumbnail url="' + cover + '"' + metadata + '/></item></channel></rss>';
+      let calls = 0;
+      const articles = await discovery_snapshot_articles(xml, origin + "/rss/weibo/u/7409360499",
+        () => { calls++; return null; });
+      assert.equal(calls, 0, "不应通过出站请求读取本地封面");
+      assert.equal(articles[0].cover_url, cover);
+      assert.equal(articles[0].cover_width, metadata ? 1080 : 0);
+      assert.equal(articles[0].cover_height, metadata ? 1920 : 0);
+      assert.equal(articles[0].cover_blurhash, metadata ? "hash" : "");
+    }
+  }
+});
+
+test("Discover 仍过滤非同源私网、伪造同源与含凭据的封面地址", async () => {
+  for (const cover of ["http://127.0.0.1:8788/img/weibo", "http://localhost:8787/img/weibo", "http://192.168.1.2/image",
+    "http://127.0.0.1:8787@192.168.1.2/image", "http://user:password@127.0.0.1:8787/image", "javascript:alert(1)"]) {
+    const xml = '<rss xmlns:media="http://search.yahoo.com/mrss/"><channel><item><title>标题</title>' +
+      '<media:thumbnail url="' + cover + '"/></item></channel></rss>';
+    let calls = 0;
+    const articles = await discovery_snapshot_articles(xml, "http://127.0.0.1:8787/rss/weibo/u/7409360499",
+      () => { calls++; return null; });
+    assert.equal(calls, 0, "不应读取非公网封面");
+    assert.equal(articles[0].cover_url, "", cover);
+  }
+});
+
 test("完整封面计算 BlurHash，解码失败、过大、部分响应均保留宽高", async () => {
   const original = globalThis.fetch;
   let calls = 0;
