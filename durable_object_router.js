@@ -238,10 +238,11 @@ async function dispatch(request, app) {
   if (url.pathname === "/" && request.method === "GET") {
     return app.devices.summary();
   }
-  if (url.pathname === "/_admin/statistics" && request.method === "GET") {
-    return app.statistics.snapshot().statistics;
+  if (["/_admin/statistics", "/_admin/overview"].includes(url.pathname) && request.method === "GET") {
+    if (!app.statistics) throw do_error("概览统计已暂时停用", 503);
+    const snapshot = app.statistics.snapshot();
+    return url.pathname === "/_admin/statistics" ? snapshot.statistics : snapshot;
   }
-  if (url.pathname === "/_admin/overview" && request.method === "GET") return app.statistics.snapshot();
   if ((url.pathname === "/call" || url.pathname === "/tasks") && request.method === "POST") {
     return app.tasks.create_task(request);
   }

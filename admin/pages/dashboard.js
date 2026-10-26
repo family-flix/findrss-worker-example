@@ -3566,8 +3566,11 @@ function DashboardApplicationView(page_id = "overview", embedded = false, route_
     : window.FindRSSAdminShell.View(page_options, [content]);
 }
 
-function OverviewPage({ view } = {}) {
-  return DashboardApplicationView("overview", true, view);
+function OverviewPage() {
+  return window.FindRSSAdminShell.Page({ page_id: "overview", title: "运行概览", actions: [] }, [
+    EmptyCard({ name: "overview-disabled", title: "概览已暂时停用",
+      description: "概览统计和自动更新已暂停，其他管理功能可正常使用。" }),
+  ]);
 }
 
 function DevicesPage({ view } = {}) {

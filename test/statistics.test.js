@@ -97,6 +97,10 @@ test("真实 RSS/Atom 快照命中及暂未生成均计数，鉴权拒绝、404�
   await assert.rejects(service.serve_rss_route("rss", "/news/hello", new Request("https://internal/_admin/feed/rss/news/hello")));
   await assert.rejects(service.serve_rss_route("debug", "/news/hello", request("debug")));
   assert.equal(calls.length, 3);
+  delete service.app.statistics;
+  service.ports.route_cache.resolve = () => ({ rendered: new Map([["rss\n", "RSS"]]) });
+  assert.equal((await service.serve_rss_route("rss", "/news/hello", request("rss"))).body, "RSS");
+  assert.equal(calls.length, 3);
 });
 
 test("SQLite 计数原子递增、重建仓储不清零、全量读取不截断，删除源清理计数", () => {
@@ -205,6 +209,15 @@ test("设备和 Token 管理保留实时接口，不触发概览统计", async (
   assert.deepEqual(paths.sort(), ["/", "/_admin/access-tokens"]);
   assert.equal(overview.devices[0].device_id, "a");
   assert.equal(overview.access_tokens[0].id, "token");
+});
+
+test("未注册统计服务时概览与统计接口返回停用提示，不读取历史快照", async () => {
+  const app = { repo: new Proxy({}, { get() { assert.fail("停用概览不可访问仓储"); } }) };
+  for (const path of ["/_admin/overview", "/_admin/statistics"]) {
+    const response = await route(new Request("https://internal" + path), app);
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error, "概览统计已暂时停用");
+  }
 });
 
 test("概览与管理接口均需管理员鉴权，并分别路由到快照和实时数据", async () => {

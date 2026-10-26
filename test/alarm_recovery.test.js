@@ -9,7 +9,7 @@ const methods = vm.runInNewContext("(class {" + source.slice(source.indexOf("  a
   console: { warn() {} },
 }).prototype;
 
-for (const stage of ["cleanup", "dispatch", "statistics"]) {
+for (const stage of ["cleanup", "dispatch"]) {
   test(`${stage} 失败仍执行订阅源抓取并安排下一次 alarm`, async () => {
     const failure = new Error(stage + " failed");
     const calls = [], pending = [];
@@ -23,7 +23,6 @@ for (const stage of ["cleanup", "dispatch", "statistics"]) {
         devices: { close_unauthorized_connections() {} },
         maintenance: { prune_retention() { fail("cleanup"); }, prune_events() {} },
         tasks: { async dispatch_pending() { fail("dispatch"); } },
-        statistics: { refresh_snapshot() { fail("statistics"); } },
         discovery: {
           refresh_due_snapshots: async () => { calls.push("discovery"); },
           ensure_catalog: async () => {},
@@ -50,7 +49,7 @@ test("抓取入口同步抛错不阻止其他抓取及重新安排 alarm", async
       devices: { close_unauthorized_connections() {} },
       maintenance: { prune_retention() {}, prune_events() {} },
       tasks: { async dispatch_pending() {} },
-      statistics: { refresh_snapshot() {} },
+      statistics: new Proxy({}, { get() { assert.fail("alarm 不可读取或生成概览统计"); } }),
       discovery: { refresh_due_snapshots() { throw new Error("schedule failed"); }, ensure_catalog: async () => {} },
     },
     schedule_alarm: async () => { calls.push("schedule"); },
@@ -122,7 +121,7 @@ test("滞留超过一分钟的过期 alarm 重新登记，未来和刚到期的 
   const object = {
     repo: { calls: { min_lease_expires_at: () => null }, device_tokens: { min_expires_at: () => null } },
     app: { discovery: { next_snapshot_at: () => now + 5000 }, scripts: { next_snapshot_at: () => null },
-      statistics: { next_snapshot_at: () => now + 3600000 } },
+      statistics: new Proxy({}, { get() { assert.fail("调度不可查询概览快照时间"); } }) },
     ctx: { storage: { getAlarm: async () => current, setAlarm: async value => { writes.push(value); current = value; } } },
   };
   // 只执行真实 schedule_alarm；补齐其常量依赖，不运行 Cloudflare DO 壳。
@@ -135,6 +134,10 @@ test("滞留超过一分钟的过期 alarm 重新登记，未来和刚到期的 
   current = now - 1000;
   await schedule.call(object);
   assert.equal(writes.length, 1);
+  object.app.discovery.next_snapshot_at = () => null;
+  current = null;
+  await schedule.call(object);
+  assert.equal(writes.at(-1), now + 86400000); // 空闲时不再为概览每五分钟唤醒。
 });
 
 test("首次安排 alarm 失败后，下次请求能够重试", async () => {

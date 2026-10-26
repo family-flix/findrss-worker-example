@@ -25,7 +25,7 @@ function fixture(create_response, page_id = "overview", credit_response, task_re
   const element = (props, children = []) => ({ props, children });
   Object.assign(ui, { DOM: {}, View: element, Button: element, Input: element, Select: element,
     Popconfirm: props => element(props, [props.trigger({})]),
-    EmptyCard: props => element({ attributes: { n: props.name } }, [props.title, props.description, ...props.actions]),
+    EmptyCard: props => element({ attributes: { n: props.name } }, [props.title, props.description, ...(props.actions || [])]),
     Dialog: (props, children) => element(props, [...children, ...props.footer]),
     Show: ({ when, ok }) => ({ props: {}, get children() { return when.value ? [ok()] : []; } }),
     For: ({ each, render }) => ({ props: {}, get children() { return each.value.map((row, index) => render(row, { value: index })); } }) });
@@ -118,9 +118,19 @@ test("概览仅在打开和手动刷新时读取快照，不启动轮询，展�
   assert.equal(f.requests.length, 2);
   assert.equal(f.model.state.refresh_status.value, status);
   assert.equal(f.intervals.length, 0);
-  const overview = f.context.OverviewPage();
-  assert.ok(nodes(overview).some(node => node.children?.includes("统计快照每 5 分钟生成一次，生成后自动更新，也可手动刷新")));
   f.model.methods.dispose();
+});
+
+test("停用的概览页只显示提示，不创建统计 Model、不请求快照或订阅实时事件", async () => {
+  const f = fixture();
+  const overview = f.context.OverviewPage();
+  for (const node of nodes(overview)) node.props?.onMounted?.();
+  await new Promise(setImmediate);
+  assert.ok(nodes(overview).some(node => node.props.attributes?.n === "overview-disabled"
+    && node.children.includes("概览已暂时停用")));
+  assert.deepEqual(f.requests, []);
+  assert.equal(f.context.FindRSSAdminRealtime.listeners.size, 0);
+  assert.equal(f.intervals.length, 0);
 });
 
 test("概览 View 渲染全部指标、每源次数、停用与外部源提示、空列表和可访问滚动区", async () => {
@@ -181,7 +191,7 @@ test("概览移除在线方法容器与 Token 抽屉，独立 Token 页面显示
   const overview_nodes = nodes(overview).concat(overview.props.actions);
   for (const name of ["api-summary", "api-method-summary", "open-access-token-drawer-button", "access-token-management", "access-token-drawer-root"])
     assert.equal(overview_nodes.some(node => node.props.attributes?.n === name), false, name);
-  assert.ok(overview_nodes.some(node => node.props.attributes?.n === "source-statistics"));
+  assert.ok(overview_nodes.some(node => node.props.attributes?.n === "overview-disabled"));
 
   const tokens = f.context.TokensPage();
   assert.equal(tokens.props.page_id, "tokens");

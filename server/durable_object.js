@@ -41,8 +41,6 @@ import { ServiceDeviceToken } from "./service/durable_object/device_tokens.js";
 import { create_device_token_credentials } from "./infra/device_token_credentials.js";
 import { reader_session_secret } from "./infra/reader_session_secret.js";
 import { RepositoryDiscoverySource } from "./repository/discovery_source.js";
-import { RepositoryStatistics } from "./repository/statistics.js";
-import { ServiceStatistics } from "./service/durable_object/statistics.js";
 import { RepositoryRedemption } from "./repository/redemption.js";
 import { RepositoryRssCookieGrant } from "./repository/rss_cookie_grant.js";
 import { RepositoryRssCookie } from "./repository/rss_cookie.js";
@@ -409,7 +407,6 @@ export class APIDurableObject extends DurableObject {
       mcp_oauth: new RepositoryMcpOauth({ sql: this.ctx.storage.sql, transaction: action => this.ctx.storage.transactionSync(action) }),
       discovery: new RepositoryDiscoverySource({ sql: this.ctx.storage.sql }),
       clips: new RepositoryClip({ sql: this.ctx.storage.sql }),
-      statistics: new RepositoryStatistics({ sql: this.ctx.storage.sql }),
       redemption: new RepositoryRedemption({ sql: this.ctx.storage.sql }),
       rss_cookie_grants: new RepositoryRssCookieGrant({ sql: this.ctx.storage.sql }),
       rss_cookies: new RepositoryRssCookie({ sql: this.ctx.storage.sql }),
@@ -465,7 +462,7 @@ export class APIDurableObject extends DurableObject {
       schedule_alarm: ports.schedule_alarm });
     this.app.cookie_push_settings = new ServiceCookiePushSettings({ repo: this.repo.cookie_push_settings,
       credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || "") });
-    this.app.statistics = new ServiceStatistics({ repo: this.repo, app: this.app });
+    // 暂停概览统计，不注册统计服务，停止 RSS 计数和统计快照扫描。
     this.app.maintenance = new ServiceMaintenance({ repo: this.repo });
     this.app.activity = new ServiceActivity({ repo: this.repo, app: this.app });
     this.app.credit = new ServiceCredit({ repo: this.repo, storage: this.ctx.storage });
@@ -514,7 +511,6 @@ export class APIDurableObject extends DurableObject {
       snapshot_settings: () => this.app.snapshot_settings.settings(),
       check_cookie_permissions: script_id => this.app.scripts.check_cookie_permissions(script_id),
       public_origin: feed_hostname_origin(env),
-      statistics: this.app.statistics,
       repo: this.repo, route_cache: ports.route_cache, storage: this.ctx.storage,
       object_store: create_api_object_store(env),
       schedule_alarm: ports.schedule_alarm,
@@ -534,7 +530,7 @@ export class APIDurableObject extends DurableObject {
       admin_ports: {
         source_types: () => this.app.discovery.platforms().map(platform => platform.id),
         context: async page => {
-          if (page === "overview") return this.app.statistics.snapshot();
+          if (page === "overview") return { disabled: true, message: "概览统计已暂时停用" };
           if (page === "devices") return this.app.devices.summary();
           if (page === "discovery") return { source_count: this.repo.discovery.count(), source_types: Object.fromEntries(this.app.discovery.platforms().map(platform => [platform.id, platform.label])), tags: this.app.discovery.tags(),
             script_routes: (await this.app.scripts.list_scripts()).scripts.filter(script => script.status === "published").flatMap(script => (script.routes || [script]).map(route => ({ path: route.path, platform: route.platform, tags: route.tags, enabled: script.enabled }))) };
@@ -703,7 +699,6 @@ export class APIDurableObject extends DurableObject {
       }
     }
     await this.app.tasks.dispatch_pending();
-    this.app.statistics.refresh_snapshot(now);
   }
 
   /** @returns {Promise<void>} */
@@ -714,9 +709,8 @@ export class APIDurableObject extends DurableObject {
     const next_feed = this.app.scripts?.next_snapshot_at();
     const next_clip = this.app.clips?.next_snapshot_at();
     const now = Date.now();
-    const next_statistics = Math.max(now, this.app.statistics.next_snapshot_at());
     const next_token_expiry = this.repo.device_tokens.min_expires_at(now);
-    const desired = Math.min(next_lease ?? Infinity, next_snapshot ?? Infinity, next_feed ?? Infinity, next_clip ?? Infinity, next_statistics, next_token_expiry ?? Infinity,
+    const desired = Math.min(next_lease ?? Infinity, next_snapshot ?? Infinity, next_feed ?? Infinity, next_clip ?? Infinity, next_token_expiry ?? Infinity,
       this.app.scripts?.migration_pending ? now + 10000 : Infinity, now + MAINTENANCE_MILLISECONDS);
     const current = await this.ctx.storage.getAlarm();
     // 保留仍有效的更早唤醒；滞留超过一分钟的过期 alarm 重新登记以恢复调度。
