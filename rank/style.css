@@ -1,0 +1,51 @@
+@import url("/base.css");
+:root { --rank-bg: #0a0c10; --rank-panel: #0f1218; --rank-text: #f4f1ea; --rank-muted: #98a0ae; --rank-blue: #85acff; --rank-error: #ff9c9c; }
+body { background: var(--rank-bg); color: var(--rank-text); font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; font-variant-numeric: tabular-nums; }
+a { color: inherit; text-decoration: none; }
+a:hover { color: var(--rank-blue); }
+a:focus-visible, input:focus-visible, button:focus-visible { outline: 2px solid var(--rank-blue); outline-offset: 3px; }
+.rank-shell { width: min(1520px, calc(100% - 32px)); margin: auto; padding-bottom: 24px; }
+.rank-masthead, .rank-brand, .rank-heading, .rank-card-header { display: flex; align-items: center; }
+.rank-masthead { min-height: 60px; justify-content: space-between; border-bottom: 1px solid #ffffff1a; }
+.rank-brand { gap: 8px; font-size: 18px; font-weight: 700; }
+.rank-brand img { width: 24px; height: 24px; }
+.rank-masthead nav { display: flex; gap: 16px; color: var(--rank-muted); }
+.rank-masthead [aria-current="page"] { color: var(--rank-text); border-bottom: 2px solid var(--rank-blue); }
+.rank-heading { justify-content: space-between; gap: 16px; padding: 16px 0; }
+h1 { margin: 0; font-size: 24px; line-height: 1.3; font-weight: 650; }
+.rank-summary { color: var(--rank-muted); font-size: 12px; margin: 4px 0 0; }
+.rank-search { width: min(240px, 100%); min-height: 44px; padding: 8px 12px; border: 1px solid #ffffff2b; border-radius: 6px; color: var(--rank-text); background: var(--rank-panel); font: inherit; }
+.rank-filters { display: grid; gap: 6px; margin-bottom: 16px; }
+.rank-filter-row { display: flex; align-items: baseline; gap: 8px; }
+.rank-filter-label { flex: 0 0 28px; color: var(--rank-muted); font-size: 12px; }
+.rank-filter-options { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.rank-filter-chip { min-height: 32px; padding: 4px 10px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--rank-muted); font: inherit; cursor: pointer; }
+.rank-filter-chip:hover { color: var(--rank-text); background: #ffffff0c; }
+.rank-filter-chip.is-selected { color: var(--rank-blue); background: #85acff14; border-color: #85acff40; }
+.rank-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; gap: 12px; }
+.rank-card { min-width: 0; background: var(--rank-panel); border: 1px solid #ffffff1a; border-radius: 6px; overflow: hidden; }
+.rank-card-header { justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #ffffff1a; }
+.rank-card h2 { margin: 0; min-width: 0; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.rank-updated { color: var(--rank-muted); font-size: 11px; white-space: nowrap; }
+.rank-entries { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; scrollbar-color: #4a5261 var(--rank-panel); scrollbar-width: thin; }
+.rank-entry { display: flex; align-items: flex-start; gap: 8px; margin: 0 12px; padding: 7px 0; border-bottom: 1px solid #ffffff0c; }
+.rank-entry:last-child { border-bottom: 0; }
+.rank-number { flex: 0 0 20px; color: var(--rank-muted); font-size: 12px; padding-top: 1px; }
+.rank-entry:nth-child(-n+3) .rank-number { color: #ff9166; }
+.rank-cover { width: 27px; height: 36px; flex: 0 0 27px; object-fit: cover; border-radius: 3px; background: #1a1f2a; }
+.rank-entry-body { min-width: 0; display: grid; gap: 2px; }
+.rank-entry-title { line-height: 1.45; overflow-wrap: anywhere; }
+.rank-heat { color: var(--rank-muted); font-size: 11px; }
+.rank-error { padding: 12px; min-height: 84px; color: var(--rank-error); overflow-wrap: anywhere; }
+.rank-error p { margin: 0 0 6px; }
+.rank-error-title { color: var(--rank-text); font-weight: 600; }
+.rank-empty, .rank-no-results { padding: 16px 12px; color: var(--rank-muted); }
+@media (max-width: 1200px) { .rank-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 900px) { .rank-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (pointer: coarse) { .rank-filter-chip { min-height: 44px; } .rank-entry { min-height: 44px; } }
+@media (max-width: 600px) {
+  .rank-shell { width: calc(100% - 24px); }
+  .rank-heading { align-items: stretch; flex-direction: column; gap: 8px; }
+  .rank-search { width: 100%; font-size: 16px; }
+  .rank-grid { grid-template-columns: minmax(0, 1fr); }
+}

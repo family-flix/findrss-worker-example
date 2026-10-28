@@ -1260,6 +1260,16 @@ export class ServiceScript {
     return { ...result.raw, context_key, assert_current() { assert_current(); result.assert_current?.(); } };
   }
 
+  async execute_hot_snapshot(context, signal) {
+    signal?.throwIfAborted();
+    const rows = this.enabled_route_rows().filter(row => ScriptModel.fromRow(row).kind === "hot");
+    if (!RssRouteSelectionModel(rows, context.pathname).best()) return null;
+    const url = new URL("https://internal/_admin/feed/hot" + context.pathname);
+    url.search = new URLSearchParams(context.query).toString();
+    const { raw } = await this.serve_rss_route("hot", context.pathname, new Request(url), { refresh: true, signal });
+    return { output: JSON.stringify(raw) };
+  }
+
   /**
    * 判断请求地址是否命中一个启用中的公开自有 RSS 源。只比较 route pathname，
    * query 无论有无、是否一致都视为同一个源，因此公开源的任意 query 变体同样公开。

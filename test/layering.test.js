@@ -35,7 +35,9 @@ const API_FILES = Object.freeze([
 const COMPOSITION_ROOTS = Object.freeze(["index.js", "server/durable_object.js"]);
 
 const SSR_VIEWS = {
+  "discover.js": ["discover/index.js"],
   "server/infra/discovery_home.js": ["discover/index.html", "discover/unavailable.html", "discover/index.js", "discover/style.css", "public/base.css"],
+  "server/infra/rank_home.js": ["rank/index.html", "rank/model.js", "rank/view.js", "rank/style.css", "public/base.css"],
 };
 
 const SPECIFIER_PATTERNS = [

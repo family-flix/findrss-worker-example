@@ -9,6 +9,8 @@
     "run_worker_first": [
       "/",
       "/index.html",
+      "/rank",
+      "/rank/*",
       "/admin",
       "/admin/*",
       "/api/*",
@@ -40,6 +42,9 @@
   },
   "compatibility_date": "2026-05-03",
   "compatibility_flags": ["nodejs_compat"],
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
   "browser": {
     "binding": "BROWSER"
   },

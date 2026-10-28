@@ -42,6 +42,7 @@ export function TasksPage({ view } = {}) {
               Badge({ tone: task.tone, attributes: { n: "tasks-item-status" } }, [task.status_label]),
             ]),
             View({ class: "text-muted text-sm break-anywhere", attributes: { n: "tasks-item-target" } }, [task.target]),
+            View({ class: "text-muted text-xs break-anywhere", attributes: { n: "tasks-item-id" } }, ["任务 ID：" + task.id]),
             View({ class: "text-muted text-sm", attributes: { n: "tasks-item-time" } }, [task.started_label + " · 耗时 " + task.elapsed_label]),
             task.error ? View({ class: "text-sm break-anywhere", attributes: { n: "tasks-item-error" } }, [task.error]) : null,
             task.cancellable ? Button({ size: "small", disabled: combine({ cancelling: state.cancelling, cleaning: state.cleaning }, value => value.cleaning || value.cancelling.includes(task.id)),

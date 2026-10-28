@@ -1,9 +1,13 @@
 // Route both websites and API without exposing internal DO routes.
 import { MCP_OAUTH_PATHS } from "./server/service/worker/mcp_oauth.js";
 import { error_response } from "./server/lib/http.js";
+import { admin_hot_snapshot } from "./server/service/worker/hot_snapshot.js";
 
-export function create_worker({ api, admin, discovery }) {
+export function create_worker({ api, admin, discovery, rank, rank_snapshot }) {
   return {
+    async scheduled(controller, env) {
+      await rank_snapshot?.(env);
+    },
     async fetch(request, env, ctx) {
       const url = new URL(request.url);
       const path = url.pathname;
@@ -15,8 +19,15 @@ export function create_worker({ api, admin, discovery }) {
           url.origin,
       };
       const api_fetch = (input, init) => {
-        return api.fetch(new Request(input, init), env, ctx);
+        const forwarded = new Request(input, init);
+        if (new URL(forwarded.url).pathname === "/admin/api/hot/snapshot") {
+          return admin_hot_snapshot(forwarded, env);
+        }
+        return api.fetch(forwarded, env, ctx);
       };
+      if (rank && (path === "/rank" || path.startsWith("/rank/"))) {
+        return rank(request, env);
+      }
       if (path === "/admin") {
         url.pathname = "/admin/";
         return Response.redirect(url.href, 302);
@@ -25,7 +36,7 @@ export function create_worker({ api, admin, discovery }) {
         if (path === "/admin/api" || path.startsWith("/admin/api/")) {
           try {
             if (request.headers.has("Authorization")) {
-              return await api.fetch(request, env, ctx);
+              return await api_fetch(request);
             }
             return await admin(request, env, api_fetch);
           } catch (error) {

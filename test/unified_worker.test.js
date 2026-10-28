@@ -67,6 +67,21 @@ test("管理 API 同步异常及异步拒绝均返回 JSON 500，覆盖会话与
   assert.equal(log.mock.callCount(), 12);
 });
 
+test("管理员直达 API 的请求体、方法、查询参数及凭证保持完整", async () => {
+  const worker = create_worker({ api: { async fetch(request) {
+    assert.equal(request.method, "POST");
+    assert.equal(new URL(request.url).searchParams.get("mode"), "debug");
+    assert.equal(request.headers.get("Authorization"), "Bearer admin-secret");
+    assert.deepEqual(await request.json(), { script: "内容" });
+    return Response.json({ ok: true });
+  } } });
+  const response = await worker.fetch(new Request("https://feeds.example/admin/api/scripts?mode=debug", {
+    method: "POST", headers: { Authorization: "Bearer admin-secret", "Content-Type": "application/json" },
+    body: JSON.stringify({ script: "内容" }),
+  }), { ADMIN_PASSWORD: "admin-secret" });
+  assert.equal(response.status, 200);
+});
+
 test("管理 API 的错误边界覆盖会话处理且保留其他路由的异常", async t => {
   const failure = new Error("session validation failed");
   t.mock.method(console, "error", () => {});
@@ -79,8 +94,8 @@ test("管理 API 的错误边界覆盖会话处理且保留其他路由的异常
 
 test("公开目录、RSS、设备、账号接口继续调用同一 API，内部 DO 路径不对外公开", async () => {
   const { worker, env, calls } = fixture();
-  for (const path of ["/api/sources", "/rss/demo?token=abc", "/v1/connect", "/reader/auth/session", "/findrss-logo.png"]) await worker.fetch(new Request("https://feeds.example" + path), env);
-  assert.deepEqual(calls, ["/discovery/sources", "/rss/demo", "/v1/connect", "/reader/auth/session", "/findrss-logo.png"]);
+  for (const path of ["/api/sources", "/rss/demo?token=abc", "/api/hot/douyin/hot", "/v1/connect", "/reader/auth/session", "/findrss-logo.png"]) await worker.fetch(new Request("https://feeds.example" + path), env);
+  assert.deepEqual(calls, ["/discovery/sources", "/rss/demo", "/api/hot/douyin/hot", "/v1/connect", "/reader/auth/session", "/findrss-logo.png"]);
   assert.equal((await worker.fetch(new Request("https://feeds.example/_internal/users"), env)).status, 404);
 });
 

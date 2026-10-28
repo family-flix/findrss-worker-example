@@ -9,7 +9,7 @@
     "dev": "node scripts/dev.js",
     "deploy": "npm run build && wrangler deploy",
     "dry-run": "npm run build && wrangler deploy --dry-run",
-    "test": "node --test test/*.test.js admin/__tests__/*.test.mjs && node --test discover/test/*.test.js"
+    "test": "node --test test/*.test.js admin/__tests__/*.test.mjs rank/test/*.test.js && node --test discover/test/*.test.js"
   },
   "keywords": [],
   "author": "",

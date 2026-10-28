@@ -68,6 +68,9 @@ import { ServiceScript } from "./service/durable_object/scripts.js";
 import { ServiceTask } from "./service/durable_object/tasks.js";
 import { RepositoryBackgroundTasks } from "./repository/background_tasks.js";
 import { ServiceBackgroundTasks } from "./service/durable_object/background_tasks.js";
+import { ServiceHotSnapshots } from "./service/durable_object/hot_snapshots.js";
+import { create_rank_snapshot_builder } from "../rank.js";
+import { publish_rank_home } from "../rank/home.js";
 import { ServiceUser } from "./service/durable_object/users.js";
 import { RepositorySnapshotSettings } from "./repository/snapshot_settings.js";
 import { ServiceSnapshotSettings } from "./service/durable_object/snapshot_settings.js";
@@ -537,6 +540,10 @@ export class APIDurableObject extends DurableObject {
       app: this.app,
       public_origin: feed_hostname_origin(env),
     });
+    const build_rank_snapshot = create_rank_snapshot_builder((context, signal) => this.app.scripts.execute_hot_snapshot(context, signal));
+    this.app.hot_snapshots = new ServiceHotSnapshots({ background_tasks: this.app.background_tasks,
+      build_snapshot: ports.object_store ? signal => build_rank_snapshot(env, signal) : null,
+      build_home: ports.object_store ? (catalog, signal) => publish_rank_home(catalog, env, signal) : null });
     this.app.script_agent = new ServiceScriptAgent({
       repo: this.repo.script_agent,
       credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || ""),

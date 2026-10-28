@@ -14,7 +14,7 @@ import { DISCOVERY_CATALOG_KEY, DISCOVERY_CATALOG_ORIGIN } from "../../server/li
 import { gzip_html } from "../../server/infra/discovery_compression.js";
 
 const bundle = await build({
-  stdin: { contents: 'export { render_home_document, render_embedded_home } from "../server/infra/discovery_home.js"; export { handle_discovery_request } from "../discover.js";',
+  stdin: { contents: 'export { render_home_document, render_embedded_home, DISCOVERY_ASSETS_VERSION } from "../server/infra/discovery_home.js"; export { handle_discovery_request } from "../discover.js";',
     resolveDir: fileURLToPath(new URL("../", import.meta.url)), loader: "js" },
   bundle: true, write: false, format: "esm", platform: "neutral", mainFields: ["main"], loader: { ".html": "text", ".css": "text", ".svg": "text" },
   plugins: [timeless_plugin({ platform: LITE_ESM, ssr: true })],
@@ -22,7 +22,7 @@ const bundle = await build({
 const directory = mkdtempSync(join(tmpdir(), "findrss-home-test-"));
 const module_path = join(directory, "home.mjs");
 writeFileSync(module_path, bundle.outputFiles[0].text);
-const { handle_discovery_request, render_home_document, render_embedded_home } = await import(pathToFileURL(module_path));
+const { handle_discovery_request, render_home_document, render_embedded_home, DISCOVERY_ASSETS_VERSION } = await import(pathToFileURL(module_path));
 const worker = { fetch: (request, env) => handle_discovery_request(request, env, env.API?.fetch.bind(env.API)) };
 rmSync(directory, { recursive: true });
 const catalog = { sources: Array.from({ length: 41 }, (_, index) => ({ id: String(index), title: "源" + index,
@@ -178,7 +178,7 @@ test("SSR 与旧 R2 头像都按需加载，HTML 不含图片字节且不请求�
     const html = await response.text();
     assert.doesNotMatch(html, /data:image\/png;base64|127\.0\.0\.1|<img[^>]*n="feed-avatar-image"/);
     assert.match(html, /n="feed-avatar-placeholder"/);
-    assert.match(html, /name="discovery-embedded-assets" content="10"/);
+    assert.ok(html.includes(`name="discovery-embedded-assets" content="${DISCOVERY_ASSETS_VERSION}"`));
     assert.equal(bootstrap_data(html).sources[0].avatar_url, legacy ? "/public/avatar/0?v=123" : "/api/avatar/0?v=123");
     assert.equal(calls.length, legacy ? 0 : 1);
   }
@@ -284,15 +284,16 @@ test("旧版 R2 首页升级页头，跳过旧版边缘缓存并保留目录", a
     const html = await response.text();
     const link = html.match(/<a[^>]*n="github-link"[^>]*>[^]*?<\/a>/)?.[0];
     assert.ok(link);
+    assert.doesNotMatch(html, /discovery-rank-link|rank-navigation-link|href="\/rank\/"/);
     assert.match(link, /href="https:\/\/github\.com\/ltaoo\/findrss-worker"/);
     assert.match(link, /target="_blank"[^>]*rel="noopener noreferrer"/);
     assert.match(link, /aria-label="FindRSS GitHub 仓库（新标签页打开）"/);
     assert.match(link, /<div class="github-icon" n="github-icon" aria-hidden="true"><\/div><\/a>$/);
-    assert.match(html, /name="discovery-embedded-assets" content="10"/);
+    assert.ok(html.includes(`name="discovery-embedded-assets" content="${DISCOVERY_ASSETS_VERSION}"`));
     assert.match(html, /<title>FindRSS 订阅广场 - RSS \/ Atom 订阅源搜索与发现<\/title>/);
     assert.doesNotMatch(html, /\sdata-n=/);
     assert.deepEqual(bootstrap_data(html), bootstrap_data(old_html.replaceAll(DISCOVERY_CATALOG_ORIGIN, "https://discover.example")));
-    assert.equal(new URL(cache_keys[0]).searchParams.get("assets"), "10");
+    assert.equal(new URL(cache_keys[0]).searchParams.get("assets"), DISCOVERY_ASSETS_VERSION);
     assert.equal(bucket.calls.get, 1);
   } finally { globalThis.caches = previous; }
 });
@@ -446,7 +447,7 @@ test("首页故障返回带品牌标志的 HTML，保持错误状态、CSP 和 H
 test("静态资源优先，管理与首页路由仍先经过 Worker，直出的静态资源带安全头", () => {
   const config = JSON.parse(readFileSync(new URL("../../wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, ""));
   assert.ok(Array.isArray(config.assets.run_worker_first));
-  for (const path of ["/", "/index.html", "/admin/auth/*", "/admin/api/*", "/api/*", "/rss/*", "/_internal/*"]) assert.ok(config.assets.run_worker_first.includes(path));
+  for (const path of ["/", "/index.html", "/admin", "/admin/*", "/rank", "/rank/*", "/api/*", "/rss/*", "/_internal/*"]) assert.ok(config.assets.run_worker_first.includes(path));
   assert.equal(config.assets.run_worker_first.includes("/index.js"), false);
-  assert.equal(config.assets.run_worker_first.includes("/admin/*"), false);
+  assert.equal(config.assets.run_worker_first.includes("/assets/*"), false);
 });

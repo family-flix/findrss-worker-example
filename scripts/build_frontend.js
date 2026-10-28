@@ -16,6 +16,7 @@ mkdirSync(stage, { recursive: true });
 cpSync(join(root, "public"), stage, { recursive: true });
 execFileSync(process.execPath, [join(root, admin_dev ? "scripts/admin_dev.js" : "scripts/build_admin_ui.js")], { cwd: root, stdio: "inherit" });
 execFileSync(process.execPath, [join(root, "scripts/build_discover.js")], { cwd: root, stdio: "inherit" });
+execFileSync(process.execPath, [join(root, "scripts/build_rank.js")], { cwd: root, stdio: "inherit" });
 const manifest = JSON.parse(readFileSync(join(stage, "site.webmanifest"), "utf8"));
 writeFileSync(join(stage, "admin/site.webmanifest"), JSON.stringify({ ...manifest,
   name: "FindRSS 管理后台", short_name: "FindRSS",
