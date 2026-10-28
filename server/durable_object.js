@@ -76,7 +76,7 @@ import { ServiceCookiePushSettings } from "./service/durable_object/cookie_push_
 import { RepositoryWebhookSettings } from "./repository/webhook_settings.js";
 import { ServiceWebhookSettings } from "./service/durable_object/webhook_settings.js";
 import { seed_default_data } from "./service/durable_object/default_data.js";
-import apple_script from "../examples/scripts/rss/apple.js" with { type: "text" };
+import { apple_script } from "./infra/builtin_script_sources.js";
 import clip_script_source from "../examples/scripts/region_clip.js" with { type: "text" };
 import { RepositoryClip } from "./repository/clip.js";
 import { ServiceClip } from "./service/durable_object/clips.js";

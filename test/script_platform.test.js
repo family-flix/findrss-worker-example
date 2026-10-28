@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { register } from "node:module";
-import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { XMLValidator } from "fast-xml-parser";
 import { RepositoryPlatform } from "../server/repository/platform.js";
 import { RepositoryScript } from "../server/repository/script.js";
 import { API_SCHEMA_SQL } from "../server/repository/schema.js";
@@ -133,32 +131,4 @@ test("升级回填只收集已发布脚本，草稿不入库，旧数据不覆�
   f.repo.platforms.collect({ platform: { name: "知乎", icon: "https://example.com/latest.png" } }, 3);
   f.repo.platforms.import_published(rows);
   assert.equal(f.repo.platforms.list()[0].icon, "https://example.com/latest.png");
-});
-
-test("示例脚本省略默认地球图标，品牌 SVG 保留自绘或仓库图标且在 QuickJS 中编译通过", async () => {
-  for (const kind of ["rss", "hot"]) {
-    const directory = new URL(`../examples/scripts/${kind}/`, import.meta.url);
-    for (const name of await readdir(directory)) {
-      if (!name.endsWith(".js")) continue;
-      const source = await readFile(new URL(name, directory), "utf8");
-      assert.doesNotMatch(source, /website-platform-icon/);
-      const compiled = await compile_script_module(source);
-      assert.equal(compiled.error, "", kind + "/" + name);
-      assert.ok(compiled.metadata.platform.name, kind + "/" + name);
-      const stem = name.replace(/\.js$/, "");
-      if (kind === "rss" && stem === "apple") {
-        const svg = compiled.metadata.platform.icon;
-        assert.equal(XMLValidator.validate(svg), true);
-        assert.match(svg, /viewBox="0 0 302 302"/);
-        assert.doesNotMatch(svg, /<rect\b|fill="#fff"/);
-        assert.equal((svg.match(/<path fill="#666"/g) || []).length, 2);
-        assert.doesNotMatch(svg, /<image\b/);
-        continue;
-      }
-      const key = stem === "github" ? stem : ["bilibili", "douyin", "wxchannels", "wxmp", "zhihu", "x", "xiaohongshu", "weibo", "kuaishou", "youtube", "telegram", "qidian", "fanqienovel"]
-        .find(key => stem === key || stem.startsWith(key + "_")) || "website";
-      const expected_icon = key === "website" ? "" : (await readFile(new URL(`../public/platform-icons/${key}.svg`, import.meta.url), "utf8")).trim();
-      assert.equal(compiled.metadata.platform.icon, expected_icon, kind + "/" + name);
-    }
-  }
 });

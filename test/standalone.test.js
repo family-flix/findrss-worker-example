@@ -25,7 +25,7 @@ test("本地 package 依赖全部保存在项目目录内", () => {
 });
 
 test("构建入口不再引用项目外的共享目录", () => {
-  for (const name of ["scripts/build.js", "scripts/build_admin_ui.js", "scripts/build_discover.js", "scripts/timeless_plugin.js", "scripts/sync_rss_examples.mjs"]) {
+  for (const name of ["scripts/build.js", "scripts/build_admin_ui.js", "scripts/build_discover.js", "scripts/timeless_plugin.js", "scripts/sync_hot_scripts.js"]) {
     const source = readFileSync(resolve(root, name), "utf8");
     assert.doesNotMatch(source, /xiaoxunrss-worker|\.\.\/packages/, name);
   }

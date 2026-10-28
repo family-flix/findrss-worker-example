@@ -1,7 +1,7 @@
+import { read_script } from "./support/script_sources.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { register } from "node:module";
-import { readFileSync } from "node:fs";
 import { ScriptDebugRequestModel } from "../server/domain/script_debug_request.js";
 import worker_router from "../api.js";
 import { do_error, do_result } from "../server/service/durable_object/error.js";
@@ -11,7 +11,7 @@ const { route } = await import("../durable_object_router.js");
 
 test("草稿路由预览编译起点类式多路由，只返回元数据，不调用 handler 或写日志", async () => {
   const { service, records, calls } = setup();
-  const source = readFileSync(new URL("../examples/scripts/rss/qidian.js", import.meta.url), "utf8");
+  const source = read_script("rss/qidian.js");
   const preview = body => route(new Request("https://internal/_admin/scripts/routes", {
     method: "POST", body: JSON.stringify(body),
   }), { scripts: service });

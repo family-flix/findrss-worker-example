@@ -1,4 +1,4 @@
-import { result_fixture_source } from "./support/result_fixture.js";
+import { read_script } from "./support/script_sources.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { register } from "node:module";
@@ -6,10 +6,10 @@ import { RssRouteCache } from "../server/infra/rss_cache.js";
 import { admin_discovery_preview } from "../server/service/worker/discovery.js";
 import worker_router from "../api.js";
 import { create_worker } from "../router.js";
-import { readFile } from "node:fs/promises";
+import { ScriptCookieAccess } from "../server/infra/script_cookie_access.js";
 register("./support/quickjs_wasm_hook.js", import.meta.url);
 const { ServiceScript } = await import("../server/service/durable_object/scripts.js");
-const { ScriptInvokeError } = await import("../server/infra/script_sandbox.js");
+const { ScriptInvokeError, compile_script_module } = await import("../server/infra/script_sandbox.js");
 const { route } = await import("../durable_object_router.js");
 
 function script(handler = 'ctx.log("开始执行"); throw new Error("boom <script>alert(1)</script>");') {
@@ -207,8 +207,18 @@ test("/debug 要求启用 Debug，沿用订阅鉴权，失败时即使未声明 
 });
 
 test("统一 Worker 的 /debug/weibo/u/:uid 走真实脚本，保留长 HTML、上游诊断与函数输出", async () => {
-  const source = (await readFile(new URL('../examples/scripts/weibo.js', import.meta.url), 'utf8')).replace(/cookie_headers:\s*\{[^}]*\},?/g, '');
-  const { service, cache, row } = setup(true, result_fixture_source(source));
+  const source = read_script('rss/weibo.js') + `
+for (const test_route of routes) {
+  const handler = test_route.handler;
+  test_route.handler = ctx => handler({ ...ctx, fetchText: async (...args) => {
+    const result = await ctx.fetchText(...args);
+    if (!result.error) ctx.log(result.data);
+    return result;
+  } });
+}`;
+  const { service, cache, row } = setup(true, source);
+  const compiled = await compile_script_module(source);
+  service.cookie_access = () => new ScriptCookieAccess({ permissions: compiled.metadata.permissions, cookies: () => [], assert_grant() {} });
   service.rss_address_is_public = () => true;
   Object.assign(row(), { path: '/weibo/u/:uid', metadata_json: JSON.stringify({ path: '/weibo/u/:uid', name: '微博', debug: true }) });
   const requests = [];

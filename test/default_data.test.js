@@ -1,6 +1,6 @@
+import { read_script } from "./support/script_sources.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFile } from "node:fs/promises";
 import { register } from "node:module";
 import { snapshot_store } from "./support/snapshot_store.js";
 import { RepositoryScript } from "../server/repository/script.js";
@@ -15,7 +15,7 @@ import { sha256_hex } from "../server/lib/crypto.js";
 register("./support/quickjs_wasm_hook.js", import.meta.url);
 const { seed_default_data } = await import("../server/service/durable_object/default_data.js");
 const { execute_script } = await import("../server/infra/script_sandbox.js");
-const script = await readFile(new URL("../examples/scripts/rss/apple.js", import.meta.url), "utf8");
+const script = read_script("rss/apple.js");
 
 function fixture(t) {
   const store = snapshot_store(), values = new Map();

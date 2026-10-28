@@ -1,7 +1,7 @@
+import { read_script } from "./support/script_sources.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { register } from "node:module";
-import { readFile } from "node:fs/promises";
 import { RssRouteCache } from "../server/infra/rss_cache.js";
 import { snapshot_store } from "./support/snapshot_store.js";
 import { image_proxy_descriptor, image_proxy_target } from "../server/lib/image_proxy.js";
@@ -181,7 +181,7 @@ test("公众号、微博与 Apple 图片路由 GET/HEAD 强缓存 90 天并命�
       ["weibo", "/img/weibo", "https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/e1/201810_yueliang_mobile.png", "https://weibo.com/"],
       ["apple", "/img/apple", "https://is1-ssl.mzstatic.com/image/thumb/example/400x400bb.webp", "https://apps.apple.com/"],
     ]) {
-      const script = await readFile(new URL(`../examples/scripts/rss/${file}.js`, import.meta.url), "utf8");
+      const script = read_script(`rss/${file}.js`);
       const { service, metadata, rows } = await setup(script);
       assert.equal(metadata.routes.find(route => route.path === path).public, true);
       service.rss_address_is_public = () => false;

@@ -10,6 +10,7 @@ import { admin_dev, build_assets, build_stage, finalize_assets } from "./build_p
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const stage = build_stage;
+execFileSync(process.execPath, [join(root, "scripts/sync_hot_scripts.js")], { cwd: root, stdio: "inherit" });
 rmSync(stage, { recursive: true, force: true });
 mkdirSync(stage, { recursive: true });
 cpSync(join(root, "public"), stage, { recursive: true });
