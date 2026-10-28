@@ -29,6 +29,7 @@ const MODEL_NAME_PATTERN = /^[A-Z][A-Za-z0-9]*Model$/;
  * @type {Record<string, Record<string, unknown[]>>}
  */
 const SAMPLES = Object.freeze({
+  "detection.js": { DetectionModel: [{ id: "detect", title: "正文", script_id: "source", script_url: "/web/text/detect" }] },
   "clip.js": { ClipModel: [{ id: "clip", title: "天气", url: "https://example.com/", selector: "#weather" }] },
   "script_version.js": { ScriptVersionModel: ["1.0.0"] },
   "script_cookie_permissions.js": { ScriptCookiePermissionsModel: [{}] },

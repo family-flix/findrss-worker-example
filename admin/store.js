@@ -168,6 +168,7 @@ export const routes_configure = {
           aliases: ["/admin/rss-scripts.html"],
         },
       },
+      detections: { title: "内容检测", pathname: "/admin/detections", page: "Detections", options: { short_title: "检测", icon: "search" } },
       clips: {
         title: "区域剪藏",
         pathname: "/admin/clips",
@@ -363,6 +364,7 @@ export async function create_admin_store() {
     Discovery: (await import("./pages/discovery.js")).DiscoveryPage,
     Scripts: (await import("./pages/script.js")).ScriptPage,
     Clips: (await import("./pages/clips.js")).ClipsPage,
+    Detections: (await import("./pages/detections.js")).DetectionsPage,
     Cookies: (await import("./pages/cookies.js")).CookiesPage,
     Storage: (await import("./pages/storage.js")).StoragePage,
     Tasks: (await import("./pages/tasks.js")).TasksPage,

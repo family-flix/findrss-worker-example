@@ -5,6 +5,29 @@ const dropped_tags = new Set(["script", "style", "link", "iframe", "frame", "fra
 const dropped_attributes = new Set(["srcdoc", "srcset", "sizes", "action", "formaction", "target", "ping", "poster", "background", "contenteditable", "autofocus", "is"]);
 const image_data = /^data:image\/(?:png|jpeg|gif|webp|avif|svg\+xml|x-icon|bmp)(?:;[^,]*)?,/i;
 
+export function normalize_clip_snapshot(value) {
+  if (!value || value.kind !== "clip" || typeof value.title !== "string" || !value.title.trim() || value.title.length > 200) {
+    throw new Error("剪藏必须返回 kind=clip 和不超过 200 字符的标题");
+  }
+  let link;
+  try {
+    if (typeof value.link !== "string" || /[\s\\]/.test(value.link)) throw new Error();
+    link = new URL(value.link);
+    if (!["http:", "https:"].includes(link.protocol) || link.username || link.password || link.href.length > 8192) throw new Error();
+  } catch { throw new Error("剪藏来源必须是无凭据的 HTTP(S) 链接"); }
+  const stats = value.stats;
+  if (stats !== undefined && (!stats || typeof stats !== "object" || Array.isArray(stats))) throw new Error("剪藏 stats 必须是对象");
+  const normalized = {};
+  for (const key of ["width", "height", "elements", "images", "image_missing"]) {
+    if (stats?.[key] === undefined) continue;
+    if (!Number.isFinite(stats[key]) || stats[key] < 0 || stats[key] > Number.MAX_SAFE_INTEGER) throw new Error("剪藏统计无效：" + key);
+    normalized[key] = Math.min(32767, Math.round(stats[key]));
+  }
+  if (typeof stats?.node === "string") normalized.node = stats.node.slice(0, 200);
+  return { kind: "clip", title: value.title.trim(), link: link.href, html: sanitize_clip_html(value.html),
+    captured_at: new Date().toISOString(), ...(stats === undefined ? {} : { stats: normalized }) };
+}
+
 export function sanitize_clip_html(value) {
   if (typeof value !== "string" || !value.trim()) throw new Error("剪藏内容不能为空");
   if (new TextEncoder().encode(value).length > ClipModel.MAX_BYTES) throw new Error("剪藏内容超过 8MB，请缩小选区");

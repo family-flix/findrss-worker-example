@@ -28,6 +28,9 @@ import {
 } from "../lib/constants.js";
 import { validate_image_proxy_route, validate_script_route_path } from "../lib/image_proxy.js";
 import { script_output } from "../lib/script_output.js";
+import { normalize_clip_snapshot } from "./clip_html.js";
+import { ClipModel } from "../domain/clip.js";
+import { compare_detect_snapshots, normalize_detect_snapshot, normalize_detect_previous, normalize_detect_result, DETECT_RESULT_BYTES } from "../lib/detect.js";
 import { RssRoutePatternModel } from "../domain/rss_route.js";
 import {
   SCRIPT_LOG_MAX_LINES,
@@ -405,6 +408,11 @@ export async function execute_script_inner(
   output_limit = SCRIPT_OUTPUT_BYTES,
 ) {
   task_signal?.throwIfAborted();
+  const clip_request = script_type(script, route_metadata.kind ?? route_metadata.script_type) === "clip";
+  if (clip_request) output_limit = ClipModel.MAX_BYTES * 3;
+  const detect_request = script_type(script, route_metadata.kind ?? route_metadata.script_type) === "detect";
+  if (detect_request) output_limit = DETECT_RESULT_BYTES;
+  request_context = { ...request_context, previous: normalize_detect_previous(request_context?.previous) };
   const QuickJS = await get_quickjs_module();
   const runtime = QuickJS.newRuntime();
   const vm = runtime.newContext();
@@ -422,6 +430,14 @@ export async function execute_script_inner(
     });
     vm.setProp(vm.global, "__getCookies", get_cookies);
     get_cookies.dispose();
+    const detect = promises.bind("detect", async (operation_handle, value_handle) => {
+      task_signal?.throwIfAborted();
+      const operation = vm.getString(operation_handle), value = JSON.parse(vm.getString(value_handle));
+      const data = operation === "snapshot" ? normalize_detect_snapshot(value)
+        : operation === "compare" ? compare_detect_snapshots(value.previous, value.current) : (() => { throw new Error("未知检测操作"); })();
+      return vm.newString(JSON.stringify(data));
+    });
+    vm.setProp(vm.global, "__detectOperation", detect); detect.dispose();
     const navigate = promises.bind("puppeteer.navigate", async spec_handle => {
       task_signal?.throwIfAborted();
       if (!puppeteer_navigate) throw new Error("Puppeteer 不可用，请配置 Worker 的 BROWSER 绑定或提供 puppeteer.navigate mock");
@@ -636,7 +652,7 @@ export async function execute_script_inner(
     }
     result.value.dispose();
     const result_handle = vm.getProp(vm.global, "__result");
-    const output = vm.getString(result_handle);
+    let output = vm.getString(result_handle);
     result_handle.dispose();
     if (output.length === 0) {
       throw new ScriptError("output", "脚本返回了空内容");
@@ -646,6 +662,9 @@ export async function execute_script_inner(
     }
     // 宿主再次校验响应格式与代理白名单，防止绕过沙箱结果段。
     try {
+      const value = JSON.parse(output);
+      if (clip_request || value?.kind === "clip") output = JSON.stringify(normalize_clip_snapshot(value));
+      if (detect_request || value?.kind === "detect") output = JSON.stringify(normalize_detect_result(value, request_context.previous));
       script_output(route_metadata, JSON.parse(output));
     } catch (failure) {
       throw new ScriptError(

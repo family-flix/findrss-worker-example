@@ -232,7 +232,7 @@ export function ScriptAgentModel({
       }
       const context = get_context();
       if (!context.ready) {
-        error.set("等待当前保存或调试完成后再发送");
+        error.set(context.error || "等待当前保存或调试完成后再发送");
         return;
       }
       const text = prompt.value.trim();

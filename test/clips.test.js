@@ -1,7 +1,7 @@
+import { read_script } from "./support/script_sources.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { register } from "node:module";
-import { readFileSync } from "node:fs";
 import { RepositoryClip } from "../server/repository/clip.js";
 import { ServiceClip } from "../server/service/durable_object/clips.js";
 import { ServiceBackgroundTasks } from "../server/service/durable_object/background_tasks.js";
@@ -11,12 +11,11 @@ import { snapshot_store } from "./support/snapshot_store.js";
 import { read_clip_json } from "../server/service/worker/clips.js";
 
 register("./support/quickjs_wasm_hook.js", import.meta.url);
-const { create_clip_loader } = await import("../server/infra/clip_snapshot.js");
 const { route } = await import("../durable_object_router.js");
 const { default: api } = await import("../api.js");
 const { create_worker } = await import("../router.js");
 
-const source = readFileSync(new URL("../examples/scripts/region_clip.js", import.meta.url), "utf8");
+const source = read_script("clip/website.js");
 const input = { title: "天气卡片", url: "https://example.com/weather", selector: "#weather", enabled: false };
 const snapshot = text => ({ html: `<div style="color:red!important">${text}<script>steal()</script></div>`, stats: { width: 320, height: 180, node: "div#weather", image_missing: 1 } });
 function fixture(t, load_snapshot = async () => snapshot("晴")) {
@@ -137,32 +136,6 @@ test("HTML 清理移除脚本、事件、外部资源及交互入口，保留内
   assert.doesNotMatch(html, /<script|<style|iframe|onclick|onerror|https:\/\/evil|javascript:|class=/i);
   assert.match(html, /color:red/); assert.match(html, /data:image\/png/); assert.match(html, /href="#icon"/); assert.match(html, /disabled/);
   assert.throws(() => sanitize_clip_html("<script>nothing()</script>"), /可显示/);
-});
-
-test("区域剪藏脚本通过 ctx.puppeteer.navigate 渲染并提取选区，稳定 ID 与取消信号透传", async () => {
-  assert.equal(create_clip_loader(null, source), null);
-  const record = { ...input, id: "stable", viewport_width: 1440, viewport_height: 900, wait_ms: 500 };
-  const controller = new AbortController();
-  let args;
-  const loader = create_clip_loader(async (...values) => {
-    args = values;
-    return { ...snapshot("渲染后的选区"), ok: true };
-  }, source);
-  const result = await loader(record, controller.signal);
-  assert.match(result.html, /渲染后的选区/); assert.match(result.html, /color:red!important/);
-  assert.equal(args[0], input.url);
-  assert.deepEqual(args[1], { viewport: { width: 1440, height: 900 }, selector: input.selector,
-    wait_ms: 500, args: [input.selector, { id_prefix: "stable" }] });
-  assert.equal(typeof args[2], "string");
-  assert.match(args[2], /getComputedStyle/);
-  assert.equal(args[3], controller.signal);
-  const large_html = "<div>" + "x".repeat(3 * 1024 * 1024) + "</div>";
-  const large_loader = create_clip_loader(async () => ({ ok: true, html: large_html }), source);
-  assert.equal((await large_loader(record)).html, large_html);
-  for (const value of [{ ok: false, error: "未找到页面节点" }, null]) {
-    const failing = create_clip_loader(async () => value, source);
-    await assert.rejects(failing(record), /未找到页面节点|节点提取失败/);
-  }
 });
 
 test("管理 API 要求认证，公开 iframe 经外层路由支持跨站 GET 与 HEAD", async t => {

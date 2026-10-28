@@ -12,6 +12,7 @@ export function ScriptDebugPreviewModel(debug, fallback_kind = "") {
   try { value = JSON.parse(debug?.output); } catch {}
   const kind = typeof value?.kind === "string" ? value.kind
     : value?.url ? "img" : fallback_kind;
+  if (kind === "clip") return { kind, src: "", error: "", html: debug?.phase === "ok" && typeof value?.html === "string" ? value.html : "" };
   if (!["img", "video", "audio"].includes(kind)) return { kind, src: "", error: "" };
   if (!debug?.output || debug.phase !== "ok") return { kind, src: "", error: "" };
   try {

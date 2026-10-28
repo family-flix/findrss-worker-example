@@ -99,6 +99,10 @@ class HotRankScript {
       ) {
         throw script_error("热榜必须返回标题、来源链接和 entries 数组");
       }
+      const category = snapshot.category ?? "";
+      if (typeof category !== "string" || category.trim().length > 32 || /[\u0000-\u001f\u007f]/.test(category)) {
+        throw script_error("热榜 category 必须是最多 32 字符且不含控制字符的字符串");
+      }
       const seen = new Set();
       const entries = snapshot.entries.map((entry) => {
         if (
@@ -134,10 +138,16 @@ class HotRankScript {
         ) {
           throw script_error("热度需要 value（数字或 null）、unit、text");
         }
+        const thumbnail = entry.thumbnail;
+        if (thumbnail != null && thumbnail !== "" && (typeof thumbnail !== "string"
+          || !/^https?:\/\/[^/?#@\s\\\u0000-\u001f\u007f<>"']+(?:[/?#][^\s\\\u0000-\u001f\u007f<>"']*)?$/i.test(thumbnail))) {
+          throw script_error("热榜 thumbnail 必须是无凭据的 HTTP(S) 绝对地址");
+        }
         return {
           id: entry.id,
           title: entry.title.trim(),
           link: entry.link,
+          ...(thumbnail ? { thumbnail } : {}),
           rank: entry.rank,
           pinned,
           heat: { value: heat.value, unit: heat.unit, text: heat.text },
@@ -155,6 +165,7 @@ class HotRankScript {
         kind: "hot_rank",
         title: snapshot.title,
         link: snapshot.link,
+        ...(category.trim() ? { category: category.trim() } : {}),
         observed_at: new Date().toISOString(),
         entries,
       });
@@ -162,9 +173,58 @@ class HotRankScript {
   }
 }
 
+class ClipScript {
+  async fetch(ctx) { return Result.Err("子类必须实现 fetch(ctx)，返回 Result<{ title, link, html }>", "UPSTREAM_INVALID_RESPONSE"); }
+  async run(ctx) {
+    try {
+      const result = await this.fetch(ctx);
+      if (!result || typeof result !== "object" || !("data" in result) || !("error" in result)) throw script_error("fetch(ctx) 必须返回 Result");
+      if (result.error) return result;
+      const value = result.data;
+      if (!value || typeof value.title !== "string" || !value.title.trim() || typeof value.link !== "string"
+        || typeof value.html !== "string" || !value.html.trim()) throw script_error("剪藏必须返回标题、来源链接和 html");
+      return Result.Ok({ kind: "clip", title: value.title.trim(), link: value.link, html: value.html,
+        captured_at: new Date().toISOString(), ...(value.stats === undefined ? {} : { stats: value.stats }) });
+    } catch (error) { return Result.Err(error); }
+  }
+}
+class DetectScript {
+  async fetch(ctx) { return Result.Err("子类必须实现 fetch(ctx)", "UPSTREAM_INVALID_RESPONSE"); }
+  async normalize(data, ctx) { return Result.Ok(data); }
+  async compare(previous, current, ctx) { return ctx.detect.compare(previous, current); }
+  async run(ctx) {
+    try {
+      const fetched = await this.fetch(ctx);
+      if (!fetched || typeof fetched !== "object" || !("data" in fetched) || !("error" in fetched)) throw script_error("fetch(ctx) 必须返回 Result");
+      if (fetched.error) return fetched;
+      const normalized = await this.normalize(fetched.data, ctx);
+      if (!normalized || typeof normalized !== "object" || !("data" in normalized) || !("error" in normalized)) throw script_error("normalize(data, ctx) 必须返回 Result");
+      if (normalized.error) return normalized;
+      const data = normalized.data;
+      const current = await ctx.detect.snapshot(data?.snapshot);
+      if (current.error) return current;
+      const previous = ctx.previous?.snapshot ?? null;
+      let compared = await ctx.detect.compare(previous, current.data);
+      if (compared.error) return compared;
+      if (!["initialized", "inconclusive"].includes(compared.data.status) && this.compare !== DetectScript.prototype.compare) {
+        compared = await this.compare(previous, current.data, ctx);
+        if (!compared || typeof compared !== "object" || !("data" in compared) || !("error" in compared)) throw script_error("compare(previous,current,ctx) 必须返回 Result");
+        if (compared.error) return compared;
+      }
+      if (!Array.isArray(compared.data?.changes)) throw script_error("compare 必须返回 { changes, matches? }");
+      const status = ["initialized", "inconclusive"].includes(compared.data.status) ? compared.data.status : compared.data.changes.length ? "changed" : "unchanged";
+      return Result.Ok({ kind: "detect", schema_version: 1, title: data.title, link: data.link, status,
+        snapshot: current.data, changes: compared.data.changes, matches: compared.data.matches || [], issues: compared.data.issues || [] });
+    } catch (error) { return Result.Err(error); }
+  }
+}
+
 Object.defineProperties(globalThis, {
   RSSScript: { value: RSSScript },
   HotRankScript: { value: HotRankScript },
+  ClipScript: { value: ClipScript },
+  DetectScript: { value: DetectScript },
 });
-})();`;
+})();
+`;
 }

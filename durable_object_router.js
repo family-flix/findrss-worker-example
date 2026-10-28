@@ -109,6 +109,21 @@ async function dispatch(request, app) {
     return admin_network_test(new Request(url, request), null, url.pathname.endsWith("/curl"), () => app.scripts.rss_cookies());
   }
   if (url.pathname === "/_admin/events/ws" && request.method === "GET") return app.events.connect(request);
+  if (url.pathname === "/_admin/detections") {
+    if (request.method === "GET") return app.detections.list();
+    if (request.method === "POST") return app.detections.create(await read_clip_json(request, 32768, "检测"));
+    throw do_error("method not allowed", 405);
+  }
+  const detection = url.pathname.match(/^\/_admin\/detections\/([a-f0-9-]{36})(?:\/(run|reset|runs)(?:\/([a-f0-9-]{36}))?)?$/);
+  if (detection) {
+    const [, id, action = "", run_id] = detection;
+    if (!action && request.method === "PATCH") return app.detections.update(id, await read_clip_json(request, 32768, "检测"));
+    if (!action && request.method === "DELETE") return app.detections.delete(id);
+    if (action === "run" && !run_id && request.method === "POST") return app.detections.run(id);
+    if (action === "reset" && !run_id && request.method === "POST") return app.detections.reset(id);
+    if (action === "runs" && request.method === "GET") return run_id ? app.detections.result(id, run_id) : app.detections.history(id);
+    throw do_error("method not allowed", 405);
+  }
   if (url.pathname === "/_admin/clips") {
     if (request.method === "GET") return app.clips.list();
     if (request.method === "POST") return app.clips.create(await read_clip_json(request, 16384));
@@ -175,6 +190,10 @@ async function dispatch(request, app) {
     if (request.method === "GET" && !id) return app.mcp_tokens.list(resource);
     if (request.method === "POST" && action === "revoke") return app.mcp_tokens.revoke(id);
     if (request.method === "GET" && action === "calls") return app.mcp_tokens.calls(id);
+    throw new DurableObjectError("method not allowed", 405);
+  }
+  if (url.pathname === "/_admin/hot/snapshot") {
+    if (request.method === "POST") return app.hot_snapshots.start();
     throw new DurableObjectError("method not allowed", 405);
   }
   if (url.pathname === "/_admin/background-tasks") {
@@ -500,7 +519,7 @@ async function dispatch(request, app) {
   if (script_match && request.method === "DELETE") {
     return app.scripts.delete_script(script_match[1]);
   }
-  const rss_route_match = url.pathname.match(/^\/_(?:public|admin)\/feed\/(rss|atom|debug|raw)(\/.*)$/);
+  const rss_route_match = url.pathname.match(/^\/_(?:public|admin)\/feed\/(rss|atom|debug|raw|hot|clip|detect)(\/.*)$/);
   if (rss_route_match && request.method === "GET") {
     // 特例 3：feed 需自定义 Content-Type / Cache-Control，不能经 json_response。
     const feed = await app.scripts.serve_rss_route(
@@ -508,7 +527,7 @@ async function dispatch(request, app) {
       rss_route_match[2],
       request,
     );
-    if (rss_route_match[1] === "raw") return feed;
+    if (["raw", "hot", "clip", "detect"].includes(rss_route_match[1])) return feed;
     if (feed.rss_debug) return debug_response({ ...feed.rss_debug, output: feed.body }, 200, feed.headers);
     return new Response(feed.body, { headers: feed.headers });
   }

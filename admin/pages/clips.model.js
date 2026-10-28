@@ -13,6 +13,8 @@ export function ClipsModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
     renderer_available: ui.ref(true), form_open: ui.ref(false), editing_id: ui.ref(""), form_error: ui.ref(""),
     title: ui.ref(""), url: ui.ref(""), selector: ui.ref(""), viewport_width: ui.ref("1440"), viewport_height: ui.ref("900"), wait_ms: ui.ref("1000"),
     selected: ui.ref(null), pending_ids: ui.ref([]),
+    scripts: ui.ref([]), script_options: ui.ref([{ value: "", label: "通用网页区域" }]),
+    script_id: ui.ref(""), script_url: ui.ref(""),
   };
   const policy = PollPolicyModel({ ui });
   let controller = null, stop_realtime = null, load_pending = false, visible = false, sequence = 0, epoch = 0;
@@ -47,6 +49,9 @@ export function ClipsModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
         if (!response.ok) throw new Error(result.error || "剪藏加载失败");
         if (!Array.isArray(result.clips)) throw new Error("剪藏接口返回格式错误");
         state.clips.as(result.clips); state.renderer_available.as(Boolean(result.renderer_available));
+        state.scripts.as(Array.isArray(result.scripts) ? result.scripts : []);
+        state.script_options.as([{ value: "", label: "通用网页区域" }, ...state.scripts.value
+          .filter(script => script.id !== ClipModel.WEBSITE_SCRIPT_ID).map(script => ({ value: script.id, label: script.name }))]);
         const selected = state.selected.value;
         if (selected) {
           const latest = result.clips.find(clip => clip.id === selected.id);
@@ -73,11 +78,21 @@ export function ClipsModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
       state.form_open.as(false); state.selected.as(null);
     },
     set(key, value) {
-      if (!state.busy.value && ["title", "url", "selector", "viewport_width", "viewport_height", "wait_ms"].includes(key)) state[key].as(value);
+      if (state.busy.value) return;
+      if (["title", "url", "selector", "viewport_width", "viewport_height", "wait_ms", "script_url"].includes(key)) state[key].as(value);
+      if (key === "script_id") {
+        state.script_id.as(value);
+        state.script_url.as(state.scripts.value.find(script => script.id === value)?.routes[0]?.example || "");
+      }
     },
     open(clip = null) {
       if (state.busy.value) return;
       state.editing_id.as(clip?.id || "");
+      state.script_id.as(clip?.script_id === ClipModel.WEBSITE_SCRIPT_ID ? "" : clip?.script_id || "");
+      state.script_url.as(clip?.script_url || "");
+      if (state.script_id.value && !state.script_options.value.some(option => option.value === state.script_id.value)) {
+        state.script_options.as([...state.script_options.value, { value: state.script_id.value, label: "原剪藏脚本（当前不可用）" }]);
+      }
       for (const [key, fallback] of Object.entries({ title: "", url: "", selector: "", viewport_width: 1440, viewport_height: 900, wait_ms: 1000 })) state[key].as(String(clip?.[key] ?? fallback));
       policy.methods.reset(clip?.poll_policy); state.form_error.as(""); state.form_open.as(true);
     },
@@ -92,7 +107,8 @@ export function ClipsModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
       state.form_error.as("");
       let fields;
       try {
-        fields = { title: state.title.value, url: state.url.value, selector: state.selector.value,
+        fields = { title: state.title.value, script_id: state.script_id.value, script_url: state.script_url.value,
+          url: state.url.value, selector: state.selector.value,
           viewport_width: Number(state.viewport_width.value), viewport_height: Number(state.viewport_height.value),
           wait_ms: Number(state.wait_ms.value), poll_policy: policy.methods.value() };
         const checked = ClipModel.validate(fields);

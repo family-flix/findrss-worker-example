@@ -81,6 +81,7 @@ export class XiaoxunScriptAgent {
               emit({ type: "status", message: "正在运行草稿 Debug…" });
               const debug = await this.debug_draft({ script, request_url: input.request_url, route: input.route,
                 ...(input.version === undefined ? {} : { version: input.version }),
+                ...(input.previous === undefined ? {} : { previous: input.previous }),
                 ...(input.cookie_grant_id === undefined ? {} : { cookie_grant_id: input.cookie_grant_id }) });
               check();
               emit({ type: "debug", result: debug, revision, request_url: input.request_url });

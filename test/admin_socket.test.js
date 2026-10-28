@@ -20,6 +20,16 @@ function fixture() {
   return { hub, socket, command, ctx, timers };
 }
 
+test("内容检测实时订阅接收任务更新，仓库写入携带检测记录 ID", () => {
+  const f = fixture(), socket = f.socket();
+  f.command(socket, { type: "subscribe", topics: ["detections.changed"] });
+  const repo = { detections: { save() {} } };
+  observe_admin_changes(repo, f.hub);
+  repo.detections.save({ id: "detect-one" });
+  f.timers.shift()();
+  assert.deepEqual(socket.sent[0].events, [{ type: "detections.changed", ids: ["detect-one"] }]);
+});
+
 test("空闲不读取数据库，变化合并且只推送订阅主题，休眠重建保留订阅", () => {
   const f = fixture(), first = f.socket(["devices.changed"]), second = f.socket(["clips.changed"]);
   let writes = 0;

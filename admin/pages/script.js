@@ -735,6 +735,12 @@ function ScriptDebugResultContentView({ store: vm$, kind, preview }) {
                 },
               ]
             : []),
+          ...(kind === "clip" ? [{ id: "clip", label: "剪藏预览", panel_id: "script-debug-clip-panel",
+            get content() { return [panel("clip", [View({ as: "iframe", class: "box-border w-full bg-surface",
+              style: { border: "0", height: "min(65dvh, 700px)" },
+              attributes: { n: "script-debug-clip-preview", title: "剪藏预览", sandbox: "", referrerpolicy: "no-referrer",
+                srcdoc: computed(preview, value => value.html || "") } })])]; },
+          }] : []),
           ...(["img", "video", "audio"].includes(kind)
             ? [
                 {
@@ -775,6 +781,12 @@ function ScriptDebugRouteView({ store: vm$, route, panel_id }) {
           attributes: { n: "script-debug-toolbar" },
         },
         [
+          Show({ when: computed(vm$.state.draft_type, kind => kind === "detect"), ok: () => View({ class: "grid gap-space-2", attributes: { n: "script-detect-previous" } }, [
+            View({ as: "label", class: "text-sm", attributes: { n: "script-detect-previous-label", for: "script-detect-previous-json" } }, ["上次内容快照 JSON（留空表示首次检测）"]),
+            View({ as: "textarea", class: "box-border w-full rounded-control", style: { "min-height": "110px" },
+              attributes: { n: "script-detect-previous-json", id: "script-detect-previous-json", spellcheck: "false", "aria-label": "上次内容快照 JSON" },
+              value: vm$.state.debug_previous, onInput: event => vm$.methods.set_debug_previous(event.target.value) }),
+          ]) }),
           View(
             {
               class: "box-border grid items-center gap-space-2",
@@ -1322,7 +1334,7 @@ function ScriptInstallView({ store: vm$ }) {
                     [
                       "kind",
                       "脚本类型",
-                      (metadata) => (metadata.kind === "hot" ? "热榜" : "RSS"),
+                      (metadata) => (metadata.kind === "detect" ? "内容检测" : metadata.kind === "clip" ? "剪藏" : metadata.kind === "hot" ? "热榜" : "RSS"),
                     ],
                     ["website", "网站", (metadata) => metadata.url || "未声明"],
                     [
@@ -3044,6 +3056,8 @@ function ScriptApplicationView(embedded = false, store) {
         items: [
           { id: "rss", label: "RSS" },
           { id: "hot", label: "Hot" },
+          { id: "clip", label: "剪藏" },
+          { id: "detect", label: "内容检测" },
         ].map((item) => ({
           ...item,
           panel_id: "script-type-panel-" + item.id,

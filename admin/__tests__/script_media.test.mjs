@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ScriptDebugPreviewModel } from "../domain/script_preview.js";
 
+test("剪藏预览只使用成功 Debug 的 HTML，失败结果不保留旧内容", () => {
+  const output = JSON.stringify({ kind: "clip", html: "<div>快照</div>" });
+  assert.equal(ScriptDebugPreviewModel({ phase: "ok", output }).html, "<div>快照</div>");
+  assert.equal(ScriptDebugPreviewModel({ phase: "runtime", output }).html, "");
+});
+
 test("代码返回的 kind 优先于脚本分类和路由推断，未声明 kind 的旧图片仍兼容", () => {
   for (const kind of ["rss", "img", "video", "audio"]) {
     const result = ScriptDebugPreviewModel({ phase: "ok", output: JSON.stringify({ kind, url: "https://cdn.example/media" }) }, "rss");

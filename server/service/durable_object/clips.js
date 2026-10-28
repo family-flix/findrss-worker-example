@@ -7,8 +7,8 @@ import { do_error, do_result } from "./error.js";
 
 export class ServiceClip {
   constructor({ repo, storage, object_store = null, load_snapshot = null, background_tasks,
-    snapshot_settings = () => null, schedule_alarm = async () => {} }) {
-    Object.assign(this, { repo, storage, object_store, load_snapshot, background_tasks, snapshot_settings, schedule_alarm });
+    snapshot_settings = () => null, schedule_alarm = async () => {}, script_routes = () => [], validate_script = () => {} }) {
+    Object.assign(this, { repo, storage, object_store, load_snapshot, background_tasks, snapshot_settings, schedule_alarm, script_routes, validate_script });
     this.pending = new Map();
   }
   next_at(row) {
@@ -19,7 +19,7 @@ export class ServiceClip {
     return { ...ClipModel(row).toValue(), next_snapshot_at: this.next_at(row),
       poll_effective: snapshot_policy(row, this.snapshot_settings()), refreshing: this.pending.has(row.id) };
   }
-  list() { return { clips: this.repo.list().map(row => this.value(row)), renderer_available: Boolean(this.load_snapshot) }; }
+  list() { return { clips: this.repo.list().map(row => this.value(row)), scripts: this.script_routes(), renderer_available: Boolean(this.load_snapshot) }; }
   find(id) {
     const row = this.repo.find(id);
     if (!row) throw do_error("剪藏记录不存在", 404);
@@ -28,6 +28,7 @@ export class ServiceClip {
   input(body) {
     const checked = ClipModel.validate(body);
     if (!checked.ok) throw do_error(checked.error, 400);
+    this.validate_script(checked.fields);
     return checked.fields;
   }
   async create(body) {
@@ -42,6 +43,7 @@ export class ServiceClip {
   }
   async update(id, body) {
     const before = this.find(id), fields = this.input({ ...ClipModel(before).toValue(), ...body });
+    if (fields.script_id === before.script_id && fields.script_url === before.script_url) fields.url = before.url;
     this.repo.update({ ...fields, id, config_version: crypto.randomUUID(),
       poll_updated_at: fields.poll_policy_json === before.poll_policy_json ? before.poll_updated_at : Date.now() });
     await this.schedule_alarm();
@@ -55,7 +57,7 @@ export class ServiceClip {
     if (existing) return existing;
     if (this.pending.size >= this.concurrency()) throw do_error("剪藏采集任务已满，请稍后重试", 409);
     this.repo.attempt(id, Date.now());
-    const task = this.background_tasks.start("clip:" + id, { kind: "clip", title: "剪藏快照：" + row.title, target: row.url },
+    const task = this.background_tasks.start("clip:" + id, { kind: "clip", title: "剪藏快照：" + row.title, target: row.script_url || row.url },
       async signal => {
         try {
           const result = await this.load_snapshot(row, signal);
@@ -112,9 +114,10 @@ export class ServiceClip {
     try {
       this.storage.transactionSync(() => {
         signal?.throwIfAborted();
+        body.assert_current?.();
         previous = this.find(id);
         if (previous.config_version !== before.config_version) throw do_error("剪藏规则已变更，跳过旧采集结果", 409);
-        this.repo.save({ id, html: object_key ? "" : html, object_key, byte_size,
+        this.repo.save({ id, url: body.link, html: object_key ? "" : html, object_key, byte_size,
           node: String(stats.node || "").slice(0, 200), width: number(stats.width, 32767), height: number(stats.height, 32767),
           image_missing: number(stats.image_missing, 6000), saved_at: Math.max(Date.now(), previous.saved_at + 1), fingerprint, adaptive_interval });
       });

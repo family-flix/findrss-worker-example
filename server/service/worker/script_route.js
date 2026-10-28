@@ -2,8 +2,8 @@ import { public_rss_route } from "./rss.js";
 import { script_media_response } from "./media_proxy.js";
 import { script_output } from "../../lib/script_output.js";
 
-export async function public_script_route(env, request) {
-  const response = await public_rss_route(env, request, new URL(request.url).pathname, "raw");
+export async function public_script_route(env, request, route_pathname = new URL(request.url).pathname, format = "raw") {
+  const response = await public_rss_route(env, request, route_pathname, format);
   if (!response.ok) return response;
   const { raw, route, version, headers } = await response.json();
   const result = script_output(route, raw);

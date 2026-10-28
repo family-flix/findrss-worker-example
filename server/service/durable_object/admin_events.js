@@ -19,6 +19,7 @@ export function observe_admin_changes(repo, events) {
   observe("calls", ["insert", "assign", "set_running", "set_completed", "set_failed", "set_requeued", "release"], ["tasks.changed", "devices.changed"]);
   observe("discovery", ["insert", "update", "delete"], ["discovery.changed"], () => null);
   observe("discovery", ["snapshot_save", "snapshot_delete", "avatar_put", "avatar_delete", "set_avatar_ts"], ["discovery.changed"]);
+  observe("detections", ["insert", "update", "save", "delete"], ["detections.changed"]);
   observe("clips", ["insert", "update", "save", "failure", "delete"], ["clips.changed"]);
   observe("statistics", ["put_snapshot"], ["overview.changed"], () => null);
   observe("access_tokens", ["insert", "set_balance_granted", "set_balance_used", "set_expiry", "revoke", "revoke_for_user"], ["tokens.changed"]);

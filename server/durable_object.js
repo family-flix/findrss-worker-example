@@ -75,12 +75,12 @@ import { RepositoryCookiePushSettings } from "./repository/cookie_push_settings.
 import { ServiceCookiePushSettings } from "./service/durable_object/cookie_push_settings.js";
 import { RepositoryWebhookSettings } from "./repository/webhook_settings.js";
 import { ServiceWebhookSettings } from "./service/durable_object/webhook_settings.js";
-import { seed_default_data } from "./service/durable_object/default_data.js";
-import { apple_script } from "./infra/builtin_script_sources.js";
-import clip_script_source from "../examples/scripts/region_clip.js" with { type: "text" };
+import { seed_default_data, migrate_clip_scripts } from "./service/durable_object/default_data.js";
+import { apple_script, clip_script_source } from "./infra/builtin_script_sources.js";
 import { RepositoryClip } from "./repository/clip.js";
+import { ServiceDetection } from "./service/durable_object/detections.js";
+import { RepositoryDetection } from "./repository/detection.js";
 import { ServiceClip } from "./service/durable_object/clips.js";
-import { create_clip_loader } from "./infra/clip_snapshot.js";
 import { create_puppeteer_navigate } from "./infra/script_puppeteer.js";
 
 /**
@@ -155,6 +155,10 @@ export class APIDurableObject extends DurableObject {
     if (schema_version < API_SCHEMA_VERSION) {
       this.ctx.storage.transactionSync(() => migrate_script_tables(this.ctx.storage.sql));
       this.ctx.storage.sql.exec(API_SCHEMA_SQL);
+      const clip_columns = this.ctx.storage.sql.exec("PRAGMA table_info(clips)").toArray();
+      for (const name of ["script_id", "script_url"]) {
+        if (!clip_columns.some(column => column.name === name)) this.ctx.storage.sql.exec(`ALTER TABLE clips ADD COLUMN ${name} TEXT NOT NULL DEFAULT ''`);
+      }
       const background_task_columns = this.ctx.storage.sql.exec("PRAGMA table_info(background_tasks)").toArray();
       if (!background_task_columns.some(column => column.name === "source_id")) {
         this.ctx.storage.sql.exec("ALTER TABLE background_tasks ADD COLUMN source_id TEXT NOT NULL DEFAULT ''");
@@ -407,6 +411,7 @@ export class APIDurableObject extends DurableObject {
       mcp_oauth: new RepositoryMcpOauth({ sql: this.ctx.storage.sql, transaction: action => this.ctx.storage.transactionSync(action) }),
       discovery: new RepositoryDiscoverySource({ sql: this.ctx.storage.sql }),
       clips: new RepositoryClip({ sql: this.ctx.storage.sql }),
+      detections: new RepositoryDetection({ sql: this.ctx.storage.sql }),
       redemption: new RepositoryRedemption({ sql: this.ctx.storage.sql }),
       rss_cookie_grants: new RepositoryRssCookieGrant({ sql: this.ctx.storage.sql }),
       rss_cookies: new RepositoryRssCookie({ sql: this.ctx.storage.sql }),
@@ -450,14 +455,21 @@ export class APIDurableObject extends DurableObject {
     this.app.background_tasks = new ServiceBackgroundTasks({ repo: this.repo.background_tasks, wait_until: ports.wait_until,
       notify: task => {
         this.app.events.invalidate("background-tasks.changed", task?.source_id || task?.id || null);
-        if (task?.kind === "clip") this.app.events.invalidate("clips.changed");
+        if (task?.kind === "detect") this.app.events.invalidate("detections.changed");
+        else if (task?.kind === "clip") this.app.events.invalidate("clips.changed");
         else if (task?.source_id) this.app.events.invalidate("discovery.changed", task.source_id);
       } });
     this.app.webhook_settings = new ServiceWebhookSettings({ repo: this.repo.webhook_settings,
       credentials: create_script_agent_credentials(env.ADMIN_PASSWORD || "") });
     this.app.snapshot_settings = new ServiceSnapshotSettings({ repo: this.repo.snapshot_settings, schedule_alarm: ports.schedule_alarm });
+    this.app.detections = new ServiceDetection({ repo: this.repo.detections, storage: this.ctx.storage,
+      object_store: ports.object_store, load_snapshot: (record, previous, signal) => this.app.scripts.execute_detection(record, previous, signal),
+      script_routes: () => this.app.scripts.detect_routes(), validate_script: record => this.app.scripts.detect_source(record),
+      background_tasks: this.app.background_tasks, snapshot_settings: () => this.app.snapshot_settings.settings(), schedule_alarm: ports.schedule_alarm });
     this.app.clips = new ServiceClip({ repo: this.repo.clips, storage: this.ctx.storage,
-      object_store: ports.object_store, load_snapshot: create_clip_loader(ports.puppeteer_navigate, clip_script_source),
+      object_store: ports.object_store, load_snapshot: (record, signal) => this.app.scripts.execute_clip_snapshot(record, signal),
+      script_routes: () => this.app.scripts.clip_routes(),
+      validate_script: record => this.app.scripts.clip_source(record),
       background_tasks: this.app.background_tasks, snapshot_settings: () => this.app.snapshot_settings.settings(),
       schedule_alarm: ports.schedule_alarm });
     this.app.cookie_push_settings = new ServiceCookiePushSettings({ repo: this.repo.cookie_push_settings,
@@ -485,6 +497,7 @@ export class APIDurableObject extends DurableObject {
       await this.app.device_tokens.import_legacy(env.DEVICE_TOKEN);
       await this.app.cookie_push_settings.import_legacy(cookie_push_uuid, cookie_push_key);
       await seed_default_data({ repo: this.repo, storage: this.ctx.storage, script: apple_script });
+      await migrate_clip_scripts({ repo: this.repo, storage: this.ctx.storage, script: clip_script_source });
       try {
         if (!await this.ctx.storage.get("script_storage_migrated_v1")) {
           await this.app.scripts.migrate_script_storage();
@@ -583,6 +596,7 @@ export class APIDurableObject extends DurableObject {
       for (const [name, run] of [
         ["discovery snapshot", () => this.app.discovery.refresh_due_snapshots()],
         ["RSS snapshot", () => this.app.scripts.refresh_due_snapshots()],
+        ["content detection", () => this.app.detections.refresh_due_snapshots()],
         ["clip snapshot", () => new URL(request.url).pathname.startsWith("/_public/clips/")
           ? undefined : this.app.clips.refresh_due_snapshots()],
       ]) {
@@ -633,6 +647,7 @@ export class APIDurableObject extends DurableObject {
       for (const [name, run] of [
         ["discovery snapshot", () => this.app.discovery.refresh_due_snapshots()],
         ["RSS snapshot", () => this.app.scripts.refresh_due_snapshots()],
+        ["content detection", () => this.app.detections.refresh_due_snapshots()],
         ["clip snapshot", () => this.app.clips.refresh_due_snapshots()],
         ["discovery catalog", () => this.app.discovery.ensure_catalog()],
       ]) {
@@ -708,9 +723,10 @@ export class APIDurableObject extends DurableObject {
     const next_snapshot = this.app.discovery.next_snapshot_at();
     const next_feed = this.app.scripts?.next_snapshot_at();
     const next_clip = this.app.clips?.next_snapshot_at();
+    const next_detection = this.app.detections?.next_snapshot_at();
     const now = Date.now();
     const next_token_expiry = this.repo.device_tokens.min_expires_at(now);
-    const desired = Math.min(next_lease ?? Infinity, next_snapshot ?? Infinity, next_feed ?? Infinity, next_clip ?? Infinity, next_token_expiry ?? Infinity,
+    const desired = Math.min(next_lease ?? Infinity, next_snapshot ?? Infinity, next_feed ?? Infinity, next_clip ?? Infinity, next_detection ?? Infinity, next_token_expiry ?? Infinity,
       this.app.scripts?.migration_pending ? now + 10000 : Infinity, now + MAINTENANCE_MILLISECONDS);
     const current = await this.ctx.storage.getAlarm();
     // 保留仍有效的更早唤醒；滞留超过一分钟的过期 alarm 重新登记以恢复调度。

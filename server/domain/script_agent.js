@@ -1,3 +1,4 @@
+import { normalize_detect_previous } from "../lib/detect.js";
 import { public_http_url } from "../lib/proxy_url.js";
 import { valid_identifier } from "../lib/identifiers.js";
 import { ScriptVersionModel } from "./script_version.js";
@@ -74,14 +75,15 @@ export function ScriptAgentRunRequestModel(state = {}) {
   const provider_id = String(state.provider_id || ""), model_id = String(state.model_id || "");
   const messages = Object.freeze((state.messages || []).map(message => Object.freeze({ role: message.role, content: message.content })));
   const authorization_fields = { ...(state.version === undefined ? {} : { version: state.version }),
-    ...(state.cookie_grant_id === undefined ? {} : { cookie_grant_id: state.cookie_grant_id }) };
+    ...(state.cookie_grant_id === undefined ? {} : { cookie_grant_id: state.cookie_grant_id }),
+    ...(state.previous === undefined ? {} : { previous: state.previous }) };
   return Object.freeze({ run_id, script, request_url, route, revision, messages, provider_id, model_id, ...authorization_fields,
     toValue: () => ({ run_id, script, request_url, route, revision, provider_id, model_id, ...authorization_fields, messages: messages.map(message => ({ ...message })) }),
   });
 }
 ScriptAgentRunRequestModel.of = ScriptAgentRunRequestModel;
 ScriptAgentRunRequestModel.MAX_STEPS = 8;
-ScriptAgentRunRequestModel.MAX_MESSAGE_BYTES = 1024 * 1024;
+ScriptAgentRunRequestModel.MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
 ScriptAgentRunRequestModel.fromBody = body => {
   if (!body || typeof body !== "object" || !valid_identifier(body.run_id)) return fail("无效的对话运行标识");
   const parsed_version = ScriptVersionModel.parse(body.version);
@@ -100,7 +102,13 @@ ScriptAgentRunRequestModel.fromBody = body => {
   }
   if (bytes > 64 * 1024) return fail("对话历史超过 64KB，请新建对话");
   if (body.messages.at(-1).role !== "user" || !body.messages.at(-1).content.trim()) return fail("填写本次对话内容");
+  let previous;
+  if (body.previous !== undefined) {
+    try { previous = normalize_detect_previous(typeof body.previous === "string" ? body.previous.trim() ? JSON.parse(body.previous) : null : body.previous); }
+    catch (error) { return fail("上次内容快照无效：" + error.message); }
+  }
   return { ok: true, model: ScriptAgentRunRequestModel({ ...body,
+    ...(body.previous === undefined ? {} : { previous }),
     ...(body.version === undefined ? {} : { version: parsed_version.model.version }) }) };
 };
 ScriptAgentRunRequestModel.TOOLS = Object.freeze([

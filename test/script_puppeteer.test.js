@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
 import { register } from "node:module";
-import { readFileSync } from "node:fs";
 import { create_puppeteer_navigate } from "../server/infra/script_puppeteer.js";
 import { RssRouteCache } from "../server/infra/rss_cache.js";
 
@@ -108,27 +107,6 @@ test("真实 QuickJS 桥接导航、序列化提取函数，Result 只展开一�
     });
   assert.deepEqual(JSON.parse(result.output), { text: "渲染后的选区", color: "rgb(255, 0, 0)" });
   await assert.rejects(execute_script(source, {}, null, context), /BROWSER/);
-});
-
-test("区域剪藏示例可编译并在 QuickJS 中调用 navigate mock，mock 失败保留错误", async () => {
-  const clip_source = readFileSync(new URL("../examples/scripts/region_clip.js", import.meta.url), "utf8");
-  const compiled = await compile_script_module(clip_source);
-  assert.equal(compiled.error, "");
-  const metadata = { ...compiled.metadata, config: { url: "https://example.com", selector: "#weather" } };
-  for (const returned of ['({ ok: true, html: "<div style=\\"color:red\\">区域</div>", stats: { width: 320 } })',
-    'Result.Ok({ ok: true, html: "<div style=\\"color:red\\">区域</div>", stats: { width: 320 } })']) {
-    const result = await execute_script(clip_source, metadata, null, context, [], `({ puppeteer: {
-      navigate(url, options, evaluate) {
-        if (url !== "https://example.com" || options.selector !== "#weather" || !String(evaluate).includes("getComputedStyle")) throw new Error("参数丢失");
-        return ${returned};
-      }
-    } })`, null, undefined, () => assert.fail("mock 不能调用真实渲染器"));
-    assert.match(JSON.parse(result.output).html, /color:red/);
-  }
-  await assert.rejects(execute_script(clip_source, metadata, null, context, [],
-    '({ puppeteer: { navigate() { return { ok: false, error: "选区不可见" }; } } })'), /选区不可见/);
-  await assert.rejects(execute_script(source, {}, null, context, [],
-    '({ puppeteer: { navigate() { return Result.Err("渲染服务不可用"); } } })'), /渲染服务不可用/);
 });
 
 test("脚本正式请求、Debug 和测试运行共用注入的导航能力，Mock 覆盖真实能力", async () => {

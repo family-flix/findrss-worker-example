@@ -1,3 +1,4 @@
+import { clip_extract_source } from "./clip_extract.js";
 // 沙箱内 ctx/日志/结果段的源码构造器（纯字符串拼接，不依赖运行时）。
 //
 // 单独一个文件而不是放进 `script_sandbox.js`：后者在顶层
@@ -151,7 +152,8 @@ export function script_ctx_source({ has_invoke, debug = false }) {
     : `ctx.invoke = async () => {
     return Result.Err("测试运行未提供 invoke mock：请在 mock ctx 中声明 invoke(method, args) 后重试", "DEVICE_UNAVAILABLE");
   };`;
-  return `${script_log_source(debug)}
+  return `const __extractClip = (${clip_extract_source});
+${script_log_source(debug)}
 const __requestContext = JSON.parse(__requestContextJSON);
 const ctx = {
   route: JSON.parse(__routeMetadataJSON),
@@ -161,6 +163,12 @@ const ctx = {
   params: __requestContext.params,
   query: __requestContext.query,
   public_origin: __requestContext.public_origin || "",
+  detect: Object.freeze({
+    async snapshot(value) { try { return parseJSON(await __detectOperation("snapshot", JSON.stringify(value, (key, child) => {
+      if (typeof child === "number" && !Number.isFinite(child)) throw new Error("检测数值必须有限"); return child;
+    }))); } catch (error) { return Result.Err(error); } },
+    async compare(previous, current) { try { return parseJSON(await __detectOperation("compare", JSON.stringify({ previous, current }))); } catch (error) { return Result.Err(error); } },
+  }),
   async fetchText(url, options) {
     try { return Result.Ok(await __fetchText(url, options)); }
     catch (error) { return Result.Err(error); }
@@ -180,6 +188,23 @@ const ctx = {
         ...(evaluate === undefined ? {} : { evaluate: String(evaluate) }) })));
     } catch (error) { return Result.Err(error); }
   } }),
+  clip: Object.freeze({ async capture(url, options = {}) {
+    try {
+      if (!options || typeof options !== "object" || Array.isArray(options)) throw new Error("capture 的 options 必须是对象");
+      if (Object.keys(options).some(key => !["selector", "viewport", "wait_ms", "id_prefix"].includes(key))) throw new Error("capture 包含不支持的选项");
+      if (typeof options.selector !== "string" || !options.selector.trim() || options.selector.length > 1000) throw new Error("capture 需要 1–1000 字符的 CSS 选择器");
+      if (__mockCtx?.clip && typeof __mockCtx.clip.capture === "function") {
+        const value = await __mockCtx.clip.capture(url, options);
+        return value && typeof value === "object" && "data" in value && "error" in value ? value : Result.Ok(value);
+      }
+      const { id_prefix, ...navigation } = options;
+      const result = await ctx.puppeteer.navigate(url, { ...navigation,
+        args: [options.selector, { id_prefix: id_prefix || __requestContext.clip_id || "" }] }, __extractClip);
+      if (result.error) return result;
+      if (!result.data?.ok) return Result.Err(result.data?.error || "节点提取失败", "UPSTREAM_INVALID_RESPONSE");
+      return Result.Ok({ title: result.data.title || "", html: result.data.html, stats: result.data.stats });
+    } catch (error) { return Result.Err(error); }
+  } }),
   log: (...args) => __logAppend("info", args),
   error: (...args) => __logAppend("error", args),
   fail(code, detail) {
@@ -189,6 +214,11 @@ const ctx = {
     return Result.Err(detail, code);
   },
 };
+function __freezePrevious(value) {
+  if (value && typeof value === "object") { for (const child of Object.values(value)) __freezePrevious(child); Object.freeze(value); }
+  return value;
+}
+Object.defineProperty(ctx, "previous", { enumerable: true, value: __freezePrevious(__requestContext.previous ?? null) });
 const __mockCtx = typeof globalThis.__mockCtx === "undefined" ? null : globalThis.__mockCtx;
 if (__mockCtx !== null && (typeof __mockCtx !== "object" || Array.isArray(__mockCtx))) {
   throw new Error('mock ctx 求值结果必须是对象（例如 ({ params: { account: "wow36kr" } })）');
@@ -336,8 +366,16 @@ const __metadata = __entries.map((entry, route_index) => {
   };
 });
 const __scriptType = typeof kind !== "undefined" ? kind : typeof script_type === "undefined" ? ${JSON.stringify(default_type)} : script_type;
-if (__scriptType !== "hot" && __scriptType !== "rss") throw new Error("kind/script_type 必须是 hot 或 rss");
+if (__scriptType !== "hot" && __scriptType !== "rss" && __scriptType !== "clip" && __scriptType !== "detect") throw new Error("kind/script_type 必须是 hot、rss、clip 或 detect");
+if (["clip", "detect"].includes(__scriptType) && (typeof version === "undefined" || !String(version).trim())) throw new Error("Clip/Detect 脚本必须导出 version");
+if (["clip", "detect"].includes(__scriptType) && typeof platform === "undefined") throw new Error("Clip/Detect 脚本必须导出 platform");
+if (__scriptType === "hot") {
+  if (typeof category !== "undefined" && (typeof category !== "string" || category.trim().length > 32 || /[\\u0000-\\u001f\\u007f]/.test(category))) throw new Error("category 必须是最多 32 字符且不含控制字符的字符串");
+  if (typeof order !== "undefined" && !Number.isSafeInteger(order)) throw new Error("order 必须是安全整数，数值越小越靠前");
+}
 globalThis.__routeMetadataJSON = JSON.stringify({ ...__metadata[0], kind: __scriptType, script_type: __scriptType, routes: __metadata, permissions: typeof permissions === "undefined" ? {} : permissions,
+  ...(__scriptType === "hot" && typeof category !== "undefined" ? { category: category.trim() } : {}),
+  ...(__scriptType === "hot" && typeof order !== "undefined" ? { order } : {}),
   ...(typeof version === "undefined" ? {} : { version }),
   ...(typeof config_schema === "undefined" ? {} : { config_schema }) });`;
 }

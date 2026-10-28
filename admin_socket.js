@@ -1,8 +1,9 @@
 import { create_script_agent_session } from "./script_agent_socket.js";
+import { ScriptAgentRunRequestModel } from "./server/domain/script_agent.js";
 import { AdminAgentRunRequestModel } from "./server/domain/admin_agent.js";
 
 const topics = new Set(["messages.changed", "devices.changed", "device.logs", "tasks.changed",
-  "background-tasks.changed", "discovery.changed", "clips.changed", "overview.changed", "tokens.changed"]);
+  "background-tasks.changed", "discovery.changed", "clips.changed", "detections.changed", "overview.changed", "tokens.changed"]);
 
 // Idle admin connections use DO hibernation. Subscriptions and channel names are
 // serialized so they survive eviction; only active agent runs live in memory.
@@ -59,7 +60,7 @@ export class AdminSocketHub {
   receive(socket, message, app) {
     let command;
     try {
-      if (typeof message !== "string" || new TextEncoder().encode(message).length > 300 * 1024) throw new Error("实时消息过大或格式无效");
+      if (typeof message !== "string" || new TextEncoder().encode(message).length > ScriptAgentRunRequestModel.MAX_MESSAGE_BYTES + 8192) throw new Error("实时消息过大或格式无效");
       command = JSON.parse(message);
       const state = socket.deserializeAttachment();
       if (command.type === "subscribe") {

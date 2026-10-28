@@ -12,7 +12,7 @@ export function ScriptDebugRequestModel(state = {}) {
     ...(state.version === undefined ? {} : { version: state.version }),
     resolve(routes, public_origin = "") {
       const url = new URL(request_url, public_origin || "https://example.invalid");
-      const pathname = url.pathname.replace(/^\/(rss|atom|debug)(?=\/)/, "");
+      const pathname = url.pathname.replace(/^\/(?:api\/(?:hot|clip|detect)|rss|atom|debug)(?=\/)/, "");
       const selected = routes.map(metadata => ({ metadata,
         match: RssRoutePatternModel.fromValue(metadata.path)?.match(pathname) }))
         .filter(entry => entry.match)

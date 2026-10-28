@@ -1,6 +1,6 @@
 import { public_http_url } from "./proxy_url.js";
 
-const reserved_roots = new Set(["admin", "reader", "discovery", "rss", "atom", "debug", "v1", "api", "health", "mcp", "account", "s", "assets", "timeless"]);
+const reserved_roots = new Set(["admin", "reader", "discovery", "rank", "clips", "detections", "rss", "atom", "debug", "v1", "api", "health", "mcp", "account", "s", "assets", "timeless"]);
 
 export function validate_script_route_path(route) {
   const first = route.path.split("/")[1];

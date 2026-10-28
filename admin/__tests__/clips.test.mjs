@@ -92,3 +92,21 @@ test("编辑保留 ID 与刷新规则，重复保存只提交一次，离开后�
   assert.equal(model.state.clips.value.length, 0); assert.equal(model.state.busy.value, false);
   assert.equal(model.state.form_open.value, false); assert.equal(model.state.selected.value, null);
 });
+
+test("选择平台剪藏脚本自动填入示例路由，保存具体参数，编辑保留关联", async () => {
+  const scripts = [{ id: "github", name: "GitHub README", routes: [{ example: "/github/owner/repo/readme" }] }];
+  const calls = [];
+  const linked = { ...clip, script_id: "github", script_url: "/github/ltaoo/findrss-worker/readme" };
+  const model = fixture(async (_path, options = {}) => {
+    if (options.method === "POST") { calls.push(JSON.parse(options.body)); return Response.json({ clip: linked }); }
+    return Response.json({ clips: [linked], scripts, renderer_available: true });
+  });
+  await model.methods.load();
+  model.methods.open(); model.methods.set("title", "README"); model.methods.set("script_id", "github");
+  assert.equal(model.state.script_url.value, "/github/owner/repo/readme");
+  model.methods.set("script_url", linked.script_url);
+  await model.methods.save();
+  assert.equal(calls[0].script_id, "github"); assert.equal(calls[0].script_url, linked.script_url);
+  model.methods.open(linked);
+  assert.equal(model.state.script_id.value, "github"); assert.equal(model.state.script_url.value, linked.script_url);
+});

@@ -65,7 +65,7 @@ function walk(node, result = []) {
 test("Shell 暴露可复用的后台子页面", () => {
   assert.deepEqual(
     window.FindRSSAdminShell.pages.map((page) => page.id),
-    ["messages", "overview", "discovery", "scripts", "cookies", "tokens", "storage", "tasks", "network", "settings"],
+    ["messages", "overview", "discovery", "scripts", "detections", "cookies", "tokens", "storage", "tasks", "network", "settings"],
   );
   assert.equal(window.FindRSSAdminShell.pages.find(page => page.id === "tokens").icon, "users");
 });
@@ -93,10 +93,10 @@ test("Shell 渲染侧边栏、当前菜单和子页面内容", () => {
     String(node.props?.attributes?.n || "").startsWith("admin-shell-nav-") &&
     node.type === "a"
   );
-  assert.equal(navigation.length, 10);
+  assert.equal(navigation.length, 11);
   const main_navigation = walk(root).find(node => node.props?.attributes?.n === "admin-shell-nav");
   assert.deepEqual(walk(main_navigation).filter(node => node.type === "a").map(node => node.props.attributes.n),
-    ["overview", "discovery", "scripts", "cookies", "tokens", "storage", "tasks", "network"].map(id => "admin-shell-nav-" + id));
+    ["overview", "discovery", "scripts", "detections", "cookies", "tokens", "storage", "tasks", "network"].map(id => "admin-shell-nav-" + id));
   assert.equal(
     navigation.filter((node) => node.props.attributes["aria-current"] === "page").length,
     1,
@@ -194,7 +194,7 @@ test("导航与 Logo 使用链接，普通点击走 SPA，修饰键点击保留�
   const overview = nodes.find((node) => node.props?.attributes?.n === "admin-shell-nav-overview");
   assert.equal(overview.props.attributes["aria-current"].value, "page");
   assert.equal(tokens_link.props.attributes["aria-current"].value, undefined);
-  assert.equal(nodes.filter((node) => node.type === "a" && node.props?.attributes?.n?.startsWith("admin-shell-nav-")).length, 10);
+  assert.equal(nodes.filter((node) => node.type === "a" && node.props?.attributes?.n?.startsWith("admin-shell-nav-")).length, 11);
   assert.equal(nodes.filter((node) => node.type === "button" && (node.props?.attributes?.n === "admin-shell-brand" || node.props?.attributes?.n?.startsWith("admin-shell-nav-"))).length, 0);
   assert.ok(nodes.some((node) => node.props?.attributes?.n === "keep-alive-subviews"));
 });

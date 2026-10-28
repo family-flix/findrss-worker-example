@@ -23,13 +23,15 @@ export function migrate_script_tables(sql) {
 }
 
 // 修改 schema 或启动迁移时递增；已完成的迁移不在每次 DO 唤醒时重跑。
-export const API_SCHEMA_VERSION = 4;
+export const API_SCHEMA_VERSION = 6;
 
 /** 本模块 DDL 里恰好这些表。 @type {readonly string[]} */
 export const API_TABLE_NAMES = Object.freeze([
   "api_schema_version",
   "overview_snapshot",
   "clips",
+  "detections",
+  "detection_runs",
   "snapshot_settings",
   "background_tasks",
   "cookie_push_settings",
@@ -86,6 +88,8 @@ export const API_SCHEMA_SQL = `
   );
   CREATE TABLE IF NOT EXISTS clips (
     id TEXT PRIMARY KEY,
+    script_id TEXT NOT NULL DEFAULT '',
+    script_url TEXT NOT NULL DEFAULT '',
     title TEXT NOT NULL,
     url TEXT NOT NULL,
     selector TEXT NOT NULL,
@@ -110,6 +114,20 @@ export const API_SCHEMA_SQL = `
     created_at INTEGER NOT NULL,
     saved_at INTEGER NOT NULL DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS detections (
+    id TEXT PRIMARY KEY, title TEXT NOT NULL, script_id TEXT NOT NULL, script_url TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1, poll_policy_json TEXT NOT NULL DEFAULT '{"mode":"inherit"}',
+    poll_updated_at INTEGER NOT NULL DEFAULT 0, config_version TEXT NOT NULL,
+    baseline_id TEXT NOT NULL DEFAULT '', last_run_id TEXT NOT NULL DEFAULT '',
+    attempted_at INTEGER NOT NULL DEFAULT 0, saved_at INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '', adaptive_interval INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS detection_runs (
+    id TEXT PRIMARY KEY, detection_id TEXT NOT NULL, status TEXT NOT NULL, observed_at INTEGER NOT NULL,
+    previous_id TEXT NOT NULL DEFAULT '', object_key TEXT NOT NULL DEFAULT '', body_json TEXT NOT NULL DEFAULT '',
+    change_count INTEGER NOT NULL DEFAULT 0, match_count INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX IF NOT EXISTS detection_runs_recent ON detection_runs(detection_id,observed_at DESC);
   CREATE TABLE IF NOT EXISTS snapshot_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     policy_json TEXT NOT NULL,

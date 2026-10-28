@@ -84,6 +84,9 @@ export default {
         if (request.headers.has("Origin") && request.headers.get("Origin") !== url.origin) return error_response("origin rejected", 403);
         return env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal/_admin/events/ws", request));
       }
+      if (/^\/admin\/api\/detections(?:\/[a-f0-9-]{36}(?:\/(?:run|reset|runs(?:\/[a-f0-9-]{36})?))?)?$/.test(url.pathname)) {
+        return admin_clip_request(request, env);
+      }
       if (/^\/admin\/api\/clips(?:\/[a-f0-9-]{36}(?:\/snapshot)?)?$/.test(url.pathname)) {
         return admin_clip_request(request, env);
       }
@@ -554,6 +557,18 @@ export default {
     );
     if (public_discovery_avatar_match && request.method === "GET") {
       return public_discovery_avatar(env, public_discovery_avatar_match[1]);
+    }
+    if (url.pathname === "/api/detect" || url.pathname.startsWith("/api/detect/")) {
+      if (!["GET", "HEAD"].includes(request.method)) return error_response("method not allowed", 405);
+      return public_script_route(env, request, url.pathname.slice(11) || "/", "detect");
+    }
+    if (url.pathname === "/api/clip" || url.pathname.startsWith("/api/clip/")) {
+      if (!["GET", "HEAD"].includes(request.method)) return error_response("method not allowed", 405);
+      return public_script_route(env, request, url.pathname.slice(9) || "/", "clip");
+    }
+    if (url.pathname === "/api/hot" || url.pathname.startsWith("/api/hot/")) {
+      if (!["GET", "HEAD"].includes(request.method)) return error_response("method not allowed", 405);
+      return public_script_route(env, request, url.pathname.slice(8) || "/", "hot");
     }
     const public_rss_match = url.pathname.match(/^\/(rss|atom|debug)(\/.*)$/);
     if (public_rss_match && request.method === "GET") {

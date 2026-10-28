@@ -2,8 +2,9 @@ import { list_runtime, paged_fixture } from "./list_fixture.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { read_script } from "../../test/support/script_sources.js";
 import { applyPatch } from "diff";
-import { DEFAULT_RSS_SCRIPT, DEFAULT_HOT_SCRIPT } from "../pages/script.default.js";
+import { DEFAULT_RSS_SCRIPT, DEFAULT_HOT_SCRIPT, DEFAULT_CLIP_SCRIPT, DEFAULT_DETECT_SCRIPT } from "../pages/script.default.js";
 
 // 脚本管理页的 Timeless stub：只实现 Model/View 用到的构造器与 ref 语义。
 // computed(source, map) 在 map 缺失时必须抛错——上次 /scripts 整页空白正是
@@ -600,7 +601,7 @@ test("卡片首行展示平台、网站、共享者和大小，第二行展示�
   }
 });
 
-test("RSS/Hot Tabs 按 RSS 优先排序，各自筛选列表与计数，新增沿用当前类型", async t => {
+test("RSS/Hot/剪藏 Tabs 按 RSS 优先排序，各自筛选列表与计数，新增沿用当前类型", async t => {
   const original = fetch_handler;
   t.after(() => { fetch_handler = original; });
   const scripts = [
@@ -611,7 +612,7 @@ test("RSS/Hot Tabs 按 RSS 优先排序，各自筛选列表与计数，新增�
   fetch_handler = async () => Response.json({ scripts });
   const root = build_page(scripts.filter(script => script.kind === "rss"), false);
   const tabs = find_node(root, "script-type-tabs");
-  assert.deepEqual(tabs.props.items.map(({ id, label }) => [id, label]), [["rss", "RSS"], ["hot", "Hot"]]);
+  assert.deepEqual(tabs.props.items.map(({ id, label }) => [id, label]), [["rss", "RSS"], ["hot", "Hot"], ["clip", "剪藏"], ["detect", "内容检测"]]);
   assert.equal(root.props.title, "脚本管理");
   assert.equal(root.props.count, undefined);
   assert.equal(find_node(root, "script-type-count"), undefined);
@@ -630,6 +631,10 @@ test("RSS/Hot Tabs 按 RSS 优先排序，各自筛选列表与计数，新增�
   find_node(root, "script-create-button").props.onClick();
   assert.equal(find_node(root, "script-code-textarea").props.value.value, DEFAULT_HOT_SCRIPT);
   assert.equal(find_node(root, "script-debug-url").props.value.value, "/baidu/hot");
+  find_node(root, "script-form-close-button").props.onClick();
+  await tabs.props.onChange("clip");
+  find_node(root, "script-create-button").props.onClick();
+  assert.equal(find_node(root, "script-code-textarea").props.value.value, DEFAULT_CLIP_SCRIPT);
   find_node(root, "script-form-close-button").props.onClick();
   await tabs.props.onChange("rss");
   assert.deepEqual(names(), ["RSS 一", "RSS 二"]);
@@ -763,6 +768,44 @@ test("预览 Tabs 按正在编辑的草稿 kind 显示，Hot 不显示 XML 和�
   assert.deepEqual(find_node(root, "script-debug-tabs").props.items.map(item => item.id), ["output", "context", "logs"]);
 });
 
+test("Clip 调试显示隔离的 HTML 预览，保留 JSON 输出且不显示 RSS 预览", async t => {
+  const original = fetch_handler;
+  t.after(() => { fetch_handler = original; });
+  fetch_handler = async url => String(url).endsWith("/debug")
+    ? Response.json({ ok: true, status: 200, rss_debug: { phase: "ok", output: JSON.stringify({ kind: "clip", html: "<article>README</article>" }), lines: [] } })
+    : Response.json({ scripts: [] });
+  const root = build_page([], false);
+  await find_node(root, "script-type-tabs").props.onChange("clip");
+  find_node(root, "script-create-button").props.onClick();
+  find_node(root, "script-debug-url").props.onInput({ target: { value: "/github/owner/repo/readme" } });
+  await find_node(root, "script-debug-run-button").props.onClick();
+  const frame = find_node(root, "script-debug-clip-preview");
+  assert.equal(frame.props.attributes.sandbox, "");
+  assert.equal(frame.props.attributes.srcdoc.value, "<article>README</article>");
+  assert.ok(!find_node(root, "script-debug-tabs").props.items.some(item => item.id === "xml"));
+});
+
+test("Detect Debug 输入旧内容快照传给脚本，格式错误时不提交请求", async t => {
+  const original = fetch_handler, calls = [];
+  t.after(() => { fetch_handler = original; });
+  fetch_handler = async (url, options = {}) => {
+    if (String(url).endsWith("/debug")) { calls.push(JSON.parse(options.body)); return Response.json({ ok: true, status: 200, rss_debug: { phase: "ok", output: '{"kind":"detect","status":"unchanged","changes":[]}', lines: [] } }); }
+    return Response.json({ scripts: [] });
+  };
+  const root = build_page([], false);
+  await find_node(root, "script-type-tabs").props.onChange("detect");
+  find_node(root, "script-create-button").props.onClick();
+  assert.equal(find_node(root, "script-code-textarea").props.value.value, DEFAULT_DETECT_SCRIPT);
+  const input = find_node(root, "script-detect-previous-json"); assert.ok(input);
+  input.props.onInput({ target: { value: "{broken" } });
+  await find_node(root, "script-debug-run-button").props.onClick(); assert.equal(calls.length, 0);
+  const previous = { body: { type: "content", value: "旧内容" } };
+  input.props.onInput({ target: { value: JSON.stringify(previous) } });
+  find_node(root, "script-debug-url").props.onInput({ target: { value: "/github/a/b/releases/detect" } });
+  await find_node(root, "script-debug-run-button").props.onClick();
+  assert.deepEqual(calls[0].previous, previous);
+});
+
 test("正式脚本保存独立草稿，重新打开继续编辑草稿，Diff 对比正式源码，发布才替换正式版本", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const original = fetch_handler;
@@ -826,7 +869,7 @@ for (const editing of [false, true]) {
       { path: "/qidian/book/:book_id", name: "章节列表", example: "/qidian/book/1036526469" },
       { path: "/qidian/chapter/:book_id/:chapter_id", name: "正文", example: "/qidian/chapter/1036526469/745825165" },
     ];
-    const source = readFileSync(new URL("../../examples/scripts/rss/qidian.js", import.meta.url), "utf8");
+    const source = read_script("rss/qidian.js");
     const requests = [];
     routes_handler = async (_url, options) => {
       assert.equal(JSON.parse(options.body).script, source);

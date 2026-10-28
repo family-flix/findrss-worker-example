@@ -3,10 +3,10 @@ import { error_response } from "../../lib/http.js";
 import { do_error } from "../durable_object/error.js";
 
 // Count streamed bytes too: Content-Length can be absent or inaccurate after proxying.
-export async function read_clip_json(request, max_bytes) {
-  if (Number(request.headers.get("Content-Length")) > max_bytes) throw do_error("剪藏数据过大", 413);
+export async function read_clip_json(request, max_bytes, label = "剪藏") {
+  if (Number(request.headers.get("Content-Length")) > max_bytes) throw do_error(label + "数据过大", 413);
   const reader = request.body?.getReader();
-  if (!reader) throw do_error("缺少剪藏数据", 400);
+  if (!reader) throw do_error("缺少" + label + "数据", 400);
   const chunks = [];
   let size = 0;
   try {
@@ -14,7 +14,7 @@ export async function read_clip_json(request, max_bytes) {
       const { value, done } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > max_bytes) { await reader.cancel(); throw do_error("剪藏数据过大", 413); }
+      if (size > max_bytes) { await reader.cancel(); throw do_error(label + "数据过大", 413); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }
@@ -22,8 +22,8 @@ export async function read_clip_json(request, max_bytes) {
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   let body;
-  try { body = JSON.parse(new TextDecoder().decode(bytes)); } catch { throw do_error("剪藏数据不是有效 JSON", 400); }
-  if (!body || typeof body !== "object" || Array.isArray(body)) throw do_error("剪藏数据格式错误", 400);
+  try { body = JSON.parse(new TextDecoder().decode(bytes)); } catch { throw do_error(label + "数据不是有效 JSON", 400); }
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw do_error(label + "数据格式错误", 400);
   return body;
 }
 

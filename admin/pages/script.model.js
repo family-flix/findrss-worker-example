@@ -1,10 +1,11 @@
+import { normalize_detect_previous } from "../../server/lib/detect.js";
 import { ScriptAgentModel } from "../components/script_agent.js";
 import { ListPaginationModel } from "../components/pagination.js";
 import { script_platform } from "../components/discovery_platform.js";
 import { createTwoFilesPatch } from "diff";
 import { ScriptConfigModel } from "../components/script_config.model.js";
 
-import { DEFAULT_RSS_SCRIPT, DEFAULT_HOT_SCRIPT } from "./script.default.js";
+import { DEFAULT_RSS_SCRIPT, DEFAULT_HOT_SCRIPT, DEFAULT_CLIP_SCRIPT, DEFAULT_DETECT_SCRIPT } from "./script.default.js";
 
 const Timeless = window.FindRSSAdminUI;
 const fetch = window.FindRSSAdminAuth.fetch;
@@ -63,7 +64,7 @@ function normalize_script(raw) {
     max_published_version: String(raw.max_published_version || raw.published_version || ""),
     source_loaded: raw.source_loaded !== false,
     script_bytes: Number(raw.script_bytes ?? String(raw.script || "").length),
-    kind: (raw.kind ?? raw.script_type) === "hot" ? "hot" : "rss",
+    kind: ["hot", "clip", "detect"].includes(raw.kind ?? raw.script_type) ? (raw.kind ?? raw.script_type) : "rss",
     routes: (Array.isArray(raw.routes) && raw.routes.length
       ? raw.routes
       : [raw]
@@ -200,6 +201,7 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
   const draft_version_ = ref("");
 
   const debug_url_ = ref("");
+  const debug_previous_ = ref("");
   const debug_routes_ = ref([]);
   const debug_routes_error_ = ref("");
   const debug_route_path_ = ref("");
@@ -264,6 +266,7 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
     draft_version: draft_version_,
 
     debug_url: debug_url_,
+    debug_previous: debug_previous_,
     debug_routes: debug_routes_,
     debug_routes_error: debug_routes_error_,
     debug_route_path: debug_route_path_,
@@ -438,6 +441,7 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
     debug_armed = false;
     debugging_.set(false);
     debug_url_.set("");
+    debug_previous_.set("");
     live_debug_.set(false);
     debug_result_.as({ status: 0, rss_debug: null, error: "", stale: false });
   }
@@ -684,7 +688,7 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
       return load();
     },
     select_script_type(value) {
-      if (!["hot", "rss"].includes(value)) return;
+      if (!["hot", "rss", "clip", "detect"].includes(value)) return;
       query_.set("");
       filter_status_.set("all");
       pagination.reset();
@@ -723,6 +727,11 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
           debugging_.set(false);
         }
       }
+    },
+    set_debug_previous(value) {
+      debug_previous_.set(String(value)); draft_revision++;
+      if (agent?.state.busy.value) agent.methods.cancel("旧快照已修改，已停止当前 AI 对话");
+      schedule_debug();
     },
     set_debug_url(value, path = debug_route_path_.value) {
       if (path !== debug_route_path_.value) select_debug_route(path);
@@ -780,11 +789,16 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
       debugging_.set(true);
       debug_result_.as({ ...debug_result_.value, error: "" });
       try {
+        let previous = null;
+        if (draft_type_.value === "detect" && debug_previous_.value.trim()) {
+          try { previous = JSON.parse(debug_previous_.value); } catch { throw new Error("上次内容快照不是有效 JSON"); }
+        }
         const payload = await request_json("/admin/api/scripts/debug", {
           method: "POST",
           signal: controller.signal,
           body: JSON.stringify({
             script: draft_script_.value,
+            ...(draft_type_.value === "detect" ? { previous } : {}),
             version: draft_version_.value.trim(),
             request_url: debug_url_.value,
             route: editing_id_.value,
@@ -850,10 +864,10 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
       methods.reset_draft();
       draft_type_.set(script_type_.value);
       draft_script_.set(
-        script_type_.value === "hot" ? DEFAULT_HOT_SCRIPT : DEFAULT_RSS_SCRIPT,
+        script_type_.value === "detect" ? DEFAULT_DETECT_SCRIPT : script_type_.value === "clip" ? DEFAULT_CLIP_SCRIPT : script_type_.value === "hot" ? DEFAULT_HOT_SCRIPT : DEFAULT_RSS_SCRIPT,
       );
       update_debug_routes([
-        { path: script_type_.value === "hot" ? "/baidu/hot" : "/solidot" },
+        { path: script_type_.value === "detect" ? "/github/:owner/:repo/releases/detect" : script_type_.value === "clip" ? "/github/:owner/:repo/readme" : script_type_.value === "hot" ? "/baidu/hot" : "/solidot" },
       ]);
       form_open_.set(true);
     },
@@ -1210,16 +1224,23 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
     get_context() {
       if (debug_timer !== null) clearTimeout(debug_timer);
       debug_timer = null;
+      let previous = null, previous_error = "";
+      if (draft_type_.value === "detect" && debug_previous_.value.trim()) {
+        try { previous = normalize_detect_previous(JSON.parse(debug_previous_.value)); }
+        catch (error) { previous_error = "上次内容快照无效：" + error.message; }
+      }
       return {
+        ...(previous_error ? { error: previous_error } : {}),
         ready:
           !saving_.value &&
           !debugging_.value &&
-          form_open_.value,
+          form_open_.value && !previous_error,
         script: draft_script_.value,
         version: draft_version_.value.trim(),
         cookie_grant_id,
         revision: draft_revision,
         request_url: debug_url_.value,
+        ...(draft_type_.value === "detect" ? { previous } : {}),
         route: editing_id_.value,
       };
     },

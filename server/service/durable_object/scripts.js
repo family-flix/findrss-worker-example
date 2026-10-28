@@ -5,6 +5,7 @@
 import { DiscoverySourceModel } from "../../domain/discovery_source.js";
 import { FeedModel } from "../../domain/feed_format.js";
 import { ScriptModel } from "../../domain/script.js";
+import { normalize_detect_previous, detect_json } from "../../lib/detect.js";
 import { ScriptVersionModel } from "../../domain/script_version.js";
 import { ScriptLogModel, ScriptLogQueryModel } from "../../domain/script_log.js";
 import { ScriptTestRequestModel } from "../../domain/script_test.js";
@@ -290,7 +291,7 @@ export class ServiceScript {
   /** @returns {Promise<Record<string, unknown>>} */
   async list_scripts(url) {
     const kind = url?.searchParams.get("kind");
-    if (kind !== undefined && kind !== null && !ScriptModel.TYPES.includes(kind)) throw do_error("kind must be hot or rss", 400);
+    if (kind !== undefined && kind !== null && !ScriptModel.TYPES.includes(kind)) throw do_error("kind must be hot, rss, clip or detect", 400);
     const status = url?.searchParams.get("status") || "all";
     if (!["all", "enabled", "disabled", "draft", "published"].includes(status)) throw do_error("invalid status", 400);
     const query = (url?.searchParams.get("q") || "").trim().slice(0, 100).toLowerCase();
@@ -485,6 +486,7 @@ export class ServiceScript {
   }
 
   queue_snapshot_refresh(metadata) {
+    if (["clip", "detect"].includes(metadata.kind)) return;
     if (metadata.status !== "published" || !this.source_store.available) return;
     const sources = this.repo.discovery?.snapshot_schedule?.() || [
       ...(this.repo.discovery?.list_public_routes?.() || []), ...(this.repo.discovery?.list_private_routes?.() || []),
@@ -524,8 +526,8 @@ export class ServiceScript {
     }
     if (body.debug !== undefined && typeof body.debug !== "boolean") throw do_error("debug must be a boolean", 400);
     if (body.status !== undefined && !ScriptModel.STATUSES.includes(body.status)) throw do_error("status must be draft or published", 400);
-    if (body.script_type !== undefined && !ScriptModel.TYPES.includes(body.script_type)) throw do_error("script_type must be hot or rss", 400);
-    if (body.kind !== undefined && !ScriptModel.TYPES.includes(body.kind)) throw do_error("kind must be hot or rss", 400);
+    if (body.script_type !== undefined && !ScriptModel.TYPES.includes(body.script_type)) throw do_error("script_type must be hot, rss, clip or detect", 400);
+    if (body.kind !== undefined && !ScriptModel.TYPES.includes(body.kind)) throw do_error("kind must be hot, rss, clip or detect", 400);
     const status = body.status ?? "published";
     const script = String(body.script ?? "");
     if (script.length === 0 && status === "published") {
@@ -617,8 +619,8 @@ export class ServiceScript {
     }
     if (body.debug !== undefined && typeof body.debug !== "boolean") throw do_error("debug must be a boolean", 400);
     if (body.status !== undefined && !ScriptModel.STATUSES.includes(body.status)) throw do_error("status must be draft or published", 400);
-    if (body.script_type !== undefined && !ScriptModel.TYPES.includes(body.script_type)) throw do_error("script_type must be hot or rss", 400);
-    if (body.kind !== undefined && !ScriptModel.TYPES.includes(body.kind)) throw do_error("kind must be hot or rss", 400);
+    if (body.script_type !== undefined && !ScriptModel.TYPES.includes(body.script_type)) throw do_error("script_type must be hot, rss, clip or detect", 400);
+    if (body.kind !== undefined && !ScriptModel.TYPES.includes(body.kind)) throw do_error("kind must be hot, rss, clip or detect", 400);
     const stored = this.repo.scripts.find_config(script_id);
     if (stored === undefined) {
       throw do_error("script not found", 404);
@@ -929,13 +931,17 @@ export class ServiceScript {
       debug.error_text = "脚本校验失败：" + compiled.error;
       return finish(400, debug.error_text);
     }
+    let debug_previous = null;
+    if (compiled.metadata.kind === "detect") {
+      try { debug_previous = normalize_detect_previous(body.previous); } catch (error) { throw do_error(error.message, 400); }
+    }
     const selected = draft.resolve(compiled.metadata.routes, this.resolve_public_origin(request));
     if (!selected.ok) {
       debug.phase = "metadata";
       debug.error_text = selected.error.message;
       return finish(selected.error.status, debug.error_text);
     }
-    const metadata = { ...selected.metadata, debug: true, debug_request: true };
+    const metadata = { ...selected.metadata, kind: compiled.metadata.kind, debug: true, debug_request: true };
     const stored = draft.route ? this.repo.scripts.find_config(draft.route) : null;
     metadata.config_schema = compiled.metadata.config_schema;
     metadata.config = stored ? ScriptModel.fromRow(stored).toValue().config : {};
@@ -958,7 +964,8 @@ export class ServiceScript {
       }
     };
     try {
-      const result = await execute_script(draft.script, metadata, invoke_impl, selected.context, [], "", cookie_access, undefined, this.ports.puppeteer_navigate);
+      const context = { ...selected.context, ...(compiled.metadata.kind === "detect" ? { previous: debug_previous } : {}) };
+      const result = await execute_script(draft.script, metadata, invoke_impl, context, [], "", cookie_access, undefined, this.ports.puppeteer_navigate);
       Object.assign(debug, { phase: "ok", output: result.output, lines: result.lines,
         cookie_accesses: result.cookie_accesses || [], upstream_requests: result.upstream_requests || [] });
       const returned = JSON.parse(result.output);
@@ -1001,7 +1008,7 @@ export class ServiceScript {
       .filter(entry => entry.match).sort((left, right) => right.match.score - left.match.score)[0];
     if (!selected?.metadata.allowed_hosts?.length) throw do_error("草稿中没有匹配的媒体代理路由", 404);
     target.searchParams.delete("token");
-    const metadata = { ...selected.metadata, config_schema: snapshot.metadata.config_schema, config: snapshot.metadata.config, debug_request: true };
+    const metadata = { ...selected.metadata, kind: snapshot.metadata.kind, config_schema: snapshot.metadata.config_schema, config: snapshot.metadata.config, debug_request: true };
     const cookie_access = await this.cookie_access(snapshot.script, snapshot.metadata,
       snapshot.script_id, snapshot.grant_id, true);
     try {
@@ -1070,7 +1077,7 @@ export class ServiceScript {
     }
     const entries = compiled.metadata.routes;
     const route_index = normalized.route_index ?? 0;
-    const metadata = entries[route_index];
+    const metadata = entries[route_index] && { ...entries[route_index], kind: compiled.metadata.kind };
     if (!metadata) throw do_error("route_index 超出路由范围", 400);
     metadata.config_schema = compiled.metadata.config_schema;
     metadata.config = normalized.route ? ScriptModel.fromRow(this.repo.scripts.find_config(normalized.route)).toValue().config : {};
@@ -1213,6 +1220,46 @@ export class ServiceScript {
     return this.enabled_routes;
   }
 
+  clip_routes() { return this.typed_routes("clip"); }
+  detect_routes() { return this.typed_routes("detect"); }
+  typed_routes(kind) {
+    return this.enabled_route_rows().filter(row => ScriptModel.fromRow(row).kind === kind).map(row => {
+      const script = ScriptModel.fromRow(row);
+      return { id: script.id, name: script.name, platform: script.platform,
+        routes: script.routes.map(({ path, name, example, parameters }) => ({ path, name, example, parameters })) };
+    });
+  }
+  clip_source(record) { return this.typed_source(record, "clip"); }
+  detect_source(record) { return this.typed_source(record, "detect"); }
+  typed_source(record, kind) {
+    const row = this.repo.scripts.find_config(record.script_id);
+    const script = row && ScriptModel.fromRow(row);
+    if (!script || script.kind !== kind || script.status !== "published" || !script.enabled) throw do_error("所选脚本不存在、未发布或已停用", 409);
+    const url = new URL(record.script_url, "https://script.invalid");
+    if (!RssRouteSelectionModel([row], url.pathname).best()) throw do_error("路由与所选脚本不匹配", 400);
+    return row;
+  }
+  async execute_clip_snapshot(record, signal) { return this.execute_typed_snapshot(record, "clip", null, signal); }
+  async execute_detection(record, previous, signal) { return this.execute_typed_snapshot(record, "detect", previous, signal); }
+  async execute_typed_snapshot(record, kind, previous, signal) {
+    const row = this.typed_source(record, kind);
+    const version = JSON.parse(row.metadata_json || "{}");
+    const context_key = await sha256_hex(detect_json({ script_id: record.script_id, script_url: record.script_url, config: version.config || {} }));
+    if (previous?.context_key !== context_key) previous = null;
+    const assert_current = () => {
+      const current = this.typed_source(record, kind);
+      const next = JSON.parse(current.metadata_json || "{}");
+      if (version.activation_id !== next.activation_id || version.script_hash !== next.script_hash
+        || version.published_version !== next.published_version || detect_json(version.config || {}) !== detect_json(next.config || {})) throw do_error("脚本运行版本或配置已切换，请重新执行", 409);
+    };
+    const result = await this.serve_rss_route(kind, new URL(record.script_url, "https://script.invalid").pathname,
+      new Request("https://internal/_admin/feed/" + kind + record.script_url, {
+        headers: { "X-RSS-Preview-Script-ID": record.script_id },
+      }), { refresh: true, signal, clip_id: record.id, previous });
+    assert_current();
+    return { ...result.raw, context_key, assert_current() { assert_current(); result.assert_current?.(); } };
+  }
+
   /**
    * 判断请求地址是否命中一个启用中的公开自有 RSS 源。只比较 route pathname，
    * query 无论有无、是否一致都视为同一个源，因此公开源的任意 query 变体同样公开。
@@ -1238,9 +1285,11 @@ export class ServiceScript {
    * @param {{ refresh?: boolean, signal?: AbortSignal, attempt_recorded?: boolean }} [options]
    * @returns {Promise<{ body: string, headers: Record<string, string> }>}
    */
-  async serve_rss_route(format, route_pathname, request, { refresh = false, signal, attempt_recorded = false } = {}) {
+  async serve_rss_route(format, route_pathname, request, { refresh = false, signal, attempt_recorded = false, clip_id = "", previous = null } = {}) {
     signal?.throwIfAborted();
     const debug_request = format === "debug";
+    const raw_request = ["raw", "hot", "clip", "detect"].includes(format);
+    const kind = ["hot", "clip", "detect"].includes(format) ? format : ["rss", "atom"].includes(format) ? "rss" : "";
     if (
       !route_pathname.startsWith("/") ||
       new TextEncoder().encode(route_pathname).byteLength > MAX_RSS_ROUTE_PATH_BYTES
@@ -1264,10 +1313,11 @@ export class ServiceScript {
       ? (request.headers.get("X-RSS-Preview-Script-ID") ?? "").trim() : "";
     const preview_row = preview_script_id ? this.repo.scripts.find_config(preview_script_id) : null;
     const rows = preview_script_id ? (preview_row ? [preview_row] : []) : this.enabled_route_rows();
-    const selected = RssRouteSelectionModel(rows, route_pathname).best();
-    if (format === "raw" && !selected) throw do_error("not found", 404);
-    const directory_public = this.rss_address_is_public(route_pathname);
-    const private_sources = (this.repo.discovery?.list_private_routes?.() || []).filter(row => SourceAddressModel(row.feed_url).matches(route_pathname));
+    const selected = RssRouteSelectionModel(kind ? rows.filter(row => ScriptModel.fromRow(row).kind === kind) : rows, route_pathname).best();
+    if ((raw_request || kind) && !selected) throw do_error("not found", 404);
+    // RSS 目录的公开性和计费不授予同路径 Hot 脚本访问权限。
+    const directory_public = !["hot", "clip", "detect"].includes(format) && this.rss_address_is_public(route_pathname);
+    const private_sources = ["hot", "clip", "detect"].includes(format) ? [] : (this.repo.discovery?.list_private_routes?.() || []).filter(row => SourceAddressModel(row.feed_url).matches(route_pathname));
     const request_key = rss_route_cache_key(route_pathname, request_query);
     const private_source = private_sources.find(row => {
       const address = SourceAddressModel(row.feed_url);
@@ -1307,7 +1357,7 @@ export class ServiceScript {
     let metadata;
     try {
       const root_metadata = JSON.parse(String(selected.row.metadata_json));
-      metadata = { ...selected.metadata, config_schema: root_metadata.config_schema, config: root_metadata.config, routes: root_metadata.routes, permissions: root_metadata.permissions, version: root_metadata.version || "", cookie_grant_id: root_metadata.cookie_grant_id, debug: root_metadata.debug === true,
+      metadata = { ...selected.metadata, kind: root_metadata.kind ?? root_metadata.script_type, config_schema: root_metadata.config_schema, config: root_metadata.config, routes: root_metadata.routes, permissions: root_metadata.permissions, version: root_metadata.version || "", cookie_grant_id: root_metadata.cookie_grant_id, debug: root_metadata.debug === true,
         source_ref: root_metadata.source_ref, activation_id: root_metadata.activation_id };
       metadata.debug_request = debug_request;
     } catch {
@@ -1318,9 +1368,11 @@ export class ServiceScript {
     }
     const cookie_access = await this.cookie_access(String(selected.row.script), metadata, String(selected.row.route), metadata.cookie_grant_id || "", false, metadata.source_ref?.hash);
     const request_context = {
+      ...(clip_id ? { clip_id } : {}),
+      ...(format === "detect" ? { previous: normalize_detect_previous(previous) } : {}),
       public_origin: this.resolve_public_origin(request),
       method: "GET",
-      pathname: format === "raw" ? route_pathname : "/" + (debug_request ? "debug" : format) + route_pathname,
+      pathname: raw_request ? route_pathname : "/" + (debug_request ? "debug" : format) + route_pathname,
       params: selected.path_match.params,
       query,
     };
@@ -1330,7 +1382,7 @@ export class ServiceScript {
       ? this.app.credit.charge_feed_access(access_token_id, DiscoverySourceModel.fromRow(private_source)) : {};
     // 相同 path+query 共用后台生成的 RSS/Atom XML；公开/私密分开保存。
     const snapshot = (format === "rss" || format === "atom") && !preview_script_id;
-    const cache_key = (snapshot ? (feed_public ? "public-snapshot:" : "private-snapshot:")
+    const cache_key = (["hot", "clip", "detect"].includes(format) ? format + ":" + (preview_script_id ? preview_script_id + ":" : "") : snapshot ? (feed_public ? "public-snapshot:" : "private-snapshot:")
       : preview_script_id ? "admin-preview:" + preview_script_id + ":" : "")
       + rss_route_cache_key(route_pathname, request_query);
     if (snapshot && refresh && !signal && this.app.background_tasks) {
@@ -1456,15 +1508,16 @@ export class ServiceScript {
         }
         return result;
       };
-      const { output, invoked, cached, lines, upstream_requests, cookie_accesses, rendered } = debug_request
+      const { output, invoked, cached, lines, upstream_requests, cookie_accesses, rendered, assert_current } = debug_request || format === "detect" || metadata.kind === "detect"
         ? await produce()
         : await this.ports.route_cache.run(cache_key, Date.now(), produce, { force: refresh, signal });
       cookie_access?.assert_grant();
-      if (format === "raw" && !debug_request) {
+      if (raw_request) {
         return {
           raw: JSON.parse(output), route: { allowed_hosts: metadata.allowed_hosts },
+          assert_current: () => { assert_current?.(); cookie_access?.assert_grant(); },
           version: String(selected.row.route) + ":" + selected.row.updated_at + ":" + metadata.route_index,
-          headers: { "Cache-Control": public_route ? "public, max-age=120" : directory_private ? "private, no-cache" : "private, max-age=60",
+          headers: { "Cache-Control": format === "detect" || metadata.kind === "detect" ? "no-store" : public_route ? "public, max-age=120" : directory_private ? "private, no-cache" : "private, max-age=60",
             "X-Api-RSS-Cache": cached ? "hit" : "miss", ...charge_access() },
         };
       }

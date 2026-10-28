@@ -2,14 +2,14 @@ import { ClipsModel } from "./clips.model.js";
 import { PollPolicyView, poll_policy_label } from "../components/poll_policy.js";
 import { format_datetime } from "../../server/lib/datetime.js";
 
-const { View, Input, Button, Badge, CopyButton, Dialog, Popconfirm, For, Show, computed, combine } = window.FindRSSAdminUI;
+const { View, Input, Select, Button, Badge, CopyButton, Dialog, Popconfirm, For, Show, computed, combine } = window.FindRSSAdminUI;
 
 function ClipForm({ model }) {
   const { state, methods, policy } = model;
   const field = (key, label, help, attributes = {}) => Input({ label, help, disabled: state.busy, value: state[key],
     attributes: { n: "clips-form-" + key, ...attributes }, onInput: event => methods.set(key, event.target.value) });
   return Dialog({ open: state.form_open, title: computed(state.editing_id, id => id ? "编辑剪藏" : "创建剪藏"),
-    description: "按 CSS 选择器保存一个节点及子树，定时更新同一个公开链接。",
+    description: "选择剪藏脚本及具体路由，定时更新同一个公开链接。",
     attributes: { n: "clips-form-dialog" }, onClose: methods.close,
     style: { width: "min(640px, calc(100vw - 32px))", "max-height": "calc(100dvh - 32px)" },
     bodyProps: { class: "grid min-h-0 overflow-auto gap-space-3" }, maskClosable: false,
@@ -18,14 +18,21 @@ function ClipForm({ model }) {
         [computed(state.busy, busy => busy ? "正在保存…" : "保存剪藏")])],
   }, [
     field("title", "名称", "用于后台识别和 iframe 标题。", { maxLength: 200 }),
+    View({ as: "label", class: "text-sm", attributes: { n: "clips-script-label" } }, ["剪藏脚本"]),
+    Select({ value: state.script_id, options: state.script_options, disabled: state.busy,
+      attributes: { n: "clips-script-select", "aria-label": "剪藏脚本" }, onChange: value => methods.set("script_id", value) }),
+    Show({ when: computed(state.script_id, Boolean), ok: () =>
+      field("script_url", "脚本路由", "填写所选脚本的具体路由，例如 /github/ltaoo/findrss-worker/readme；多路由脚本可填写其他入口。", { placeholder: "/github/owner/repo/readme" }) }),
+    Show({ when: computed(state.script_id, value => !value), ok: () => View({ class: "grid gap-space-3", attributes: { n: "clips-website-fields" } }, [
     field("url", "来源网址", "填写公开网页的完整网址，采集使用独立浏览器，不使用你的登录状态。", { type: "url", placeholder: "https://example.com/" }),
     field("selector", "CSS 选择器", "例如 #main、.weather-card；匹配多个节点时取第一个。", { placeholder: "#main", spellcheck: "false" }),
-    View({ class: "flex flex-wrap gap-space-3" }, [
+    View({ class: "flex flex-wrap gap-space-3", attributes: { n: "clips-viewport-fields" } }, [
       field("viewport_width", "采集视口宽度（px）", "320–3840", { type: "number", min: 320, max: 3840 }),
       field("viewport_height", "采集视口高度（px）", "320–2160", { type: "number", min: 320, max: 2160 }),
     ]),
     field("wait_ms", "节点出现后的等待时间（ms）", "0–10000；供异步内容、图片和样式完成加载。", { type: "number", min: 0, max: 10000 }),
-    View({ class: "text-sm" }, ["刷新规则"]),
+    ]) }),
+    View({ class: "text-sm", attributes: { n: "clips-poll-label" } }, ["刷新规则"]),
     PollPolicyView(policy, { name: "clips-poll-policy", disabled: state.busy }),
     View({ class: "text-danger text-sm whitespace-pre-wrap", attributes: { n: "clips-form-error", role: "alert" } }, [state.form_error]),
   ]);
@@ -84,7 +91,7 @@ export function ClipsPage({ view } = {}) {
           View({ as: "h2", class: "m-0 text-sm break-anywhere" }, [clip.title]),
           Badge({ tone: clip.refreshing ? "brand" : clip.error ? "danger" : clip.saved_at ? "success" : "neutral" }, [clip.refreshing ? "采集中" : clip.error ? "刷新失败" : clip.saved_at ? "已有快照" : "等待首次采集"]),
         ]),
-        View({ class: "text-sm text-muted break-anywhere" }, [clip.url + " · " + clip.selector]),
+        View({ class: "text-sm text-muted break-anywhere", attributes: { n: "clips-item-source" } }, [clip.script_url || clip.url + " · " + clip.selector]),
         View({ class: "text-sm text-muted" }, [
           (clip.enabled ? poll_policy_label(clip.poll_effective) : "已暂停定时刷新") + " · "
           + (clip.saved_at ? "快照 " + format_datetime(clip.saved_at) + ` · ${clip.width} × ${clip.height} px` : "尚无快照")

@@ -148,7 +148,7 @@ ScriptModel.MAX_BYTES = MAX_SCRIPT_BYTES;
 /** 脚本名字符上限。 */
 ScriptModel.NAME_MAX_LENGTH = NAME_MAX_LENGTH;
 ScriptModel.STATUSES = Object.freeze(["draft", "published"]);
-ScriptModel.TYPES = Object.freeze(["hot", "rss"]);
+ScriptModel.TYPES = Object.freeze(["hot", "rss", "clip", "detect"]);
 /** 从 SQLite 行构造；缺字段一律兜底，绝不抛错。 */
 ScriptModel.fromRow = (row) => ScriptModel(row);
 ScriptModel.fromValue = (value) => ScriptModel(value);

@@ -31,13 +31,15 @@ export const tags = ['文章'];
 export const route = { path: '/demo/utils', name: '工具模块示例', handler: ctx => script.run(ctx) };`;
 
 export const SCRIPT_AGENT_HOT_RANK_EXAMPLE = `import { utils } from ${JSON.stringify("@findrss/util")};
+export const category = '科技';
+export const order = 10;
 class ExampleHotRank extends HotRankScript {
   async fetch(ctx) {
     const fetched = await utils.request_json(ctx, 'https://example.com/api/hot');
     if (fetched.error) return fetched;
     const entries = utils.array_at(fetched.data, 'entries');
     if (entries.error) return entries;
-    return Result.Ok({ title: '示例热榜', link: 'https://example.com/', entries: entries.data });
+    return Result.Ok({ title: '示例热榜', link: 'https://example.com/', category, entries: entries.data });
   }
 }
 const script = new ExampleHotRank();
@@ -88,11 +90,13 @@ map_results(array,mapper) → Result<Array> 和 replace_results(text,pattern,map
 选择器只支持标签、ID、class、属性存在/等于/前缀/后缀、后代和直接子节点；属性值不支持空白，不支持完整 DOM/CSS 或严格 XML 校验。parseJSON(text,reviver?) 同全局函数。
 
 三、RSS 源与热榜
-handler(ctx) 的返回值可声明 kind：rss 提供 XML 与卡片预览；img、video、audio 返回 {kind,url,headers?}，分别预览图片、MP4、音频，均可用 Result.Ok 包装。url 必须是无凭据 HTTP(S) 绝对地址。纯公开直链可不声明 allowed_hosts；需要代理或 Referer 等请求头时，路由声明 allowed_hosts=[明确的公网 HTTPS 域名]，禁止 Cookie/Authorization。Debug 使用管理员专用草稿快照，视频/音频支持 Range/HEAD 流式播放；不能把预览地址保存到脚本输出中。这里的返回值 kind 与模块级 kind=rss|hot 的脚本分类不同。
+handler(ctx) 的返回值可声明 kind：rss 提供 XML 与卡片预览；img、video、audio 返回 {kind,url,headers?}，分别预览图片、MP4、音频，均可用 Result.Ok 包装。url 必须是无凭据 HTTP(S) 绝对地址。纯公开直链可不声明 allowed_hosts；需要代理或 Referer 等请求头时，路由声明 allowed_hosts=[明确的公网 HTTPS 域名]，禁止 Cookie/Authorization。Debug 使用管理员专用草稿快照，视频/音频支持 Range/HEAD 流式播放；不能把预览地址保存到脚本输出中。这里的返回值 kind 与模块级 kind=rss|hot|clip|detect 的脚本分类不同。
 class WechatChannelsRSS extends RSSScript {} 实现 async fetch(ctx) 返回 Result<feed>，route.handler 返回实例 run(ctx)。RSSScript 校验标题、来源链接、items 的稳定 ID/标题/原文链接，归一化时间、按真实 published 倒序并按 ID 去重。无发布时间的条目在末尾，不用采集时间补齐；热度与置顶不参与 RSS 排序。基类透传条目 description/content/image/images/live_photos/media_group/type/author/enclosure/categories/extra，保留源 id/extra 和真实 updated；多图、视频和动态照片可经 run(ctx) 输出。
-class BaiduHotRank extends HotRankScript {} 的 fetch(ctx) 返回 Result<{title,link,entries}>。entry 必须有稳定 id/title/link；非置顶 rank 是上游正整数或未知 null，置顶 pinned=true 且 rank=null；heat={value:非负数字或null,unit:非空字符串,text:字符串}。不能从列表下标推断排名或伪造热度。
-HotRankScript.run(ctx) 返回 {kind:'hot_rank',observed_at,entries,...} 的 Result；置顶在前；其余排名全部已知时按 rank 升序，有未知 rank 时保留上游次序，不按热度重新排。observed_at 是采集时间，不是 published。此输出没有 items，只能普通路由或 Debug 查看，不能直接走 /rss、/atom 生成 RSS 源。
-模块可 export const kind="hot" 或 "rss"，兼容旧 script_type；未声明时按顶部 /** HOT */ 或 /** RSS */，再按基类推断。迁移前无标记的 NewsNow 示例兼容归为 hot，其余旧普通脚本默认为 rss。列表接口支持 ?kind=hot|rss。/admin/scripts 的标题是 Hot/RSS Tabs，Tab 内筛选、数量和列表按 kind 只展示当前类型，新增使用对应类型的默认脚本。迁移示例分别在 examples/hot（52 个）与 examples/rss（17 个），严格按原文件顶部 /** RSS */ 分类，不自动导入管理后台。route.path 不包含 /rss、/atom、/debug 前缀。新增脚本可存 draft，发布为 published 且 enabled 才生效。已发布脚本保存草稿只更新独立工作副本，旧正式源码、路由和授权继续有效；再次发布才替换正式版本，明确点击退回草稿才下线正式路由。脚本助手只能修改未保存草稿和 Debug，不能自行保存/发布/回退，全局助手不能声称修改脚本。
+class BaiduHotRank extends HotRankScript {} 的 fetch(ctx) 返回 Result<{title,link,category?,entries}>。可选 category 为最多 32 字符且无控制字符的分类字符串，去除首尾空格，空值不输出。模块可 export const category = '科技' 作为 rank 页默认分类（失败卡片也能归类），快照 category 有值时优先；export const platform = {name:'来源'} 用于来源筛选。模块可 export const order = 10 设置 rank 页榜单顺序，必须是安全整数，越小越靠前，省略按 0，同值保持原顺序，不影响条目排名。entry 必须有稳定 id/title/link；非置顶 rank 是上游正整数或未知 null，置顶 pinned=true 且 rank=null；heat={value:非负数字或null,unit:非空字符串,text:字符串}。可选 thumbnail 为小说封面等缩略图的无凭据 HTTP(S) 绝对 URL 字符串，基类校验并保留；省略、null 或空字符串不输出此字段，相对地址需先用 utils.absolute_url 转换。不能从列表下标推断排名或伪造热度。
+Detect 内容检测脚本导出 kind="detect"、version、platform、route/routes。DetectScript.fetch(ctx) 抓取，normalize(data,ctx) 返回 Result<{title,link,snapshot}>，compare(previous,current,ctx) 返回 Result<{changes,matches?}>；run(ctx) 编排流程。ctx.previous 只读，是上次成功的网站数据快照（id、snapshot），不是脚本源码。ctx.detect.compare 提供默认比较，宿主只接受与前后值相符的标准事件；自定义 compare 无法可靠判断时可返回 Result.Ok({status:"inconclusive",changes:[],issues:[{reason:"原因"}]}), 不能同时返回变化或规则命中。可筛选事件、筛选 list.item_updated.fields，不能伪造变化。snapshot 由命名对象组成：content 的 value 是 text/html 字符串；record.value 是 JSON 对象；list.items 是 {id:稳定字符串,data:对象}，列表须声明 coverage=complete/window/partial，window 要有稳定 scope；ordered=true 比较共同条目的相对顺序。业务对象确实不存在时 present=false；缺失目标、登录页、验证码、失败和 partial 不等同于删除。结果 kind=detect、schema_version=1、status=initialized/unchanged/changed/inconclusive，带 snapshot、changes、matches、issues。变化类型 content.updated、field.added/removed/updated、list.item_added/removed/updated/moved、list.item_entered/left、target.appeared/disappeared。matches 项含 id、label、可选 change_indexes。正文/列表移出窗口/价格状态等按真实业务数据判断；脚本代码修改本身不算内容变化。后台 /admin/detections 保存任务、历史和独立基线；API /api/detect 只是无状态试采样。Debug 可传 previous 旧 snapshot 或完整成功历史重放，不写正式基线。首版不做截图、OCR 或 AI 语义比较。
+Clip 脚本导出 kind="clip"、version、platform 和 route/routes。ClipScript.fetch(ctx) 返回 Result<{title,link,html,stats?}>，run(ctx) 统一输出 kind:"clip"；宿主清理 HTML、校验无凭据 HTTP(S) 来源链接并填写 captured_at，HTML 上限 8MB。ctx.clip.capture(url,{selector,viewport?,wait_ms?,id_prefix?}) 返回 Result<{title,html,stats}>，复用样式冻结及图片内嵌；浏览器保持匿名，Cookie 声明不会自动注入。可通过 ctx.fetchText 获取数据后直接生成 HTML，此类 Clip 不要求 BROWSER。Mock 可提供 clip:{capture:async()=>值或Result} 或 puppeteer.navigate。/api/clip 加脚本路由只匹配已发布启用的 Clip；后台剪藏保存脚本 ID、具体路由和刷新规则，/clips/<ID> 仅读最近成功快照。旧手动记录自动关联内置通用网页脚本。
+HotRankScript.run(ctx) 返回 {kind:'hot_rank',observed_at,entries,...} 的 Result；置顶在前；其余排名全部已知时按 rank 升序，有未知 rank 时保留上游次序，不按热度重新排。observed_at 是采集时间，不是 published。Hot 脚本使用 /api/hot 加注册路径访问 JSON（如 /api/hot/douyin/hot），原普通路由和 Debug 仍可查看；/api/hot 只匹配已发布且启用的 kind=hot 脚本，/rss、/atom 只匹配 kind=rss 脚本。前缀不是 route.path 的一部分，路径参数、查询参数、公开性、访问凭证和 Cookie 授权规则不变。
+模块可 export const kind="hot"、"rss"、"clip" 或 "detect"，兼容旧 script_type；未声明时按顶部 /** HOT */、/** RSS */、/** CLIP */ 或 /** DETECT */，再按基类推断。迁移前无标记的 NewsNow 示例兼容归为 hot，其余旧普通脚本默认为 rss。列表接口支持 ?kind=hot|rss|clip|detect。/admin/scripts 的标题是 RSS/Hot/剪藏/内容检测 Tabs，Tab 内筛选、数量和列表按 kind 只展示当前类型，新增使用对应类型的默认脚本。采集脚本维护在 https://github.com/ltaoo/findrss-scripts，共 84 个 Hot、18 个 RSS、2 个 Clip 剪藏脚本和 2 个 Detect 内容检测脚本；主项目使用自动生成的内置快照，不自动导入管理后台。route.path 不包含 /rss、/atom、/debug 前缀。新增脚本可存 draft，发布为 published 且 enabled 才生效。已发布脚本保存草稿只更新独立工作副本，旧正式源码、路由和授权继续有效；再次发布才替换正式版本，明确点击退回草稿才下线正式路由。脚本助手只能修改未保存草稿和 Debug，不能自行保存/发布/回退，全局助手不能声称修改脚本。
 
 platform 使用 { name: '知乎', icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">...</svg>' }，icon 可以直接包含完整 SVG 源码，也支持无凭据的 HTTP(S) 或站内图片地址，允许为空；缺省为 { name: '网页', icon: '' }。可 export const platform 供全部路由共用，也可在 route.platform 覆盖；兼容旧字符串。正式版本发布成功后才收集来源并写入数据库，按名称去重，同名新图标更新旧图标；保存草稿和调试不注册来源。订阅广场来源列表与后台来源筛选 Select 从同一来源表读取。route.maintainers 支持多个 {nickname,url,avatar} 对象，也兼容字符串数组；nickname 必填，也可用 name 代替，url/avatar 可空，非空必须是无凭据 HTTP(S) 地址。
 
@@ -101,7 +105,7 @@ platform 使用 { name: '知乎', icon: '<svg xmlns="http://www.w3.org/2000/svg"
 订阅源配置与脚本声明分开：source_type 使用 get_admin_context.data.source_types 中的来源 ID，tags 使用字符串数组，可选标签见 data.tags；script_routes 提供已发布路由的来源和标签。新增自有 RSS/Atom 源默认带入匹配路由的来源和标签，管理员可以手动修改；修改源的 tags/source_type 不会注册新的脚本标签或来源。需要新增来源或可选标签时，在脚本页编辑 export const platform/tags 或 route.platform/tags 并发布。全局 XiaoxunAgent 可以说明和按授权修改订阅源配置，但没有脚本写入/发布工具，不能声称已更改脚本；三栏编辑器中的脚本助手可修改当前未保存草稿，正式发布仍由管理员操作。
 
 四、显式 Cookie 权限与日志
-ctx.puppeteer.navigate(url, options?, evaluate?) 显式渲染页面，依赖宿主 BROWSER 绑定，无渲染方式配置开关。options 支持 viewport:{width,height}（默认1440×900，宽320–3840、高320–2160）、selector（等待可见）、wait_ms（0–10000，默认1000）、args（数组）。省略 evaluate 返回 {html}；传入函数则返回其在页面中执行的 JSON 结果。函数没有脚本闭包，参数通过 args 传入，可访问 document/getComputedStyle；不能访问 ctx 或 Worker 环境。每次调用匿名新页面，不注入 Cookie，结束/失败/取消关闭会话。Mock 声明 puppeteer:{navigate:async(url,options,evaluate)=>值或Result}；无绑定且无 mock 返回错误 Result。区域内容与样式提取示例见 examples/scripts/region_clip.js。
+ctx.puppeteer.navigate(url, options?, evaluate?) 显式渲染页面，依赖宿主 BROWSER 绑定，无渲染方式配置开关。options 支持 viewport:{width,height}（默认1440×900，宽320–3840、高320–2160）、selector（等待可见）、wait_ms（0–10000，默认1000）、args（数组）。省略 evaluate 返回 {html}；传入函数则返回其在页面中执行的 JSON 结果。函数没有脚本闭包，参数通过 args 传入，可访问 document/getComputedStyle；不能访问 ctx 或 Worker 环境。每次调用匿名新页面，不注入 Cookie，结束/失败/取消关闭会话。Mock 声明 puppeteer:{navigate:async(url,options,evaluate)=>值或Result}；无绑定且无 mock 返回错误 Result。区域内容与样式提取示例见 https://github.com/ltaoo/findrss-scripts/tree/main/clip。
 
 ctx.fetchText 默认匿名，宿主不按 URL 自动注入 Cookie，不能填写 headers.Cookie。模块导出 permissions.cookies=[{id,origin,path_prefix,names,purpose}]：origin 是完整公网 HTTPS origin，无路径；path_prefix 是规范绝对路径；names 明确列出非空 Cookie 名称，不用通配符；purpose 说明读取用途。
 管理员确认当前源码和权限后，await ctx.cookies.get(id) 得到 Result<句柄>；传入 fetchText(url,{cookies:result.data}) 或 utils.request_text/request_json 的 options。脚本拿不到 Cookie 明文，不能把句柄当字符串或手写 Cookie 头；宿主校验名称、域、路径、有效期和重定向。源码变更要重新确认，撤销后不能继续使用。AI 不能代替用户确认授权。
