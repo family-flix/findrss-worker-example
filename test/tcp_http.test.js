@@ -90,7 +90,7 @@ test("TCP HTTP 支持 gzip/deflate，压缩损坏、编码未知和解压超限�
   }
 });
 
-test("TCP HTTP 连续读取小响应按需分配内存，不为每个响应预留 2MB", async t => {
+test("TCP HTTP 连续读取小响应按需分配内存，不为每个响应预留 10MB", async t => {
   const compressed = gzipSync(Buffer.from("hello"));
   const cases = [
     [Buffer.from("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"), false],
@@ -116,7 +116,7 @@ test("TCP HTTP 连续读取小响应按需分配内存，不为每个响应预�
   assert.ok(allocated < SCRIPT_FETCH_BYTES, `小响应累计分配了 ${allocated} 字节`);
 });
 
-test("TCP HTTP 未知长度及压缩响应扩容后保留完整正文，支持恰好 2MB", async () => {
+test("TCP HTTP 未知长度及压缩响应扩容后保留完整正文，支持恰好 10MB", async () => {
   for (const length of [70001, SCRIPT_FETCH_BYTES]) {
     const body = Buffer.alloc(length, 97);
     const compressed = gzipSync(body);

@@ -47,7 +47,7 @@ function NetworkTestPage({ view } = {}) {
           attributes: { n: "network-transport", "aria-labelledby": "network-transport-label" },
           onChange: event => methods.set("transport", event.target.value) }),
         View({ class: "text-muted text-sm", attributes: { n: "network-transport-help" } }, [
-          "TCP 与 Bilibili 脚本使用相同传输：HTTP/1.1，响应及解压后最多 2MB。复现脚本请求时，请同时填写相同网址、请求头并选择对应 Cookie。",
+          "TCP 与 Bilibili 脚本使用相同传输：HTTP/1.1，响应及解压后最多 10MB。复现脚本请求时，请同时填写相同网址、请求头并选择对应 Cookie。",
         ]),
       ]),
       View({ class: "grid min-w-0 gap-space-2", attributes: { n: "network-execution-field" } }, [

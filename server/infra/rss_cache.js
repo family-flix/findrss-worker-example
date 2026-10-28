@@ -12,7 +12,7 @@
 const DEFAULT_MAX_ENTRIES = 1024;
 /** L1 的内存预算（近似值，按 JS 字符串 length 累加），防止大 feed 把 DO 撑爆。 */
 const DEFAULT_MAX_BYTES = 32 * 1024 * 1024;
-/** 单条目落 L2 的大小上限：`SCRIPT_OUTPUT_BYTES` 允许 2MB 的产出，整条进 SQLite 不合适。 */
+/** 单条目落 L2 的大小上限：`SCRIPT_OUTPUT_BYTES` 允许 10MB 的产出，整条进 SQLite 不合适。 */
 const DEFAULT_PERSIST_MAX_BYTES = 256 * 1024;
 
 function is_xml_key(key) {

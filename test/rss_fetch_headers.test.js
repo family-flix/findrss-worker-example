@@ -57,3 +57,13 @@ test('酷安 App 协议头通过校验，Token 按认证头处理', () => {
   assert.ok(RSS_FETCH_CREDENTIAL_HEADERS.includes('x-app-token'));
   assert.throws(() => rss_fetch_headers({ headers: { 'X-App-Token': 'x\r\nHost: bad' } }), /无效/);
 });
+
+test('YouTube 与 TikTok API 凭据头通过边界校验，并按跨站需移除的认证头处理', () => {
+  const headers = rss_fetch_headers({ headers: { 'X-Goog-Api-Key': 'youtube-fixture', 'Access-Token': 'tiktok-fixture' } });
+  assert.equal(headers['x-goog-api-key'], 'youtube-fixture');
+  assert.equal(headers['access-token'], 'tiktok-fixture');
+  for (const name of ['x-goog-api-key', 'access-token']) {
+    assert.ok(RSS_FETCH_CREDENTIAL_HEADERS.includes(name));
+    assert.throws(() => rss_fetch_headers({ headers: { [name]: 'secret\r\nHost: other.example' } }), /无效/);
+  }
+});

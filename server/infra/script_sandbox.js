@@ -540,7 +540,7 @@ export async function execute_script_inner(
       }
       const buffer = await response.arrayBuffer();
       if (buffer.byteLength > SCRIPT_FETCH_BYTES) {
-        throw new Error("脚本上游响应超过 2MB 限制");
+        throw new Error("脚本上游响应超过 10MB 限制");
       }
       const text = rss_response_text(buffer, response.headers.get("Content-Type") || "");
       // newString 使用 C 字符串，内嵌 NUL（如 X 的流式页面）会截断后续内容。

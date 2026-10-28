@@ -21,10 +21,11 @@ function assert_errors(results, code = "UPSTREAM_INVALID_RESPONSE") {
   }
 }
 
-test("RSS/Atom 列表解析保留原始正文与日期，不补发布时间", async () => {
+test("RSS 2.0、RSS 1.0 和 Atom 解析保留原始正文与日期，不补发布时间", async () => {
   const value = await run(`return {
     rss: utils.feed_items('<rss><channel><item><guid>post</guid><title>文章 &amp; 内容</title><link>/post</link><content:encoded><![CDATA[<p>正文</p>]]></content:encoded><pubDate>Tue, 13 Oct 2026 00:00:00 GMT</pubDate></item></channel></rss>', 'https://example.com/'),
     atom: utils.feed_items('<feed><entry><id>entry</id><title>标题</title><link rel="self" href="/api/entry"/><link href="/entry"/><updated>2026-10-14T00:00:00Z</updated><summary>说明</summary></entry></feed>', 'https://example.com/'),
+    rdf: utils.feed_items('<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><channel><title>频道</title></channel><item rdf:about="https://example.com/story"><title>RSS 1.0 标题</title><link>https://example.com/story</link><description><![CDATA[<p>说明</p>]]></description></item></rdf:RDF>'),
     invalid: [utils.feed_items('<html>登录页</html>'), utils.feed_items('<!DOCTYPE rss><rss/>')],
     parent: utils.document_nodes('<div><p>文本</p></div>').data.children[0].children[0].parent.tag,
   };`);
@@ -36,6 +37,11 @@ test("RSS/Atom 列表解析保留原始正文与日期，不补发布时间", as
   assert.equal(value.atom.data[0].link, 'https://example.com/entry');
   assert.equal(value.atom.data[0].published, undefined);
   assert.equal(value.atom.data[0].updated, '2026-10-14T00:00:00Z');
+  assert.equal(value.rdf.data.length, 1);
+  assert.equal(value.rdf.data[0].id, 'https://example.com/story');
+  assert.equal(value.rdf.data[0].title, 'RSS 1.0 标题');
+  assert.equal(value.rdf.data[0].description, '<p>说明</p>');
+  assert.equal(value.rdf.data[0].published, undefined);
   assert.equal(value.parent, 'div');
   assert_errors(value.invalid);
 });

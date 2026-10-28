@@ -157,7 +157,7 @@ function feed_items(value, base) {
   try {
     const parsed = document_nodes(value, true);
     if (parsed.error) return parsed;
-    const channel = first(parsed.data, "rss > channel"), atom = first(parsed.data, "feed");
+    const channel = first(parsed.data, "rss > channel") || first(parsed.data, "rdf:rdf"), atom = first(parsed.data, "feed");
     if (!channel && !atom) return Result.Err("上游没有返回 RSS/Atom", "UPSTREAM_INVALID_RESPONSE");
     const items = [];
     for (const node of select(channel || atom, channel ? "item" : "entry")) {

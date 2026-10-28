@@ -13,8 +13,9 @@ const allowed_headers = new Set([
   "x-app-id", "x-app-token", "x-sdk-int", "x-sdk-locale",
   "x-app-version", "x-api-version", "x-app-code",
   "client-version", "server-version", "x-xsrf-token",
+  "x-goog-api-key", "access-token",
 ]);
-export const RSS_FETCH_CREDENTIAL_HEADERS = ["authorization", "x-csrf-token", "x-csrftoken", "kww", "x-app-token", "x-xsrf-token"];
+export const RSS_FETCH_CREDENTIAL_HEADERS = ["authorization", "x-csrf-token", "x-csrftoken", "kww", "x-app-token", "x-xsrf-token", "x-goog-api-key", "access-token"];
 const cookie_header_names = new Map([["uifid", "UIFID"], ["kww", "kwfv1"], ["x-csrf-token", "ct0"], ["x-csrftoken", "csrftoken"], ["x-xsrf-token", "XSRF-TOKEN"]]);
 export function rss_fetch_timeout(options) {
   const timeout_ms = options?.timeout_ms === undefined ? SCRIPT_FETCH_TIMEOUT_MS : options.timeout_ms;

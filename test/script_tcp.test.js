@@ -23,6 +23,29 @@ beforeEach(t => {
   t.after(() => { globalThis.fetch = fetch; });
 });
 
+test("QuickJS Fetch 接受恰好 10MB 的上游响应，超出一字节时拒绝", async t => {
+  const limit = 10 * 1024 * 1024;
+  let length = limit;
+  t.mock.method(globalThis, "fetch", async () => new Response("x".repeat(length)));
+  const script = `export const route = { async handler(ctx) {
+    const response = await ctx.fetchText("https://example.com/large");
+    if (response.error) return response;
+    return { length: response.data.length };
+  } };`;
+  assert.equal(JSON.parse((await execute_script(script, metadata)).output).length, limit);
+  length++;
+  await assert.rejects(execute_script(script, metadata), /脚本上游响应超过 10MB 限制/);
+});
+
+test("QuickJS 普通脚本输出接受恰好 10MB 的序列化结果，超出一字节时拒绝", async () => {
+  const limit = 10 * 1024 * 1024;
+  const script = length => `export const route = { handler() { return "x".repeat(${length}); } };`;
+  const result = await execute_script(script(limit - 2), metadata);
+  assert.equal(Buffer.byteLength(result.output), limit);
+  assert.equal(JSON.parse(result.output).length, limit - 2);
+  await assert.rejects(execute_script(script(limit - 1), metadata), /脚本输出超过 10MB 限制/);
+});
+
 test("QuickJS 显式 TCP 传输访问任意站点，默认/显式 fetch 不建立 socket", async t => {
   const tcp = mock_tcp_http(t);
   globalThis.fetch = async () => new Response("网页正文");

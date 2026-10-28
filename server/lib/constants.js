@@ -69,8 +69,8 @@ export const MAX_SCRIPT_BYTES = 10 * 1024 * 1024;
 export const MAX_RSS_ROUTE_PATH_BYTES = 512;
 export const SCRIPT_MODULE_ROUTE_EXPORT = /\bexport\s+const\s+routes?\s*=/;
 export const SCRIPT_FETCH_TIMEOUT_MS = 10000;
-export const SCRIPT_FETCH_BYTES = 2 * 1024 * 1024;
-export const SCRIPT_OUTPUT_BYTES = 2 * 1024 * 1024;
+export const SCRIPT_FETCH_BYTES = 10 * 1024 * 1024;
+export const SCRIPT_OUTPUT_BYTES = 10 * 1024 * 1024;
 export const SCRIPT_RUN_TIMEOUT_MS = 8000;
 /**
  * 沙箱脚本里一次设备调用的预算。**计时从建任务之前开始，所以它包含排队时间**，
@@ -104,7 +104,7 @@ export const RSS_ROUTE_CACHE_TTL_MS = 10 * 60 * 1000;
 export const RSS_ROUTE_CACHE_MAX_ENTRIES = 4096;
 /**
  * L1 的内存预算（近似值）。DO 的内存上限是 128MB，条目本体最大可达
- * `SCRIPT_OUTPUT_BYTES` = 2MB，只按条数限容会撑爆，所以字节数也要设闸。
+ * `SCRIPT_OUTPUT_BYTES` = 10MB，只按条数限容会撑爆，所以字节数也要设闸。
  */
 export const RSS_ROUTE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 /** 单条目允许落 L2 的大小上限：超过就只留 L1，不往 SQLite 塞大块 JSON。 */

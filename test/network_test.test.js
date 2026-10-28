@@ -144,10 +144,10 @@ test("TCP 使用与 Bilibili 脚本相同的传输、请求头和 Cookie，重�
 
 test("TCP 沿用脚本响应上限及超时，并保留失败诊断", async t => {
   const tcp = mock_tcp_http(t);
-  t.mock.method(globalThis, "fetch", async () => new Response("x".repeat(2 * 1024 * 1024 + 1)));
+  t.mock.method(globalThis, "fetch", async () => new Response("x".repeat(10 * 1024 * 1024 + 1)));
   const failed = await (await admin_network_test(request({ transport: "tcp" }))).json();
   assert.equal(failed.code, "UPSTREAM_FETCH_FAILED");
-  assert.match(failed.error, /2MB|大小限制/);
+  assert.match(failed.error, /10MB|大小限制/);
   assert.ok(tcp.connections[0].closed);
   t.mock.method(AbortSignal, "timeout", () => AbortSignal.abort(new DOMException("timeout", "TimeoutError")));
   const timeout = await (await admin_network_test(request({ transport: "tcp" }))).json();
