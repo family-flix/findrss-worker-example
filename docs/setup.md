@@ -128,7 +128,7 @@ npm run dev
 
 本地后台用户名为 `admin`，密码使用你在 `.dev.vars` 中填写的 `ADMIN_PASSWORD`，没有默认值。本地配置只用于开发，生产部署时请设置独立的随机长密码。
 
-空库首次启动会将 `examples/scripts/rss/apple.js` 保存为已发布的 `1.0.0` 版本，并创建公开订阅源 `{{hostname}}/rss/apple/apps/update/us/id408709785`，地址随当前访问域名解析，无需设备或 Cookie。初始化只执行一次；已有脚本或订阅源的部署跳过默认数据，修改、停用或删除默认记录后重启不会恢复。文章内容由快照任务从 Apple 获取，首次抓取前可以先看到订阅源记录。登录后台后，可在「订阅源」中添加外部 RSS / Atom 地址；需要生成自己的订阅源时，先在「脚本」中发布脚本，再添加对应的订阅地址。
+空库首次启动会将 [rss/apple.js](https://github.com/ltaoo/findrss-scripts/blob/main/rss/apple.js) 保存为已发布的 `1.0.0` 版本，并创建公开订阅源 `{{hostname}}/rss/apple/apps/update/us/id408709785`，地址随当前访问域名解析，无需设备或 Cookie。初始化只执行一次；已有脚本或订阅源的部署跳过默认数据，修改、停用或删除默认记录后重启不会恢复。文章内容由快照任务从 Apple 获取，首次抓取前可以先看到订阅源记录。登录后台后，可在「订阅源」中添加外部 RSS / Atom 地址；需要生成自己的订阅源时，先在「脚本」中发布脚本，再添加对应的订阅地址。
 
 手动或定时生成快照时，会同步 RSS / Atom 中的频道图标到订阅源头像；图标内容未变时保留原头像地址。图标缺失或抓取失败时保留已有头像，不影响文章快照更新。
 
@@ -190,9 +190,9 @@ const rendered = await ctx.puppeteer.navigate("https://example.com", {
 if (rendered.error) return rendered;
 ```
 
-`selector` 等待节点可见，`wait_ms` 额外等待 0–10000 毫秒；每次调用创建匿名页面，结束、失败或取消后关闭浏览器会话。不会自动注入 Cookie 或向函数暴露 Worker 环境。Mock 运行可提供 `({ puppeteer: { navigate: async () => ({ html: "<div>示例</div>" }) } })`；真实调用需要 `BROWSER` 绑定。区域剪藏完整内容与样式提取见 `examples/scripts/region_clip.js`；脚本路由输出仍受 2MB 上限约束，后台剪藏快照上限为 8MB。
+`selector` 等待节点可见，`wait_ms` 额外等待 0–10000 毫秒；每次调用创建匿名页面，结束、失败或取消后关闭浏览器会话。不会自动注入 Cookie 或向函数暴露 Worker 环境。Mock 运行可提供 `({ puppeteer: { navigate: async () => ({ html: "<div>示例</div>" }) } })`；真实调用需要 `BROWSER` 绑定。区域剪藏完整内容与样式提取见 [Clip 平台脚本](https://github.com/ltaoo/findrss-scripts/tree/main/clip)；Clip HTML 及后台剪藏快照上限为 8MB，其余普通脚本输出上限为 10MB，检测脚本沿用独立上限。
 
-更多完整示例见 [RSS 脚本](../examples/scripts/rss/)、[热榜脚本](../examples/scripts/hot/)和[脚本示例说明](../examples/scripts/README.md)。这些文件不会自动导入后台。
+更多完整示例见 [RSS 脚本](https://github.com/ltaoo/findrss-scripts/blob/main/rss/)、[热榜脚本](https://github.com/ltaoo/findrss-scripts/blob/main/hot/)和[脚本示例说明](https://github.com/ltaoo/findrss-scripts/blob/main/docs/usage.md)。这些文件不会自动导入后台。
 
 ## 手动部署与配置
 

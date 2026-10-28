@@ -2,12 +2,21 @@
 
 项目介绍、截图与快速开始见 [Worker README](../README.md)。
 
-一个 Cloudflare Worker 提供共享 API，admin 和 discover 各自保留独立前端入口、页面与构建。
+一个 Cloudflare Worker 提供共享 API，admin、discover 和 rank 各自保留独立前端入口与页面，由统一前端构建处理。
+
+`/rank/` 的页面与静态资源由 `rank.js` 分发。Worker `scheduled` 每 5 分钟向 API Durable Object 提交 Hot 后台任务，由现有 `ServiceBackgroundTasks` 异步调用 `rank/loader.js`，在 QuickJS 沙箱中并发运行仓库 Hot 示例的第一条路由 example，逐脚本写入 R2 `rank/scripts/<脚本名>.json`。JSON 保存完成后，`rank/home.js` 读取并校验这些快照，重新生成 gzip 完整 SSR HTML，连同页面版本及样式哈希原子发布到 `rank/index.html`。JSON 读写或 HTML 发布失败时保留旧完整页面，任务记录失败；脚本采集错误仍参与 HTML 生成并显示错误原因。默认访问只读一份 HTML，带筛选条件时只根据页面内嵌数据渲染首屏。缓存按页面版本隔离，新 HTML 发布后不再命中旧版本响应；不执行脚本、不等待上游。浏览器使用相同 Model/View hydration，不提供用户 Cookie 或设备权限。源码清单由 `scripts/sync_hot_scripts.js` 生成，浏览器产物不含采集源码。完整行为与验证见 [rank/README.md](../rank/README.md)。
 
 - admin：`admin/`，后台入口 `/admin/`，使用自己的 HTML、脚本、样式和管理员登录。
 - discover：`discover/`，广场入口 `/`，使用自己的 HTML、脚本、样式和 SSR。
+- rank：`rank/`，排行榜入口 `/rank/`，使用独立 Model/View、HTML 与样式，后台提前生成 SSR 快照。
 
-两套前端分别构建，分别使用自己的页面外壳和业务状态，均调用同一套 API 与 `APIDurableObject`。
+`POST /admin/api/hot/snapshot` 支持管理员异步提交 Hot 快照任务，复用后台会话或管理员 Bearer/Basic 鉴权，带 Origin 时拒绝跨站请求。接口经 `/_admin/hot/snapshot` 提交到 API DO 的 `ServiceHotSnapshots`，立即返回 HTTP 202 和 `{ task_id, task }`。同一任务先更新脚本 JSON，再重新生成并发布 rank HTML，第二步完成前保持进行中。手动与定时触发复用同一任务键，进行中时返回同一 ID。任务在 `/admin/tasks` 和 `GET /admin/api/background-tasks` 中展示，复用实时通知、失败记录、重启中断与取消能力；取消信号传入 QuickJS 以及 JSON、HTML 写入前检查。采集错误、JSON 持久化或 HTML 发布错误均记为任务失败，已保存的快照保留。详情及调用示例见 [排行榜说明](../rank/README.md)。
+
+脚本模块的 `kind` 决定专属访问前缀：`/rss/<path>`、`/atom/<path>` 仅匹配 RSS 脚本；`GET/HEAD /api/hot/<path>` 仅匹配 Hot 脚本并返回 JSON，路径参数与查询参数透传。类型由显式 `export const kind = "rss"` / `"hot"` 声明，兼容顶部标记和基类推断。两类均保留原路径直达和 Debug。Hot 请求复用当前正式版本、配置、访问凭证和 Cookie 授权校验，并使用独立临时缓存；RSS 目录对同路径源的公开设置与积分计费不套用到 Hot 接口，Hot 的匿名访问由自身 `route.public` 决定。
+
+rank 后台采集以示例地址匹配已发布、启用的 Hot 脚本，命中后由 `ServiceScript.execute_hot_snapshot` 调用同一 Hot 执行流程，读取正式源码及配置，验证对应版本 Cookie 授权并强制重新采集；没有匹配时才匿名执行内置示例。草稿和停用版本不参与匹配，授权失败不回退其他源码或授权。管理员确认并发布抖音等脚本后，重新提交 Hot 快照任务或等待定时任务即可更新 JSON 与 HTML 中的旧权限错误。
+
+三套前端分别使用自己的页面外壳和业务状态；admin 与 discover 调用共享 API，rank 在定时任务中调用内置 Hot 示例沙箱，页面请求只读快照。
 
 订阅广场构建时请求公开目录接口并复用 Timeless SSR 生成含首屏内容、内嵌 CSS 和完整目录的 HTML。默认先启动本地 API Worker，等待就绪后再构建，结束后关闭该实例；`DISCOVERY_API_ORIGIN` 指定接口来源时直接使用指定接口，生产构建应指定线上接口，取数失败不覆盖已有产物。运行时继续将目录和文章快照写入 R2。自动抓取引起的目录更新按一分钟窗口合并发布；手动刷新、目录编辑、权限和头像修改立即发布。待发布标记与截止时间持久化，重启后由 alarm 继续处理；首页边缘缓存 60 秒；缺少产物时兼容读取 DO，发布失败持久化标记并由 alarm 重试。搜索/筛选/分页在浏览器完成，客户端通过 hydrate 接管首屏。详见 [广场构建说明](../discover/README.md#部署)与[静态发布说明](../discover/README.md#静态发布与更新)。
 
@@ -104,7 +113,7 @@ npm run deploy
 - `server/infra/discovery_home.js` 负责首页 SSR，复用 `discover/index.js` 的视图与页面模板。
 - `public/` 只保存公共资源：品牌、来源图标和通用样式。前台业务源码在 `discover/`，后台业务源码在 `admin/`；HTML、业务 JavaScript、业务样式与页面 manifest 均不放入 `public/`。
 - 前台仅保留首页，路由声明、首页模型、全部视图和浏览器挂载集中在 `discover/index.js`，Model 与 View 在文件内分别维护。后台用 `admin/store.js` 集中声明路由。后台 `pages/` 按 `xx.js`（视图）与 `xx.model.js`（状态、请求及业务行为）配对，`components/` 保存共用视图；菜单从路由声明生成。
-- `scripts/` 集中保存统一构建、前后台 bundle 构建、Timeless 插件及 RSS 示例同步工具；npm 命令从这里启动。
+- `scripts/` 集中保存统一构建、前后台 bundle 构建、Timeless 插件及 内置脚本快照同步工具；npm 命令从这里启动。
 - `public/assets/` 保存共享依赖和 Timeless 浏览器适配模块；`public/brand/` 保存唯一品牌源文件。
 
 `scripts/build.js` 负责启动构建所需的 API 并等待就绪，再异步执行 `scripts/build_frontend.js`；开发与构建通过 `scripts/local_worker.js` 共用 Worker 启动和清理逻辑。前端构建复制 `public/` 的公共资源，前后台脚本分别从 `discover/`、`admin/` 构建业务文件并写入同一临时输出，全部成功后原子切换为 `dist/assets/`；主 Worker 由 Wrangler 直接打包，不预生成 Go 嵌入用的服务端 bundle。前台静态文件在资源根路径，后台静态文件在 `/admin/`，依赖在 `/assets/`，品牌在 `/brand/`；旧图片地址保留构建别名，兼容已发布 R2 首页和 manifest。前台引用 `/base.css`；后台 `admin/style.css` 只维护单属性原子类，具体尺寸在页面 `style` 中声明，组件内部样式通过参数传入；后台 manifest 从同一份 `discover/site.webmanifest` 生成，只覆盖展示名称。
@@ -286,11 +295,11 @@ export const route = {
 
 节点选择器沿用旧示例的轻量实现，只支持标签、ID、class、属性存在/等于/前缀/后缀、后代与直接子节点，属性值不支持空白；不是完整 DOM/CSS 或严格 XML 校验器。请求工具提供基础 Accept、Accept-Language、User-Agent，允许 headers 覆盖，Referer 和 Cookie 句柄需脚本显式提供，Cookie 授权仍由宿主验证。JSON 请求不猜测各网站业务错误字段，脚本需自行校验接口回包。
 
-`ctx.fetchText(url, { transport: "tcp" })` 使用宿主通用 TCP 传输，`utils.request_text/request_json` 同样透传此选项。默认 `transport: "fetch"` 仍使用 Workers Fetch。TCP 模式支持公网 HTTP（80）和 HTTPS（443）的 GET/POST；HTTPS 使用 Workers 原生 TLS 和证书校验，发送 HTTP/1.1，不模拟浏览器 TLS 指纹。脚本不能导入 socket 或读取 Cookie 明文；Cookie 授权、重定向检查、跨 origin 凭证移除和 HTTP 错误仍由宿主处理。连接、读取及解压共用 `timeout_ms`（默认且最大 10000），响应及解压后正文均不超过 2MB。请求声明 `Accept-Encoding: identity`，兼容 gzip/deflate 响应。每一跳都校验公网地址及标准端口，TCP 连接受 Cloudflare 出站限制，不保证改善目标网站风控。Debug 上游记录中的 `transport` 可区分实际传输方式。
+`ctx.fetchText(url, { transport: "tcp" })` 使用宿主通用 TCP 传输，`utils.request_text/request_json` 同样透传此选项。默认 `transport: "fetch"` 仍使用 Workers Fetch。TCP 模式支持公网 HTTP（80）和 HTTPS（443）的 GET/POST；HTTPS 使用 Workers 原生 TLS 和证书校验，发送 HTTP/1.1，不模拟浏览器 TLS 指纹。脚本不能导入 socket 或读取 Cookie 明文；Cookie 授权、重定向检查、跨 origin 凭证移除和 HTTP 错误仍由宿主处理。连接、读取及解压共用 `timeout_ms`（默认且最大 10000），响应及解压后正文均不超过 10MB。请求声明 `Accept-Encoding: identity`，兼容 gzip/deflate 响应。每一跳都校验公网地址及标准端口，TCP 连接受 Cloudflare 出站限制，不保证改善目标网站风控。Debug 上游记录中的 `transport` 可区分实际传输方式。
 
 Bilibili RSS 示例已显式选用 TCP，网页 API、Cookie、WBI 签名及分页保持原样。已保存的后台脚本不会自动更新，需要更新并发布脚本；源码变化后仍按现有规则确认 Cookie 权限。
 
-[两个类示例](../examples/script-classes/) 已使用这个模块；69 个旧示例已按文件顶部 `/** RSS */` 标记重写到 [examples/rss](../examples/rss/)（17 个）和 [examples/hot](../examples/hot/)（52 个）。旧 `examples/scripts` 保持原样，新目录不会自动导入后台。
+采集脚本统一在独立仓库 [findrss-scripts](https://github.com/ltaoo/findrss-scripts) 维护，共有 84 个 Hot、18 个 RSS、2 个 Clip 剪藏脚本和 2 个 Detect 内容检测脚本。主项目通过 `node scripts/sync_hot_scripts.js /path/to/findrss-scripts` 更新 `server/infra/builtin_script_sources.js` 内置快照；正常构建只使用已提交的快照，不依赖本机外部目录。完整脚本目录与使用要求见独立仓库 README，脚本不会因源码同步而自动导入后台。
 
 ## 内置脚本基类
 
@@ -300,9 +309,13 @@ QuickJS 在编译、调试、Mock 测试和正式执行前将 `RSSScript`、`Hot
 
 `HotRankScript` 校验榜单和热度，置顶项在前。非置顶排名为上游正整数，未知时使用 `null`；全部排名已知时按排名排列，有未知排名时保留上游次序。热度缺失为 `null`，不从列表下标或采集时间伪造数据。返回 `{ kind: "hot_rank", observed_at, entries, ... }` 榜单 JSON；此结果不含 `items`，使用普通路由访问，不通过 RSS/Atom 包装器。
 
-管理页 `/admin/scripts` 用 Hot / RSS Tabs 作为标题，筛选、数量和列表按 `kind` 展示对应类型。列表接口支持 `GET /admin/api/scripts?kind=hot|rss`，省略时返回全部。新增 Hot 使用百度热榜 HTML 示例，新增 RSS 使用 Solidot RSS 示例。模块可导出 `kind = "hot" | "rss"`，兼容旧 `script_type`；未声明时优先读取顶部 `/** HOT */` / `/** RSS */` 标记，再识别基类。迁移前无标记的 NewsNow 示例兼容归为 Hot，其余旧脚本默认 RSS。类型随草稿保存、发布、回退和列表响应保留；Hot 卡片提供普通路由地址。
+热榜条目支持可选 `thumbnail` URL 字符串（如小说封面），有值时必须是无凭据的 HTTP(S) 绝对地址；相对地址由脚本先用 `utils.absolute_url` 转换。省略、`null` 或空字符串不会输出字段，兼容已有热榜。普通路由、缓存与 Debug JSON 保留此地址，不主动抓取缩略图。
 
-示例见 [百度热榜](../examples/script-classes/baidu_hot_rank.js) 和 [微信视频号](../examples/script-classes/wechat_channels_rss.js)。旧脚本仍可声明自己的同名局部类。
+热榜快照支持可选 `category` 分类字符串，去除首尾空格后最多 32 字符、不含控制字符；空值不输出。Hot 模块可导出同名 `category` 作为 `/rank/` 默认分类，供失败卡片归类，成功快照的分类优先；来源筛选使用 `platform.name`。模块可导出安全整数 `order` 控制页面卡片顺序，数值越小越靠前，缺失为 `0`，同值保持原顺序，不影响条目排名。分类、来源、搜索共同筛选；SSR 和客户端共用相同规则，HTML 缓存按全部筛选参数隔离。
+
+管理页 `/admin/scripts` 用 Hot / RSS Tabs 作为标题，筛选、数量和列表按 `kind` 展示对应类型。列表接口支持 `GET /admin/api/scripts?kind=hot|rss|clip`，省略时返回全部。新增 Hot 使用百度热榜 HTML 示例，新增 RSS 使用 Solidot RSS 示例。模块可导出 `kind = "hot" | "rss"`，兼容旧 `script_type`；未声明时优先读取顶部 `/** HOT */` / `/** RSS */` 标记，再识别基类。迁移前无标记的 NewsNow 示例兼容归为 Hot，其余旧脚本默认 RSS。类型随草稿保存、发布、回退和列表响应保留；Hot 卡片提供普通路由地址。
+
+示例见 [百度热榜](https://github.com/ltaoo/findrss-scripts/blob/main/hot/baidu_hot.js) 和 [微信视频号](https://github.com/ltaoo/findrss-scripts/blob/main/rss/wxchannels.js)。旧脚本仍可声明自己的同名局部类。
 
 管理端订阅源、脚本和 Token 列表使用 Timeless `kit.ListCore` 配合 `kit.RequestCore` 请求后端分页，接口以 `limit/offset` 入参返回当前页和 `total_count`。订阅源支持 `visibility=all|public|private` 与 `status`、`source_type`、`q` 组合筛选；脚本支持 `kind`、`status`、`q`，关键词涵盖附加路由。无分页参数的列表调用继续用于内部逻辑和全量导出。
 
@@ -353,3 +366,15 @@ export const route = {
 脚本卡片可「撤销 Cookie 授权」，立即清空响应缓存。每次路由请求在缓存读取前校验授权，每次 Cookie 使用及执行结束也重新校验；撤销阻止后续访问和结果入缓存，已发送的上游请求无法撤回。已被订阅者下载或缓存的内容不能收回。
 
 此授权接口当前由 `findrss-worker` 提供。
+
+## 内容检测脚本
+
+`kind="detect"` 是网站内容检测，脚本代码修改本身不产生变化事件。`DetectScript.fetch(ctx)` 抓取，`normalize(data,ctx)` 返回 `Result<{title,link,snapshot}>`，`compare(previous,current,ctx)` 返回 `Result<{changes,matches?}>`，业务无法可靠判断时也可返回 `{status:"inconclusive",changes:[],issues:[{reason:"原因"}]}`；默认比较通过 `ctx.detect.compare` 提供，宿主核对事件与真实快照。`ctx.previous` 只读，包含旧快照 id 和 snapshot。
+
+snapshot 包含以稳定名称为键的 content、record、list 检测对象。正文比较归一化后的字符串，字段递归比较并使用 JSON Pointer，列表使用稳定 ID 匹配条目；ordered 列表通过共同成员的相对顺序识别移动，新增或移除造成的位置偏移不会批量误报。列表 coverage 为 complete/window/partial，窗口须有稳定 scope；partial、incomplete、目标集合或结构变化返回 inconclusive，不推进基线。明确业务对象不存在时用 present=false，抓取失败和选择器失效返回 Result.Err。
+
+`ServiceDetection` 复用后台任务、全局/单任务刷新策略与 alarm 调度。检测表保存基线及最近执行 ID，历史表保存摘要和 R2 对象键。每条任务保留最近 20 次执行及当前基线，64KB 以上的历史结果要求 API_STORAGE；快照上限 1MB，结果上限 8MB。R2 写入后在事务中再次检查来源、授权、记录版本及基线，失败时清理新对象，保留旧基线。
+
+管理员接口 `/admin/api/detections` 支持 GET/POST；`/<id>` 支持 PATCH/DELETE；`/<id>/run` 和 `/<id>/reset` 支持 POST；`/<id>/runs` 与 `/<id>/runs/<run_id>` 支持 GET。历史不公开。`GET/HEAD /api/detect/<脚本路由>` 按原路由权限无状态试采样，不读取或推进正式任务基线，不复用采集内容缓存。Debug 和 AI 脚本助手可传 previous 旧快照复测，结果不会写入正式任务。
+
+检测结构和完整示例见 [findrss-scripts/detect](https://github.com/ltaoo/findrss-scripts/tree/main/detect)。非浏览器验证：`node --test test/detect.test.js test/detection_scripts.test.js admin/__tests__/detections.test.mjs`。

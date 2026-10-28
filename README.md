@@ -26,6 +26,7 @@ FindRSS 是一个可以一键部署到自己 Cloudflare 账号的 RSS 采集工�
 - **采集网站内容**：提取你想关注的文章、视频、作者动态或小说章节。
 - **随时添加、编辑脚本**：使用现成示例，自己编写，或让内置助手协助完成；在后台调试、发布即可生效，无需重新部署。
 - **生成订阅地址**：发布后即可添加到阅读器，持续获取更新。
+- **浏览排行榜**：后台每 5 分钟为每个脚本独立生成 JSON 快照，再重建完整 HTML，访问 `/rank/` 直接读取页面快照；支持封面、搜索、分类及来源筛选，脚本可设置展示顺序，单个榜单失败时显示原因。[模块说明](rank/README.md)
 
 ## 界面预览
 
@@ -70,29 +71,35 @@ RSS 是供阅读器获取更新的订阅格式。阅读器是用来集中查看�
 
 ## 采集示例
 
-项目提供以下常用脚本。**点击脚本名称直接打开原始代码（Raw），复制全部内容**，粘贴到后台「脚本」中调试、发布。
+采集脚本已迁移至独立仓库 [findrss-scripts](https://github.com/ltaoo/findrss-scripts)，完整目录包含 84 个 Hot、18 个 RSS、2 个 Clip 剪藏脚本和 2 个 Detect 内容检测脚本。以下列出常用脚本，**点击脚本名称直接打开原始代码（Raw），复制全部内容**，粘贴到后台「脚本」中调试、发布。链接使用新仓库的 `main` 分支，发布后可访问。
 
 | 脚本（点击打开 Raw） | 采集内容 |
 | --- | --- |
-| <img src="public/platform-icons/bilibili.svg" width="24" height="24" alt=""> [哔哩哔哩](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/bilibili.js) | UP 主视频与动态 |
-| <img src="public/platform-icons/youtube.svg" width="24" height="24" alt=""> [YouTube](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/youtube.js) | 频道视频、Shorts |
-| <img src="public/platform-icons/zhihu.svg" width="24" height="24" alt=""> [知乎](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/zhihu.js) | 动态、回答、文章、视频等 |
-| <img src="public/platform-icons/weibo.svg" width="24" height="24" alt=""> [微博](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/weibo.js) | 用户微博 |
-| <img src="public/platform-icons/x.svg" width="24" height="24" alt=""> [X](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/x.js) | 用户推文 |
-| <img data-n="instagram-example-icon" src="public/platform-icons/instagram.svg" width="24" height="24" alt=""> [Instagram](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/instagram.js) | 用户图片、视频与多图作品 |
-| <img src="public/platform-icons/douyin.svg" width="24" height="24" alt=""> [抖音](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/douyin.js) | 作者视频与图集 |
-| <img src="public/platform-icons/kuaishou.svg" width="24" height="24" alt=""> [快手](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/kuaishou.js) | 作者作品 |
-| <img src="public/platform-icons/xiaohongshu.svg" width="24" height="24" alt=""> [小红书](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/xiaohongshu.js) | 用户笔记 |
-| <img src="public/platform-icons/telegram.svg" width="24" height="24" alt=""> [Telegram](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/telegram.js) | 公开频道消息 |
-| <img src="public/platform-icons/fanqienovel.svg" width="24" height="24" alt=""> [番茄小说](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/fanqienovel.js) | 章节目录与正文 |
-| <img src="public/platform-icons/qidian.svg" width="24" height="24" alt=""> [起点中文网](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/qidian.js) | 章节目录与正文 |
-| <img src="public/platform-icons/website.svg" width="24" height="24" alt=""> [69 书吧](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/69shuba.js) | 章节目录 |
-| <img src="public/platform-icons/website.svg" width="24" height="24" alt=""> [天天看书](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/ttk.js) | 章节目录 |
-| <img src="public/platform-icons/website.svg" width="24" height="24" alt=""> [Apple App Store](https://raw.githubusercontent.com/ltaoo/findrss-worker/master/examples/scripts/rss/apple.js) | 应用版本更新 |
+| <img src="public/platform-icons/bilibili.svg" width="24" height="24" alt=""> [哔哩哔哩](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/bilibili.js) | UP 主视频与动态 |
+| <img src="public/platform-icons/youtube.svg" width="24" height="24" alt=""> [YouTube](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/youtube.js) | 频道视频、Shorts |
+| <img src="public/platform-icons/zhihu.svg" width="24" height="24" alt=""> [知乎](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/zhihu.js) | 动态、回答、文章、视频等 |
+| <img src="public/platform-icons/weibo.svg" width="24" height="24" alt=""> [微博](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/weibo.js) | 用户微博 |
+| <img src="public/platform-icons/x.svg" width="24" height="24" alt=""> [X](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/x.js) | 用户推文 |
+| <img data-n="instagram-example-icon" src="public/platform-icons/instagram.svg" width="24" height="24" alt=""> [Instagram](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/instagram.js) | 用户图片、视频与多图作品 |
+| <img src="public/platform-icons/douyin.svg" width="24" height="24" alt=""> [抖音](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/douyin.js) | 作者视频与图集 |
+| <img src="public/platform-icons/kuaishou.svg" width="24" height="24" alt=""> [快手](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/kuaishou.js) | 作者作品 |
+| <img src="public/platform-icons/xiaohongshu.svg" width="24" height="24" alt=""> [小红书](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/xiaohongshu.js) | 用户笔记 |
+| <img src="public/platform-icons/telegram.svg" width="24" height="24" alt=""> [Telegram](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/telegram.js) | 公开频道消息 |
+| <img src="public/platform-icons/fanqienovel.svg" width="24" height="24" alt=""> [番茄小说](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/fanqienovel.js) | 章节目录与正文 |
+| <img src="public/platform-icons/qidian.svg" width="24" height="24" alt=""> [起点中文网](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/qidian.js) | 章节目录与正文 |
+| <img src="public/platform-icons/website.svg" width="24" height="24" alt=""> [69 书吧](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/69shuba.js) | 章节目录 |
+| <img src="public/platform-icons/website.svg" width="24" height="24" alt=""> [天天看书](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/ttk.js) | 章节目录 |
+| <img src="public/platform-icons/website.svg" width="24" height="24" alt=""> [Apple App Store](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/rss/apple.js) | 应用版本更新 |
 
-也可以编写其他网站的采集规则。部分脚本需要登录账号或连接设备，具体要求见[示例说明](examples/scripts/README.md)。
+也可以编写其他网站的采集规则。部分脚本需要登录账号或连接设备，具体要求见[示例说明](https://github.com/ltaoo/findrss-scripts/blob/main/docs/usage.md)。
+
+小说热榜另提供 [起点](https://github.com/ltaoo/findrss-scripts/blob/main/hot/qidian.js)（移动端男女频全部 17 榜）、[番茄小说](https://github.com/ltaoo/findrss-scripts/blob/main/hot/fanqienovel.js)（巅峰及全部分类阅读/新书榜）和 [七猫小说](https://github.com/ltaoo/findrss-scripts/blob/main/hot/qimao.js)（男女频全部 5 类及日/月榜）脚本，导入后台「脚本 → 热榜」后使用；参数与限制见[小说排行榜说明](https://github.com/ltaoo/findrss-scripts/blob/main/docs/usage.md#小说排行榜)。
 
 > 可以配合 [dm-extension 浏览器插件](https://github.com/ltaoo/dm-extension)，将 Cookie 提交到自己部署的 FindRSS，供采集脚本使用。
+
+平台剪藏提供 [GitHub README](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/clip/github.js) 和 [通用网页区域](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/clip/website.js) 脚本。在「脚本 → 剪藏」中调试发布，再到「剪藏」选择脚本、填写具体路由并配置刷新策略，即可获得固定的 HTML / iframe 链接。[Clip 脚本契约](https://github.com/ltaoo/findrss-scripts/blob/main/clip/README.md)
+
+内容检测提供 [GitHub Releases](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/detect/github_releases.js) 与 [网页正文](https://raw.githubusercontent.com/ltaoo/findrss-scripts/main/detect/website_text.js) 脚本。在「脚本 → 内容检测」中发布脚本，再到「内容检测」创建任务，可查看正文、字段、条目新增/移除/更新及顺序变化。首次建立基线，失败和不完整采集保留原数据。[Detect 导出契约](https://github.com/ltaoo/findrss-scripts/blob/main/detect/README.md)
 
 ## Fork 部署到 Cloudflare Workers
 
@@ -135,10 +142,14 @@ RSS 是供阅读器获取更新的订阅格式。阅读器是用来集中查看�
 
 **旧部署没有「更新 FindRSS」入口？** 只需在 GitHub 网页中补一个工作流文件，详见[更新指南](docs/setup.md#更新已部署的站点)。也可以按指南开启每天自动更新。
 
+## 脚本测试
+
+采集脚本单测与回包夹具在 [findrss-scripts](https://github.com/ltaoo/findrss-scripts) 的 `test/` 中维护；在脚本仓库运行 `FINDRSS_WORKER_ROOT=/path/to/findrss-worker npm test`，直接验证脚本源码。Worker 的 `npm test` 保留沙箱、权限、路由及发布等平台测试。
+
 ## 更多文档
 
 - [安装与配置](docs/setup.md)：创建站点、本地运行和常用设置。
-- [采集示例](examples/scripts/README.md)：各来源的使用要求与示例。
+- [采集示例](https://github.com/ltaoo/findrss-scripts/blob/main/docs/usage.md)：各来源的使用要求与示例。
 - [管理后台](admin/README.md)：来源管理、助手和设备设置。
 - [技术指南](docs/technical-guide.md)：开发与扩展说明。
 

@@ -17,7 +17,9 @@
 
 非浏览器集成检查：`node --test scripts/admin_realtime_smoke.test.mjs`，使用隔离的本地 SQLite / R2 验证会话、来源校验、变更通知和助手通道复用。
 
-`/admin/clips` 提供区域剪藏管理：来源网址、CSS 选择器、采集视口、刷新策略、预览与 iframe 嵌入。采集通过 Cloudflare Browser Rendering 执行 `examples/scripts/region_clip.js`，按与订阅源相同的默认策略或单条覆盖规则定时更新；任务出现在「任务」页面。暂停仅停止自动刷新，最近快照仍可访问；删除会让公开链接返回 404。公开 `/clips/<ID>` 只输出无脚本的静态 HTML 和内联 CSS，允许跨站 iframe；后台页面自身仍禁止被嵌入。区域剪藏脚本通过 `ctx.puppeteer.navigate` 显式调用渲染与页面提取函数；宿主使用 `@cloudflare/puppeteer` 与 `BROWSER` 绑定，不需要配置渲染方式开关或 REST API 凭证。普通脚本的 Debug、Mock 和正式执行也提供同一接口，Mock 可声明 `puppeteer.navigate`。
+`/admin/detections` 提供内容检测任务：选择已发布启用的 Detect 脚本及具体路由、设置周期、手动执行、暂停、重置基线和查看历史。脚本管理增加「内容检测」Tab，Debug 可填写上次内容快照 JSON；脚本中的 fetch → normalize → compare 比较网站数据。结果区分首次、无变化、有变化、无法可靠判断和采集失败，历史展示正文、字段、列表条目、相对顺序及规则命中。窗口列表只报告进入/离开窗口；部分采集不判删除。每条任务独立保存基线，历史保留最近 20 次及当前基线，较大的结果存于 R2；任务编辑、取消、来源停用或授权撤销后不发布迟到结果。详见 [Detect 脚本契约](https://github.com/ltaoo/findrss-scripts/blob/main/detect/README.md)。
+
+`/admin/clips` 通过已发布且启用的 `kind="clip"` 平台脚本采集内容：选择脚本及具体路由、设置刷新策略，再预览或复制 iframe。脚本管理增加「剪藏」Tab，复用导入、配置、Debug、权限、发布及版本流程，Debug 支持隔离的 HTML 预览。平台脚本用 `ClipScript` 返回 `{ title, link, html, stats? }`；`ctx.clip.capture` 提供共享节点提取、样式冻结和图片内嵌，使用时需要 `BROWSER` 绑定；也可使用 `ctx.fetchText` 生成 HTML。详见 [Clip 脚本契约](https://github.com/ltaoo/findrss-scripts/blob/main/clip/README.md)。旧手动记录自动关联通用网页脚本，保留原有 URL、选择器、视口、刷新规则、公开链接及快照。公开 `/clips/<ID>` 只返回清理后的静态快照，允许 iframe 嵌入；失败、脚本停用、授权撤销或迟到结果不会替换旧快照。
 
 后台公共 Shell 挂载共享的 `Toaster()` 和 `TooltipHost()`。各页点击说明按钮通过 `FindRSSAdminUI.notify(text)` 展示提示，错误提示可传入 `{ error: true }`。通知支持关闭、自动消失，并在切换页面或卸载时清理。Field 的 `tooltip` 参数继续使用点击提示。
 
@@ -35,6 +37,8 @@ Browser
 
 主 Worker 的 `admin.js` 提供后台登录、会话和页面路由；本目录没有 Worker 入口。登录表单只需输入密码，请求只提交 `password`；后端固定使用用户名 `admin`，密码来自 Worker secret `ADMIN_PASSWORD`；验证成功后签发 12 小时有效、`HttpOnly`、`SameSite=Strict` 的签名 Session Cookie。各管理页在 `beforeReady` 阶段检查当前路由是否需要登录，未登录时通过 `location.replace` 进入登录页；会话失效或主动退出也会回到登录页。代理管理 API 时，管理 HTTP 边界 在服务端注入管理员 Bearer Token，不向浏览器暴露 Secret。
 
+`POST /admin/api/hot/snapshot` 可提交全部内置 Hot 示例的 JSON 快照更新及 rank HTML 重建任务，接口接受后台会话或管理员 Bearer/Basic 凭证，立即返回 HTTP 202 和 `{ task_id, task }`。JSON 保存完成后继续生成并发布完整 HTML，此前任务保持进行中；HTML 发布失败也记录为任务失败。后台「任务」页 `/admin/tasks` 展示任务 ID、进行中、完成、失败及已终止状态，沿用实时通知和终止操作；错误原因保存在任务记录中。定时和手动提交合并正在运行的同类任务。调用示例和错误状态见 [排行榜说明](../rank/README.md)。
+
 管理后台页面统一由 `components/shell.js` 承载：桌面端使用固定侧边栏，移动端切换为底部导航；各业务页面共用这套外壳、页头和组件样式。新增子页面时，先建立 `xx.js` 与 `xx.model.js`，再在 `store.js` 的 `routes_configure.admin.children` 中声明路径、页面、标题和图标，并让页面根 View 调用 `FindRSSAdminShell.Page({ page_id, title, description }, children)`，业务 View 作为 `children` 传入，并导出页面函数供路由绑定；页面不再通过 `window.FindRSSAdminPages` 注册或自行挂载。
 
 页面布局由 `frui/PageLayout`、`PageHeader`、`PageContent` 共同负责：`PageLayout` 使用全部可用宽度，统一桌面 16px、窄屏 12px 的页边距，以及页头与内容之间的 12px 间距；`PageHeader` 只承载页面标题、数量和全局操作，操作区根据可用空间换行；`PageContent` 承载筛选、Tabs、列表及业务工作区，区块间距默认 12px。布局复用 `--frui-space-*` 和控件高度 token，各页面不再添加外层限宽或整页留白。脚本页的类型 Tabs 和列表属于内容区，安装、新增按钮统一放入页头。加载占位也复用同一布局，避免进入页面前后边距变化。
@@ -49,7 +53,7 @@ Browser
 
 网络测试的“执行位置”默认入口 Worker，也可选择“脚本宿主（DO）”：接口追加 `?execution=script`，由运行脚本的同一个 `APIDurableObject` 发起请求，直接读取 DO 中已保存的 Cookie，不执行 QuickJS。两种位置复用相同的请求校验、Cookie 匹配、传输与结果展示；结果的 `execution` 字段及页面摘要标明实际执行位置。“复制 curl”也使用所选位置解析参数与 Cookie，但生成的命令仍从本机出口访问。可用于对比入口 Worker 请求成功、脚本请求超时的情况；相同传输方式不保证两个执行位置有相同出口。
 
-网络测试的“传输方式”默认 Fetch，也可选择 TCP（接口参数 `transport: "tcp"`），复用 `examples/scripts/rss/bilibili.js` 使用的 TCP 传输。复现时填写相同网址、请求头并选择对应 Cookie。TCP 使用 HTTP/1.1 和 `Accept-Encoding: identity`，沿用脚本端的响应及解压后 2MB 上限；TCP 传输会在返回前读取完整成功响应，页面耗时包含这段读取时间。TCP 模式导出的 curl 使用 `--http1.1` 及相同传输请求头，仍从本机出口访问。
+网络测试的“传输方式”默认 Fetch，也可选择 TCP（接口参数 `transport: "tcp"`），复用 [rss/bilibili.js](https://github.com/ltaoo/findrss-scripts/blob/main/rss/bilibili.js) 使用的 TCP 传输。复现时填写相同网址、请求头并选择对应 Cookie。TCP 使用 HTTP/1.1 和 `Accept-Encoding: identity`，沿用脚本端的响应及解压后 10MB 上限；TCP 传输会在返回前读取完整成功响应，页面耗时包含这段读取时间。TCP 模式导出的 curl 使用 `--http1.1` 及相同传输请求头，仍从本机出口访问。
 
 每张设备卡片通过“日志”按钮打开右侧抽屉，并调用 `/admin/api/devices/:device_id/logs` 查看设备行为，保留天数以服务端返回值为准，Cloudflare Worker 当前查询最近 3 天。连接、心跳、调用、响应和系统事件均以结构化日志保存；抽屉支持分类、自动刷新、向前分页和详情展开。敏感字段记录前会脱敏，超大详情会截断。
 
