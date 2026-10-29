@@ -754,8 +754,9 @@ export class ServiceScript {
   assert_route_paths(metadata, script_id = "") {
     const paths = new Set((metadata.routes || [metadata]).map(entry => entry.path));
     for (const row of this.repo.scripts.list()) {
-      if (row.route === script_id || ScriptModel.fromRow(row).status === "draft") continue;
-      for (const entry of ScriptModel.fromRow(row).routes) {
+      const script = ScriptModel.fromRow(row);
+      if (script.id === script_id || script.status === "draft") continue;
+      for (const entry of script.routes) {
         if (paths.has(entry.path)) {
           const error = ScriptModel.path_conflict_reason(entry.path);
           throw do_error(error.message, error.status);

@@ -54,6 +54,34 @@ test("发布、修改与删除脚本均保留自身及其他源的 XML", async (
   assert.equal((await cache.resolve(key, Date.now())).rendered.get("rss\n"), "快手 XML");
 });
 
+test("路由冲突检查按归一化 ID 排除自身，仍拒绝其他正式脚本占用路径", () => {
+  const { service, rows } = setup();
+  const metadata = { routes: [{ path: "/own" }, { path: "/own/extra" }] };
+  rows.push({ route: 123, metadata_json: JSON.stringify(metadata) });
+  assert.doesNotThrow(() => service.assert_route_paths(metadata, "123"));
+  assert.throws(() => service.assert_route_paths(metadata), error => error.status === 409);
+  rows.push({ route: "other", metadata_json: JSON.stringify({ path: "/other" }) });
+  assert.throws(() => service.assert_route_paths({ routes: [...metadata.routes, { path: "/other" }] }, "123"),
+    error => error.status === 409 && error.message === "route.path 已存在：/other");
+});
+
+test("正式脚本保持原路由重新发布，保存草稿后仍发布到同一脚本", async () => {
+  const { service, rows } = setup();
+  const first = (await service.create_script(edit({ script: source, status: "published", version: "1.0.0" }))).data.script;
+  const next_source = source + "\n// 下一版";
+  const next = (await service.update_script(edit({ script: next_source, status: "published", version: "1.0.1" }), first.id)).script;
+  assert.equal(next.id, first.id);
+  assert.deepEqual(next.routes.map(entry => entry.path), first.routes.map(entry => entry.path));
+  const draft_source = source + "\n// 草稿发布";
+  await service.update_script(edit({ script: draft_source, status: "draft", version: "1.0.2" }), first.id);
+  const published = (await service.update_script(edit({ status: "published", version: "1.0.2" }), first.id)).script;
+  assert.equal(published.id, first.id);
+  assert.equal(published.script, draft_source);
+  assert.equal(published.version, "1.0.2");
+  assert.equal(published.draft, undefined);
+  assert.equal(rows.length, 1);
+});
+
 test("正式发布必填三段递增版本，绑定源码哈希，草稿保留上次正式版本", async () => {
   const { service, rows } = setup();
   await assert.rejects(service.create_script(edit({ script: source })), error => error.status === 400 && /版本号/.test(error.error));
