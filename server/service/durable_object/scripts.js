@@ -898,7 +898,8 @@ export class ServiceScript {
     if (!parsed.ok) throw do_error(parsed.error.message, parsed.error.status);
     const compiled = await compile_script_module(parsed.model.script);
     if (compiled.error || !compiled.metadata) throw do_error("脚本校验失败：" + compiled.error, 400);
-    return { routes: compiled.metadata.routes.map(({ path, name, example, allowed_hosts }) => ({ path, name, example,
+    return { config_schema: compiled.metadata.config_schema || null,
+      routes: compiled.metadata.routes.map(({ path, name, example, allowed_hosts }) => ({ path, name, example,
       ...(allowed_hosts?.length ? { image_proxy: true } : {}) })) };
   }
 
@@ -945,7 +946,7 @@ export class ServiceScript {
     const metadata = { ...selected.metadata, kind: compiled.metadata.kind, debug: true, debug_request: true };
     const stored = draft.route ? this.repo.scripts.find_config(draft.route) : null;
     metadata.config_schema = compiled.metadata.config_schema;
-    metadata.config = stored ? ScriptModel.fromRow(stored).toValue().config : {};
+    metadata.config = Object.hasOwn(body, "config") ? body.config : stored ? ScriptModel.fromRow(stored).toValue().config : {};
     const version = draft.version ?? (stored ? ScriptModel.fromRow(stored).version : "");
     const grant_id = body.cookie_grant_id || (stored ? ScriptModel.fromRow(stored).toValue().cookie_grant_id : "") || "";
     const cookie_access = await this.cookie_access(draft.script, { ...compiled.metadata, version }, draft.route, grant_id, true);

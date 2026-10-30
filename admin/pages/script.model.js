@@ -199,6 +199,8 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
   const diff_open_ = ref(false);
   const diff_text_ = ref("");
   const draft_version_ = ref("");
+  const draft_config_schema_ = ref(null);
+  let debug_config_value;
 
   const debug_url_ = ref("");
   const debug_previous_ = ref("");
@@ -264,6 +266,7 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
     diff_text: diff_text_,
     diff_available: computed(published_script_, script => script !== null),
     draft_version: draft_version_,
+    draft_config_schema: draft_config_schema_,
 
     debug_url: debug_url_,
     debug_previous: debug_previous_,
@@ -537,6 +540,7 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
         if (generation !== routes_generation) return;
         if (!Array.isArray(payload.routes))
           throw new Error("路由接口返回格式不正确");
+        draft_config_schema_.set(payload.config_schema || null);
         update_debug_routes(payload.routes);
       } catch (error) {
         if (generation === routes_generation)
@@ -699,6 +703,8 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
     set_draft(name, value) {
       if (name === "script") {
         const source = String(value);
+        debug_config.methods.close();
+        draft_config_schema_.set(null);
         draft_script_.set(source);
         const version = source.match(/^[ \t]*export\s+const\s+version\s*=\s*(["'])([^"'\\\r\n]*)\1\s*(?:;|$)/m);
         if (version) draft_version_.set(version[2]);
@@ -798,6 +804,7 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
           signal: controller.signal,
           body: JSON.stringify({
             script: draft_script_.value,
+            ...(debug_config_value !== undefined ? { config: debug_config_value } : {}),
             ...(draft_type_.value === "detect" ? { previous } : {}),
             version: draft_version_.value.trim(),
             request_url: debug_url_.value,
@@ -885,6 +892,12 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
     close_diff() {
       diff_open_.set(false);
     },
+    open_debug_config() {
+      if (!form_open_.value || !draft_config_schema_.value) return;
+      const script = scripts_.value.find(item => item.id === editing_id_.value);
+      debug_config.methods.open({ id: editing_id_.value, name: script?.name,
+        config_schema: draft_config_schema_.value, config: debug_config_value });
+    },
     edit_script(script_id) {
       if (saving_.value) return;
       const script = scripts_.value.find((item) => item.id === script_id);
@@ -896,6 +909,9 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
       agent?.methods.close();
       draft_revision++;
       reset_debug();
+      debug_config.methods.close();
+      debug_config_value = structuredClone(script.config);
+      draft_config_schema_.set(script.draft ? null : script.config_schema);
       diff_open_.set(false);
       published_script_.set(script.published_script);
       editing_id_.set(script.id);
@@ -923,6 +939,9 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
       agent?.methods.close();
       draft_revision++;
       reset_debug();
+      debug_config.methods.close();
+      debug_config_value = undefined;
+      draft_config_schema_.set(null);
       form_open_.set(false);
       diff_open_.set(false);
       diff_text_.set("");
@@ -1248,6 +1267,8 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
       if (!form_open_.value || event.expected_revision !== draft_revision)
         return false;
       draft_script_.set(event.script);
+      debug_config.methods.close();
+      draft_config_schema_.set(null);
       draft_revision = event.revision;
       schedule_debug_routes();
       mark_debug_results_stale();
@@ -1288,8 +1309,15 @@ function ScriptViewModel({ fetch: request_fetch = fetch } = {}) {
     });
     await load();
   } });
+  const debug_config = ScriptConfigModel({ save: async (id, value) => {
+    debug_config_value = value;
+    draft_revision++;
+    if (agent?.state.busy.value) agent.methods.cancel("调试配置已修改，已停止当前 AI 对话");
+    mark_debug_results_stale();
+    schedule_debug();
+  } });
   const paged_scripts = scripts_;
-  return { state, methods, visible_scripts, paged_scripts, pagination, agent, config };
+  return { state, methods, visible_scripts, paged_scripts, pagination, agent, config, debug_config };
 }
 
 export { normalize_script, normalize_log_lines, ScriptViewModel };

@@ -92,6 +92,20 @@ test("API 持久化配置，更新代码与状态保留配置，多路由、Debu
   const debug = await service.debug_script(request({ script: source, route: created.id, request_url: "/debug/config-test/second" }));
   assert.equal(debug.status, 200, JSON.stringify(debug));
   assert.deepEqual(JSON.parse(debug.rss_debug.output).config, saved.config);
+  const preview = await service.preview_script_routes(request({ script: source }));
+  assert.deepEqual(preview.config_schema, schema);
+  for (const route of [created.id, ""]) {
+    const configured = await service.debug_script(request({ script: source, route, request_url: "/debug/config-test",
+      config: { token: "debug", count: 2 } }));
+    assert.equal(configured.status, 200, JSON.stringify(configured));
+    assert.deepEqual(JSON.parse(configured.rss_debug.output).config, { token: "debug", count: 2, enabled: false, mode: "brief" });
+  }
+  for (const config of [null, [], {}, { token: "" }, { token: "debug", count: -1 }, { token: "x".repeat(32769) }]) {
+    const invalid = await service.debug_script(request({ script: source, route: created.id, request_url: "/debug/config-test", config }));
+    assert.ok(invalid.status >= 400);
+    assert.match(invalid.rss_debug.error_text, /脚本配置无效/);
+  }
+  assert.deepEqual(JSON.parse(rows[0].metadata_json).config, saved.config, "调试配置不写入正式配置");
   const mock = await service.test_script(request({ script: source, route: created.id, route_index: 1 }));
   assert.equal(mock.ok, true, JSON.stringify(mock));
   assert.deepEqual(JSON.parse(mock.preview).config, saved.config);

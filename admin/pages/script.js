@@ -491,7 +491,7 @@ function ScriptDebugResultContentView({ store: vm$, kind, preview }) {
                 [
                   read(({ status, rss_debug: debug, stale }) =>
                     debug
-                      ? `HTTP ${status} · ${debug.phase} · ${debug.elapsed_ms} ms${debug.invoked ? " · 已调用设备" : ""}${stale ? " · 代码或链接已修改，等待重新调试" : ""}`
+                      ? `HTTP ${status} · ${debug.phase} · ${debug.elapsed_ms} ms${debug.invoked ? " · 已调用设备" : ""}${stale ? " · 代码、配置或链接已修改，等待重新调试" : ""}`
                       : "",
                   ),
                 ],
@@ -1596,7 +1596,7 @@ function ScriptFormView({ store: vm$ }) {
   const trigger = document.activeElement;
   const busy = vm$.state.saving;
   function handle_keydown(event) {
-    if (vm$.state.diff_open.value || event.defaultPrevented) return;
+    if (vm$.state.diff_open.value || vm$.debug_config.state.open.value || event.defaultPrevented) return;
     if (event.key === "Escape") {
       if (vm$.state.cookie_consent.value.open) return;
       event.stopPropagation();
@@ -1668,6 +1668,14 @@ function ScriptFormView({ store: vm$ }) {
         trigger?.focus?.();
       },
       footer: [
+        Show({
+          when: vm$.state.draft_config_schema,
+          ok: () => Button({
+            variant: "secondary",
+            attributes: { n: "script-debug-config-button", "aria-haspopup": "dialog", "aria-expanded": vm$.debug_config.state.open },
+            onClick: vm$.methods.open_debug_config,
+          }, ["配置"]),
+        }),
         Show({
           when: computed(vm$.state.editing_id, (id) => Boolean(id)),
           ok: () =>
@@ -2926,6 +2934,11 @@ function ScriptEditorView({ store }) {
     Show({
       when: store.config.state.open,
       ok: () => ScriptConfigView({ model: store.config }),
+    }),
+    Show({
+      when: store.debug_config.state.open,
+      ok: () => ScriptConfigView({ model: store.debug_config,
+        description: "配置仅用于本次编辑中的运行调试，关闭编辑弹窗后恢复已保存配置。" }),
     }),
     ScriptCookieConsentView({ store }),
   ]);

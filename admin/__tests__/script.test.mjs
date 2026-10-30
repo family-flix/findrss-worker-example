@@ -507,6 +507,101 @@ test("脚本配置按钮按 Schema 渲染、校验、保存并重新填入旧值
   assert.equal(requests.length, 1);
 });
 
+test("编辑弹窗在 Diff 左侧显示配置，校验并仅将配置用于本次运行调试，取消和重开不污染已保存配置", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const old_fetch = fetch_handler, old_routes = routes_handler;
+  t.after(() => { fetch_handler = old_fetch; routes_handler = old_routes; });
+  const config_schema = { type: "object", required: ["token"], properties: {
+    token: { type: "string", minLength: 1 }, count: { type: "integer", default: 0 },
+  } };
+  const script = { ...script_fixture, id: "configured", config_schema, config: { token: "saved" } };
+  const calls = [];
+  fetch_handler = async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return Response.json({ status: 200, rss_debug: { output: "结果", phase: "ok" } });
+  };
+  routes_handler = async () => Response.json({ routes: [script], config_schema });
+  const root = build_page(script, false);
+  t.after(() => find_node(root, "scripts-content").props.onUnmounted());
+  assert.equal(find_node(root, "script-debug-config-button"), undefined);
+  find_node(root, "script-edit-button").props.onClick();
+  const form = find_node(root, "script-form-dialog");
+  assert.equal(find_node(form.props.footer[0], "script-debug-config-button").children[0], "配置");
+  assert.ok(find_node(form.props.footer[1], "script-diff-button"));
+  t.mock.timers.tick(400);
+  await new Promise(setImmediate);
+  await find_node(root, "script-debug-run-button").props.onClick();
+  assert.deepEqual(calls.at(-1).body.config, { token: "saved" });
+  const open = () => find_node(root, "script-debug-config-button").props.onClick();
+  open();
+  assert.match(find_node(root, "script-config-dialog").props.description, /仅用于.*调试/);
+  assert.equal(find_node(root, "script-config-field-count").props.value.value, "0");
+  find_node(root, "script-config-field-token").props.onChange("");
+  assert.equal(await find_node(root, "script-config-save").props.onClick(), false);
+  find_node(root, "script-config-field-token").props.onChange("debug");
+  assert.equal(await find_node(root, "script-config-save").props.onClick(), true);
+  assert.equal(find_node(root, "script-config-dialog"), undefined);
+  assert.match(child_texts(find_node(root, "script-debug-summary")).join(""), /配置.*等待重新调试/);
+  assert.equal(calls.length, 1, "保存调试配置不写入接口或自动运行");
+  await find_node(root, "script-debug-run-button").props.onClick();
+  assert.deepEqual(calls.at(-1).body.config, { token: "debug", count: 0 });
+  open();
+  find_node(root, "script-config-field-token").props.onChange("cancelled");
+  find_node(root, "script-config-dialog").props.onKeyDown({ key: "Escape", preventDefault() {}, stopPropagation() {} });
+  assert.ok(find_node(root, "script-form-dialog"));
+  open();
+  assert.equal(find_node(root, "script-config-field-token").props.value.value, "debug");
+  find_node(root, "script-form-close-button").props.onClick();
+  assert.equal(find_node(root, "script-config-dialog"), undefined);
+  find_node(root, "script-edit-button").props.onClick();
+  open();
+  assert.equal(find_node(root, "script-config-field-token").props.value.value, "saved");
+  assert.deepEqual(script.config, { token: "saved" });
+  assert.ok(calls.every(call => call.url === "/admin/api/scripts/debug"));
+});
+
+test("调试配置跟随当前草稿 Schema 增删字段，修改代码后继续携带已应用的配置", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const old_fetch = fetch_handler, old_routes = routes_handler;
+  t.after(() => { fetch_handler = old_fetch; routes_handler = old_routes; });
+  let config_schema = null;
+  const calls = [];
+  routes_handler = async () => Response.json({ routes: [script_fixture], config_schema });
+  fetch_handler = async (_url, options) => {
+    calls.push(JSON.parse(options.body));
+    return Response.json({ status: 200, rss_debug: { output: "结果" } });
+  };
+  const root = build_page({ ...script_fixture, id: "one" }, false);
+  t.after(() => find_node(root, "scripts-content").props.onUnmounted());
+  find_node(root, "script-edit-button").props.onClick();
+  assert.equal(find_node(root, "script-debug-config-button"), undefined);
+  const edit = async () => {
+    find_node(root, "script-code-textarea").props.onInput({ target: { value: JSON.stringify(config_schema) } });
+    t.mock.timers.tick(400);
+    await new Promise(setImmediate);
+  };
+  config_schema = { type: "object", additionalProperties: false, properties: { title: { type: "string", default: "草稿" } } };
+  await edit();
+  find_node(root, "script-debug-config-button").props.onClick();
+  assert.equal(find_node(root, "script-config-field-title").props.value.value, "草稿");
+  find_node(root, "script-config-field-title").props.onChange("调试值");
+  await find_node(root, "script-config-save").props.onClick();
+  find_node(root, "script-code-textarea").props.onInput({ target: { value: "再次修改代码" } });
+  await find_node(root, "script-debug-run-button").props.onClick();
+  assert.deepEqual(calls.at(-1).config, { title: "调试值" });
+  config_schema = { type: "object", additionalProperties: false, properties: { count: { type: "integer", default: 0 } } };
+  await edit();
+  find_node(root, "script-debug-config-button").props.onClick();
+  assert.equal(find_node(root, "script-config-field-title"), undefined);
+  assert.equal(find_node(root, "script-config-field-count").props.value.value, "0");
+  await find_node(root, "script-config-save").props.onClick();
+  await find_node(root, "script-debug-run-button").props.onClick();
+  assert.deepEqual(calls.at(-1).config, { count: 0 });
+  config_schema = null;
+  await edit();
+  assert.equal(find_node(root, "script-debug-config-button"), undefined);
+});
+
 test("配置 Model 保留失败输入、防止重复保存并按新 Schema 切换字段", async () => {
   let reject_save;
   const model = ScriptConfigModel({ save: () => new Promise((resolve, reject) => { reject_save = reject; }) });
@@ -1440,7 +1535,7 @@ test("脚本 Frame mock 列表支持搜索、状态和类型筛选，空状态�
   t.after(() => { fetch_handler = original; });
   const previews = await script_frame_previews();
   for (const path of ["/scripts/1", "/scripts/2"]) {
-    const root = previews.find(item => item.path === path).render();
+    const root = previews.find(item => item.path === path).render()();
     const content = find_node(root, "scripts-content");
     try {
       content.props.onMounted();
@@ -1630,10 +1725,10 @@ test("Diff 按钮位于编辑表单底部左侧，无变更提示，关闭与 Es
   assert.equal(find_node(root, "script-diff-button"), undefined);
   find_node(root, "script-edit-button").props.onClick();
   const form = find_node(root, "script-form-dialog");
-  assert.equal(find_node(form.props.footer[0], "script-diff-button").children[0], "Diff变更");
+  assert.equal(find_node(form.props.footer[1], "script-diff-button").children[0], "Diff变更");
   assert.equal(find_node(form, "script-diff-button").props.disabled.value, false);
-  assert.equal(form.props.footer[1], find_node(form, "script-save-button"));
-  assert.equal(form.props.footer[2], find_node(form, "script-draft-saved-at"));
+  assert.equal(form.props.footer[2], find_node(form, "script-save-button"));
+  assert.equal(form.props.footer[3], find_node(form, "script-draft-saved-at"));
   find_node(root, "script-diff-button").props.onClick();
   assert.ok(find_node(root, "script-diff-empty"));
   find_node(root, "script-diff-close-button").props.onClick();

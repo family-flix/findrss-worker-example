@@ -2,13 +2,13 @@ import { ModalViewModel } from "./frui/modal.model.js";
 
 const { View, Dialog, Button, Field, Input, Select, Switch, Textarea, For, computed } = window.FindRSSAdminUI;
 
-export function ScriptConfigView({ model }) {
+export function ScriptConfigView({ model, description }) {
   const { state, methods } = model;
   const modal = ModalViewModel({ onClose: methods.close });
   return Dialog({
     open: state.open,
     title: computed(state.current, script => (script?.name || "脚本") + " · 配置"),
-    description: computed(state.current, script => script?.config_schema.description || "填写配置后保存，脚本通过 ctx.config 读取。"),
+    description: description || computed(state.current, script => script?.config_schema.description || "填写配置后保存，脚本通过 ctx.config 读取。"),
     attributes: { n: "script-config-dialog", "aria-label": "脚本配置" },
     style: { width: "min(560px, calc(100vw - 32px))", "max-height": "85dvh" },
     bodyProps: { class: "box-border overflow-auto min-h-0" },
