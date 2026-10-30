@@ -8,7 +8,7 @@
 
 YouTube 和 TikTok 需先在后台导入脚本，填写官方 API 配置并发布启用：YouTube 使用 `api_key`；TikTok 使用 `advertiser_id`、具有 Discovery 权限的 `access_token`。未配置时会展示明确的配置错误卡片，其他平台继续采集。新闻及精选内容源按上游顺序展示，不假定它们提供热度排名。
 
-Worker Cron 每 5 分钟向 API Durable Object 提交 Hot 快照后台任务，由现有任务服务异步采集并生成快照，最多同时处理 8 个脚本，每个执行传入 12 秒取消信号。编译、参数、权限、上游访问、解析和超时错误均保存在对应脚本的 JSON 快照中，其余榜单继续。没有显式排名时展示 `—`，不从列表位置推断排名。
+Worker Cron 每 5 分钟将 Hot 快照任务写入 D1 并投递 Queue，由现有任务服务异步采集并生成快照，最多同时处理 8 个脚本，每个执行传入 12 秒取消信号。编译、参数、权限、上游访问、解析和超时错误均保存在对应脚本的 JSON 快照中，其余榜单继续。没有显式排名时展示 `—`，不从列表位置推断排名。
 
 每个脚本独立保存到现有 `API_STORAGE` R2 桶的 `rank/scripts/<脚本名>.json`，例如 `rank/scripts/qidian.json`。对象是未压缩的纯 JSON，类型为 `application/json; charset=utf-8`，包含 `id`、标题、分类、平台、排序、采集时间、错误原因和 `entries`（含封面、排名、热度）。脚本完成后立即写入自己的文件，不等待全部采集结束。某一份序列化或写入失败时保留该脚本的旧 JSON，其余脚本继续更新。同一实例合并重叠采集，后续定时任务始终重新采集，只复用编译结果。
 
@@ -48,7 +48,7 @@ curl -X POST 'https://findrss.example/admin/api/hot/snapshot' \
 - `snapshot.js`：逐脚本独立写入 JSON、并发读取、数据校验与单份故障隔离。
 - `home.js`：从已存 JSON 重建完整 HTML、发布页面版本与读取页面快照。
 - `../server/service/worker/hot_snapshot.js`：手动触发接口的鉴权、方法校验和任务提交。
-- `../server/service/durable_object/hot_snapshots.js`：后台任务创建、运行合并和采集结果记录。
+- `../server/service/application/hot_snapshots.js`：后台任务创建、运行合并和采集结果记录。
 - `http.js`、`../rank.js`：Worker 页面与资源路由。
 - `../server/infra/rank_home.js`：HTML、CSS 与初始数据装配。
 - `scripts.js`：引用 `server/infra/builtin_script_sources.js` 中的内置 Hot 源码快照及内容版本。

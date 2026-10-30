@@ -2,7 +2,6 @@
 // 阅读端会话：登录签发、会话校验与身份解析（签名契约见 infra/reader_auth.js）。
 import { sign_reader_session, verify_reader_session } from "../../infra/reader_auth.js";
 import { reader_session_secret } from "../../infra/reader_session_secret.js";
-import { API_OBJECT_NAME } from "../../lib/constants.js";
 import { bearer_token, error_response, json_response } from "../../lib/http.js";
 import { valid_identifier } from "../../lib/identifiers.js";
 
@@ -13,12 +12,12 @@ import { valid_identifier } from "../../lib/identifiers.js";
  */
 export async function reader_login(env, request) {
   if (request.method !== "POST") {
-    return error_response("method not allowed", 405, { Allow: "POST" });
+    return error_response("method not allowed", 405, {
+      Allow: "POST"
+    });
   }
-  const object = env.API.getByName(API_OBJECT_NAME);
-  const authentication = await object.fetch(
-    new Request("https://internal/_reader/auth/login", request),
-  );
+  const object = env.APPLICATION;
+  const authentication = await object.fetch(new Request("https://internal/_reader/auth/login", request));
   if (!authentication.ok) return authentication;
   /** @type {{ user?: { id?: string, name?: string, email?: string | null }, access_token?: { id?: string } }} */
   const identity = await authentication.json();
@@ -27,10 +26,10 @@ export async function reader_login(env, request) {
   if (!valid_identifier(user_id) || !valid_identifier(access_token_id)) {
     return error_response("authentication failed", 500);
   }
-  const signed = await sign_reader_session(
-    reader_session_secret(env),
-    { user_id, access_token_id },
-  );
+  const signed = await sign_reader_session(reader_session_secret(env), {
+    user_id,
+    access_token_id
+  });
   return json_response({
     logged_in: true,
     session: signed.session,
@@ -38,8 +37,8 @@ export async function reader_login(env, request) {
     user: {
       id: user_id,
       name: String(identity.user?.name ?? "Reader"),
-      email: identity.user?.email ?? null,
-    },
+      email: identity.user?.email ?? null
+    }
   });
 }
 
@@ -57,25 +56,20 @@ export async function reader_login(env, request) {
  */
 export async function reader_identity(env, session) {
   const claims = await verify_reader_session(reader_session_secret(env), session);
-  if (
-    claims === null ||
-    !valid_identifier(claims.user_id) ||
-    !valid_identifier(claims.access_token_id)
-  ) {
+  if (claims === null || !valid_identifier(claims.user_id) || !valid_identifier(claims.access_token_id)) {
     return null;
   }
-  const object = env.API.getByName(API_OBJECT_NAME);
-  const verification = await object.fetch(
-    "https://internal/_internal/reader-session/verify",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: claims.user_id,
-        access_token_id: claims.access_token_id,
-      }),
+  const object = env.APPLICATION;
+  const verification = await object.fetch("https://internal/_internal/reader-session/verify", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
     },
-  );
+    body: JSON.stringify({
+      user_id: claims.user_id,
+      access_token_id: claims.access_token_id
+    })
+  });
   if (!verification.ok) return null;
   /** @type {{ user?: { id?: string, name?: string, email?: string | null } }} */
   const value = await verification.json();
@@ -84,10 +78,10 @@ export async function reader_identity(env, session) {
     user: {
       id: claims.user_id,
       name: String(value.user?.name ?? "Reader"),
-      email: value.user?.email ?? null,
+      email: value.user?.email ?? null
     },
     access_token_id: claims.access_token_id,
-    expires_at: claims.expires_at,
+    expires_at: claims.expires_at
   };
 }
 
@@ -98,13 +92,15 @@ export async function reader_identity(env, session) {
  */
 export async function reader_session(env, request) {
   if (request.method !== "GET") {
-    return error_response("method not allowed", 405, { Allow: "GET" });
+    return error_response("method not allowed", 405, {
+      Allow: "GET"
+    });
   }
   const identity = await reader_identity(env, bearer_token(request));
   if (identity === null) return error_response("authentication required", 401);
   return json_response({
     logged_in: true,
     expires_at: identity.expires_at,
-    user: identity.user,
+    user: identity.user
   });
 }

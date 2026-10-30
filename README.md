@@ -4,7 +4,7 @@
 
 <h1 align="center">FindRSS</h1>
 
-<p align="center">v1.3.0</p>
+<p align="center">v1.4.0</p>
 
 <p align="center">一键部署到 Cloudflare，拥有自己的 RSS 采集工具<br>脚本随时添加、编辑，无需重新部署</p>
 
@@ -106,11 +106,11 @@ RSS 是供阅读器获取更新的订阅格式。阅读器是用来集中查看�
 **推荐使用此流程**：先 Fork 项目，再让 Cloudflare 连接你的 Fork 仓库。后续在 GitHub 点击 **Sync fork → Update branch** 即可同步新版，Cloudflare 自动构建并部署。
 
 1. 点击 [Fork 本项目](https://github.com/ltaoo/findrss-worker/fork)，将仓库 Fork 到自己的 GitHub 账号，保留 `master` 分支。
-2. 按[部署指南](docs/setup.md#fork-部署到-cloudflare-workers)在 Cloudflare 创建 Worker，设置后台密码 `ADMIN_PASSWORD`，并准备 R2 桶。
+2. 按[部署指南](docs/setup.md#fork-部署到-cloudflare-workers)在 Cloudflare 创建 Worker，设置后台密码 `ADMIN_PASSWORD`，并按[后端部署步骤](docs/backend-architecture.md#首次部署)准备 D1、KV、Queue、R2 和业务表。
 3. 在 Worker 的 **Settings → Builds → Connect** 中连接自己的 Fork 仓库，生产分支选择 `master`，**Build command 留空，Deploy command 填写 `npm run deploy`**。若部署命令是 `npx wrangler deploy`，需手动替换，否则会跳过静态资源构建。
 4. 等待部署成功，打开站点地址；在地址后加 `/admin/` 进入后台。
 
-完整步骤与构建设置见 [Fork 部署指南](docs/setup.md#fork-部署到-cloudflare-workers)。空库首次启动会自动创建 Apple 应用更新脚本和一条公开订阅源。
+完整步骤与构建设置见 [Fork 部署指南](docs/setup.md#fork-部署到-cloudflare-workers)。新数据库初始为空，登录后可导入并发布采集脚本。
 
 ## 一键部署到 Cloudflare Workers
 
@@ -123,10 +123,10 @@ RSS 是供阅读器获取更新的订阅格式。阅读器是用来集中查看�
 </p>
 
 1. 准备 GitHub 和 Cloudflare 账号，点击按钮并按提示授权。
-2. 按提示填写站点名称，将 `ADMIN_PASSWORD` 设置为你的后台登录密码。
+2. 按提示填写站点名称，将 `ADMIN_PASSWORD` 设置为你的后台登录密码，并完成 D1/KV/Queue/R2 配置与建表。
 3. 等待完成，打开生成的站点地址；在地址后加 `/admin/` 进入后台。
 
-空库首次启动会自动创建 Apple 应用更新脚本和一条公开订阅源，可在后台修改或删除。遇到配置问题，查看[安装与配置指南](docs/setup.md)。
+部署前仍需完成[资源创建与建表](docs/backend-architecture.md#首次部署)。新数据库初始为空。遇到配置问题，查看[安装与配置指南](docs/setup.md)。
 
 ## 更新已部署的站点
 
@@ -138,9 +138,15 @@ RSS 是供阅读器获取更新的订阅格式。阅读器是用来集中查看�
 2. 在仓库选择 **Actions → 更新 FindRSS → Run workflow**，点击运行。
 3. 等待工作流成功，再到 Cloudflare 查看构建与部署结果。
 
-更新会保留原 Worker 名称、现有 R2 桶、自定义域名和配置变量，应用代码跟随原项目更新。已有脚本和订阅仍使用原来的存储。
+更新会保留原 Worker 名称、现有 R2 桶、自定义域名和配置变量，应用代码跟随原项目更新。本次架构更换必须先完成新 D1 库初始化；旧 DO 数据不会自动进入新版。
 
 **旧部署没有「更新 FindRSS」入口？** 只需在 GitHub 网页中补一个工作流文件，详见[更新指南](docs/setup.md#更新已部署的站点)。也可以按指南开启每天自动更新。
+
+## 后端存储
+
+业务逻辑运行在 Worker，D1 保存配置、用户、积分、授权和任务，KV 缓存路由候选、来源与标签，R2 保存文件和快照，Cron 与 Queue 执行自动刷新。Durable Object 仅负责 WebSocket，不读写业务存储或使用 Alarm。
+
+**此实现从空 D1 库开始，不迁移旧 DO 数据。** 首次部署需创建 D1、KV、Queue、R2，填入真实资源 ID 并执行建表；配置中的全零 ID 仅供本地使用。资源创建、事务边界与验证命令见[后端架构与部署](docs/backend-architecture.md)。
 
 ## 脚本测试
 

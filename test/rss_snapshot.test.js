@@ -4,70 +4,154 @@ import { register } from "node:module";
 import { snapshot_store } from "./support/snapshot_store.js";
 import { RssRouteCache, rss_route_cache_key } from "../server/infra/rss_cache.js";
 import { RSS_ROUTE_CACHE_TTL_MS } from "../server/lib/constants.js";
-import { ServiceCredit } from "../server/service/durable_object/credits.js";
+import { ServiceCredit } from "../server/service/application/credits.js";
 import { RepositoryBackgroundTasks } from "../server/repository/background_tasks.js";
-import { ServiceBackgroundTasks } from "../server/service/durable_object/background_tasks.js";
+import { ServiceBackgroundTasks } from "../server/service/application/background_tasks.js";
 register("./support/quickjs_wasm_hook.js", import.meta.url);
-const { ServiceScript } = await import("../server/service/durable_object/scripts.js");
-
+const {
+  ServiceScript
+} = await import("../server/service/application/scripts.js");
 function fixture(public_source = true, social_routes = []) {
   const store = snapshot_store();
   const jobs = [];
-  let calls = 0, fail = false, scheduled = 0;
-  const row = { route: "snapshot", path: "/snapshot/:id", enabled: 1,
+  let calls = 0,
+    fail = false,
+    scheduled = 0;
+  const row = {
+    route: "snapshot",
+    path: "/snapshot/:id",
+    enabled: 1,
     script: `export const route = { path: "/snapshot/:id", async handler(ctx) {
       const result = await ctx.invoke("count", {});
       if (result.error) return result;
       return Result.Ok({ title: "版本" + result.data, items: [] });
-    } };`, metadata_json: JSON.stringify({ path: "/snapshot/:id", name: "快照" }) };
-  const ports = { route_cache: new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: store.repo, object_store: store.object_store }),
-    schedule_alarm: async () => { scheduled++; }, wait_until: task => jobs.push(task) };
-  const repo = { rss_route_cache: store.repo, scripts: { list_enabled: () => row.enabled ? [row] : [] },
-    discovery: { list_public_routes: () => public_source ? [{ id: "public-source", feed_url: "https://feeds.example.com/rss/snapshot/1", enabled: 1 }] : [],
-      list_private_routes: () => public_source ? [] : [{ id: "private-source", feed_url: "https://feeds.example.com/rss/snapshot/1" }],
-      list_social_routes: () => social_routes },
+    } };`,
+    metadata_json: JSON.stringify({
+      path: "/snapshot/:id",
+      name: "快照"
+    })
   };
-  const token = { credit_balance: 1000 };
-  repo.access_tokens = { find: () => token, set_balance_used: (_id, balance) => { token.credit_balance = balance; } };
-  repo.credit = { insert() {} };
-  const service = new ServiceScript({ repo, ports, app: { credit: new ServiceCredit({ repo, storage: store.storage }) }, public_origin: "https://feeds.example.com" });
+  const ports = {
+    route_cache: new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, {
+      store: store.repo,
+      object_store: store.object_store
+    }),
+    schedule_alarm: async () => {
+      scheduled++;
+    },
+    wait_until: task => jobs.push(task)
+  };
+  const repo = {
+    rss_route_cache: store.repo,
+    scripts: {
+      list_enabled: () => row.enabled ? [row] : []
+    },
+    discovery: {
+      list_public_routes: () => public_source ? [{
+        id: "public-source",
+        feed_url: "https://feeds.example.com/rss/snapshot/1",
+        enabled: 1
+      }] : [],
+      list_private_routes: () => public_source ? [] : [{
+        id: "private-source",
+        feed_url: "https://feeds.example.com/rss/snapshot/1"
+      }],
+      list_social_routes: () => social_routes
+    }
+  };
+  const token = {
+    credit_balance: 1000
+  };
+  repo.access_tokens = {
+    find: () => token,
+    set_balance_used: (_id, balance) => {
+      token.credit_balance = balance;
+    }
+  };
+  repo.credit = {
+    insert() {}
+  };
+  const service = new ServiceScript({
+    repo,
+    ports,
+    app: {
+      credit: new ServiceCredit({
+        repo,
+        storage: store.storage
+      })
+    },
+    public_origin: "https://feeds.example.com"
+  });
   service.record_log = () => {};
-  service.script_invoke = async () => { calls++; if (fail) throw new Error("offline"); return calls; };
-  const request = (format = "rss", { token = "", admin = false, query = "" } = {}) => new Request(
-    "https://internal/" + (admin ? "_admin" : "_public") + "/feed/" + format + "/snapshot/1" + query,
-    { headers: { "X-Api-Access-Token-ID": token, "X-Feed-Public-URL": "https://alias.example.com/" + format + "/snapshot/1" + query } });
-  const serve = (format = "rss", options, refresh = false) => service.serve_rss_route(format, "/snapshot/1", request(format, options), { refresh });
-  return { ...store, service, ports, row, serve, jobs, wait_for_xml: () => Promise.all(jobs),
-    get calls() { return calls; }, get scheduled() { return scheduled; },
-    set_public(value) { public_source = value; }, fail(value = true) { fail = value; } };
+  service.script_invoke = async () => {
+    calls++;
+    if (fail) throw new Error("offline");
+    return calls;
+  };
+  const request = (format = "rss", {
+    token = "",
+    admin = false,
+    query = ""
+  } = {}) => new Request("https://internal/" + (admin ? "_admin" : "_public") + "/feed/" + format + "/snapshot/1" + query, {
+    headers: {
+      "X-Api-Access-Token-ID": token,
+      "X-Feed-Public-URL": "https://alias.example.com/" + format + "/snapshot/1" + query
+    }
+  });
+  const serve = (format = "rss", options, refresh = false) => service.serve_rss_route(format, "/snapshot/1", request(format, options), {
+    refresh
+  });
+  return {
+    ...store,
+    service,
+    ports,
+    row,
+    serve,
+    jobs,
+    wait_for_xml: () => Promise.all(jobs),
+    get calls() {
+      return calls;
+    },
+    get scheduled() {
+      return scheduled;
+    },
+    set_public(value) {
+      public_source = value;
+    },
+    fail(value = true) {
+      fail = value;
+    }
+  };
 }
-
 for (const background_tasks of [false, true]) test(`自动 RSS 刷新只写一次尝试时间，失败不会立即重试（后台任务：${background_tasks}）`, async t => {
   const f = fixture();
-  t.after(() => f.db.close());
-  if (background_tasks) f.service.app.background_tasks = new ServiceBackgroundTasks({ repo: new RepositoryBackgroundTasks(f), wait_until: f.ports.wait_until });
+  t.after(async () => await f.db.close());
+  if (background_tasks) f.service.app.background_tasks = new ServiceBackgroundTasks({
+    repo: new RepositoryBackgroundTasks(f),
+    wait_until: f.ports.wait_until
+  });
   await f.serve("rss", undefined, true);
-  const key = f.repo.public_schedule()[0].key;
-  f.repo.public_attempt(key, 0);
+  const key = (await f.repo.public_schedule())[0].key;
+  await f.repo.public_attempt(key, 0);
   const attempt = t.mock.method(f.repo, "public_attempt");
   await f.service.refresh_due_snapshots();
   assert.equal(attempt.mock.calls.length, 1);
-  assert.ok(f.repo.public_schedule()[0].attempted_at > 0);
-  f.repo.public_attempt(key, 0);
+  assert.ok((await f.repo.public_schedule())[0].attempted_at > 0);
+  await f.repo.public_attempt(key, 0);
   attempt.mock.resetCalls();
   f.fail();
   await f.service.refresh_due_snapshots();
   assert.equal(attempt.mock.calls.length, 1);
-  assert.ok(f.repo.public_schedule()[0].attempted_at > 0);
+  assert.ok((await f.repo.public_schedule())[0].attempted_at > 0);
   const calls = f.calls;
   await f.service.refresh_due_snapshots();
   assert.equal(f.calls, calls);
   assert.equal(attempt.mock.calls.length, 1);
   assert.match((await f.serve()).body, /版本/);
 });
-
 for (const public_source of [true, false]) test(`${public_source ? "公开" : "私密"} XML 刷新计算图片元数据并持久保存，RSS/Atom 和读取共用结果`, async t => {
-  const f = fixture(public_source); t.after(() => f.db.close());
+  const f = fixture(public_source);
+  t.after(async () => await f.db.close());
   f.row.script = `export const route = { path: "/snapshot/:id", async handler() {
     return Result.Ok({ title: "图片源", items: [{ title: "图集", image: "https://example.com/cover.jpg",
       images: ["https://example.com/cover.jpg", "https://example.com/second.jpg", "https://example.com/bad.jpg"] }] });
@@ -76,34 +160,57 @@ for (const public_source of [true, false]) test(`${public_source ? "公开" : "�
   f.ports.fetch_cover_metadata = async url => {
     calls.push(url);
     if (url.endsWith("bad.jpg")) throw new Error("offline");
-    return { width: 800, height: 450, blurhash: "LKO2?U%2Tw=w]~RBVZRi};RPxuwH" };
+    return {
+      width: 800,
+      height: 450,
+      blurhash: "LKO2?U%2Tw=w]~RBVZRi};RPxuwH"
+    };
   };
-  const options = public_source ? {} : { token: "user" };
+  const options = public_source ? {} : {
+    token: "user"
+  };
   const rss = await f.serve("rss", options, true);
   assert.equal(calls.length, 3);
   assert.match(rss.body, /<media:thumbnail url="https:\/\/example.com\/cover.jpg" width="800" height="450" blurhash="LKO2\?U%2Tw=w\]~RBVZRi};RPxuwH"/);
   assert.match(rss.body, /url="https:\/\/example.com\/second.jpg" medium="image" width="800" height="450" blurhash=/);
   assert.match(rss.body, /url="https:\/\/example.com\/bad.jpg" medium="image" \/>/);
-  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo, object_store: f.object_store });
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, {
+    store: f.repo,
+    object_store: f.object_store
+  });
   const atom = await f.serve("atom", options);
   assert.match(atom.body, /width="800" height="450" blurhash=/);
   assert.equal(calls.length, 3);
   assert.equal((await f.serve("rss", options)).body, rss.body);
   assert.equal(calls.length, 3);
 });
-
 for (const public_source of [true, false]) test(`${public_source ? "公开" : "私密"} XML 按完整源地址写入社媒主页，持久化后 RSS/Atom 均保留`, async t => {
-  const routes = [
-    { feed_url: "{{hostname}}/rss/snapshot/1?account=other", social_url: "https://x.com/other" },
-    { feed_url: "{{hostname}}/rss/snapshot/2?account=one&lang=zh", social_url: "https://x.com/wrong-route" },
-    { feed_url: "{{hostname}}/atom/snapshot/1?lang=zh&account=one", social_url: 'https://x.com/one?a=1&b=2&quote="yes"' },
-  ];
-  const f = fixture(public_source, routes); t.after(() => f.db.close());
-  const options = { token: public_source ? "" : "user-1", query: "?account=one&lang=zh" };
+  const routes = [{
+    feed_url: "{{hostname}}/rss/snapshot/1?account=other",
+    social_url: "https://x.com/other"
+  }, {
+    feed_url: "{{hostname}}/rss/snapshot/2?account=one&lang=zh",
+    social_url: "https://x.com/wrong-route"
+  }, {
+    feed_url: "{{hostname}}/atom/snapshot/1?lang=zh&account=one",
+    social_url: 'https://x.com/one?a=1&b=2&quote="yes"'
+  }];
+  const f = fixture(public_source, routes);
+  t.after(async () => await f.db.close());
+  const options = {
+    token: public_source ? "" : "user-1",
+    query: "?account=one&lang=zh"
+  };
   const rss = await f.serve("rss", options, true);
   assert.match(rss.body, /<link>https:\/\/x.com\/one\?a=1&amp;b=2&amp;quote="yes"<\/link>/);
-  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo, object_store: f.object_store });
-  const atom = await f.serve("atom", { ...options, query: "?lang=zh&account=one" });
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, {
+    store: f.repo,
+    object_store: f.object_store
+  });
+  const atom = await f.serve("atom", {
+    ...options,
+    query: "?lang=zh&account=one"
+  });
   assert.match(atom.body, /<link rel="alternate" href="https:\/\/x.com\/one\?a=1&amp;b=2&amp;quote=&quot;yes&quot;" \/>/);
   assert.match(atom.body, /<link rel="self" href="https:\/\/feeds.example.com\/atom\/snapshot\/1\?/);
   assert.equal(f.calls, 1);
@@ -111,10 +218,13 @@ for (const public_source of [true, false]) test(`${public_source ? "公开" : "�
   assert.doesNotMatch((await f.serve("rss", options)).body, /x.com\/updated/);
   assert.match((await f.serve("rss", options, true)).body, /<link>https:\/\/x.com\/updated<\/link>/);
 });
-
 test("未匹配社媒主页时沿用脚本链接，社媒主页不修改文章链接", async t => {
-  const routes = [{ feed_url: "{{hostname}}/rss/snapshot/1?account=other", social_url: "https://x.com/other" }];
-  const f = fixture(true, routes); t.after(() => f.db.close());
+  const routes = [{
+    feed_url: "{{hostname}}/rss/snapshot/1?account=other",
+    social_url: "https://x.com/other"
+  }];
+  const f = fixture(true, routes);
+  t.after(async () => await f.db.close());
   f.row.script = `export const route = { path: "/snapshot/:id", async handler() {
     return Result.Ok({ title: "源", link: "https://example.com/original", items: [{ title: "文章", link: "https://example.com/post" }] });
   } };`;
@@ -126,283 +236,455 @@ test("未匹配社媒主页时沿用脚本链接，社媒主页不修改文章�
   routes.length = 0;
   assert.match((await f.serve("atom", undefined, true)).body, /rel="alternate" href="https:\/\/example.com\/original"/);
 });
-
 test("XML 刷新记录后台任务，终止真实脚本后保留旧 XML 且不会误报脚本失败", async t => {
-  const f = fixture(); t.after(() => f.db.close());
+  const f = fixture();
+  t.after(async () => await f.db.close());
   const tasks_repo = new RepositoryBackgroundTasks(f);
-  const tasks = new ServiceBackgroundTasks({ repo: tasks_repo, wait_until: f.ports.wait_until });
+  const tasks = new ServiceBackgroundTasks({
+    repo: tasks_repo,
+    wait_until: f.ports.wait_until
+  });
   f.service.app.background_tasks = tasks;
   await f.serve("rss", undefined, true);
-  assert.equal(tasks.list().tasks[0].status, "completed");
+  assert.equal((await tasks.list()).tasks[0].status, "completed");
   let started, resolve;
-  const invoked = new Promise(done => { started = done; });
-  f.service.script_invoke = () => { started(); return new Promise(done => { resolve = done; }); };
+  const invoked = new Promise(done => {
+    started = done;
+  });
+  f.service.script_invoke = () => {
+    started();
+    return new Promise(done => {
+      resolve = done;
+    });
+  };
   f.service.record_log = () => assert.fail("管理员取消不能记录为脚本错误");
   const pending = f.serve("rss", undefined, true);
   const rejected = assert.rejects(pending, /快照刷新已终止/);
   await invoked;
-  const active = tasks.list().tasks.find(task => task.status === "running");
+  const active = await (await tasks.list()).tasks.find(task => task.status === "running");
   assert.ok(active);
   assert.equal(active.source_id, "public-source");
-  assert.equal(tasks.list(new URL("https://internal?source_ids=public-source")).tasks[0].id, active.id);
-  tasks.cancel(active.id);
+  assert.equal((await tasks.list(new URL("https://internal?source_ids=public-source"))).tasks[0].id, active.id);
+  await tasks.cancel(active.id);
   resolve("取消后返回的内容");
   await rejected;
-  assert.equal(tasks_repo.find(active.id).status, "cancelled");
+  assert.equal((await tasks_repo.find(active.id)).status, "cancelled");
   assert.match((await f.serve()).body, /版本1/);
-  assert.equal(tasks.list().tasks.length, 2);
+  assert.equal((await tasks.list()).tasks.length, 2);
 });
-
 for (const public_source of [true, false]) test(`${public_source ? "公开" : "私密"}源首次生成 XML 的任务按完整 query 关联源 ID`, async t => {
-  const f = fixture(public_source); t.after(() => f.db.close());
-  const sources = [
-    { id: "other", feed_url: "{{hostname}}/rss/snapshot/1?a=other", enabled: 1 },
-    { id: "matching", feed_url: "{{hostname}}/atom/snapshot/1?a=1&b=2", enabled: 1 },
-  ];
+  const f = fixture(public_source);
+  t.after(async () => await f.db.close());
+  const sources = [{
+    id: "other",
+    feed_url: "{{hostname}}/rss/snapshot/1?a=other",
+    enabled: 1
+  }, {
+    id: "matching",
+    feed_url: "{{hostname}}/atom/snapshot/1?a=1&b=2",
+    enabled: 1
+  }];
   f.service.repo.discovery.list_public_routes = () => public_source ? sources : [];
   f.service.repo.discovery.list_private_routes = () => public_source ? [] : sources;
-  const tasks = new ServiceBackgroundTasks({ repo: new RepositoryBackgroundTasks(f), wait_until: f.ports.wait_until });
+  const tasks = new ServiceBackgroundTasks({
+    repo: new RepositoryBackgroundTasks(f),
+    wait_until: f.ports.wait_until
+  });
   f.service.app.background_tasks = tasks;
   let release, started;
-  const invoked = new Promise(resolve => { started = resolve; });
-  f.service.script_invoke = () => { started(); return new Promise(resolve => { release = resolve; }); };
-  await assert.rejects(f.serve("rss", { token: public_source ? "" : "user", query: "?b=2&a=1" }), { status: 503 });
+  const invoked = new Promise(resolve => {
+    started = resolve;
+  });
+  f.service.script_invoke = () => {
+    started();
+    return new Promise(resolve => {
+      release = resolve;
+    });
+  };
+  await assert.rejects(f.serve("rss", {
+    token: public_source ? "" : "user",
+    query: "?b=2&a=1"
+  }), {
+    status: 503
+  });
   await invoked;
-  const { tasks: matching } = tasks.list(new URL("https://internal?source_ids=matching"));
+  const {
+    tasks: matching
+  } = await tasks.list(new URL("https://internal?source_ids=matching"));
   assert.equal(matching.length, 1);
   assert.equal(matching[0].source_id, "matching");
   assert.equal(matching[0].status, "running");
-  assert.deepEqual(tasks.list(new URL("https://internal?source_ids=other")).tasks, []);
+  assert.deepEqual((await tasks.list(new URL("https://internal?source_ids=other"))).tasks, []);
   release(1);
   await f.wait_for_xml();
-  assert.deepEqual(tasks.list(new URL("https://internal?source_ids=matching")).tasks, []);
+  assert.deepEqual((await tasks.list(new URL("https://internal?source_ids=matching"))).tasks, []);
 });
-
 test("首次访问返回正在生成并启动后台任务，生成后只读 XML，重建 DO 后仍复用", async () => {
   const f = fixture();
   await assert.rejects(f.serve(), error => error.status === 503 && error.headers["Retry-After"] === "5");
-  assert.equal(f.jobs.length, 1); assert.equal(f.scheduled, 1);
+  assert.equal(f.jobs.length, 1);
+  assert.equal(f.scheduled, 1);
   await f.wait_for_xml();
   assert.equal(f.calls, 1);
   for (const format of ["rss", "atom"]) {
     const result = await f.serve(format);
-    assert.match(result.body, /版本1/); assert.equal(result.headers["X-Api-RSS-Cache"], "hit");
+    assert.match(result.body, /版本1/);
+    assert.equal(result.headers["X-Api-RSS-Cache"], "hit");
     assert.ok(result.body.includes("https://feeds.example.com/" + format + "/snapshot/1"));
   }
-  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo, object_store: f.object_store });
-  assert.match((await f.serve()).body, /版本1/); assert.equal(f.calls, 1);
-  f.db.close();
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, {
+    store: f.repo,
+    object_store: f.object_store
+  });
+  assert.match((await f.serve()).body, /版本1/);
+  assert.equal(f.calls, 1);
+  await f.db.close();
 });
-
 for (const public_source of [true, false]) test(`${public_source ? "公开" : "私密"}源并发首次访问只创建一个生成任务，RSS/Atom 和乱序 query 共用任务`, async t => {
-  const f = fixture(public_source); t.after(() => f.db.close());
+  const f = fixture(public_source);
+  t.after(async () => await f.db.close());
   let release, started;
-  const gate = new Promise(resolve => { release = resolve; });
-  const invoked = new Promise(resolve => { started = resolve; });
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
+  const invoked = new Promise(resolve => {
+    started = resolve;
+  });
   const invoke = f.service.script_invoke;
   t.mock.method(f.service, "script_invoke", async (...args) => {
-    const value = await invoke(...args); started(); await gate; return value;
+    const value = await invoke(...args);
+    started();
+    await gate;
+    return value;
   });
   if (!public_source) {
-    await assert.rejects(f.serve(), { status: 401 }); assert.equal(f.jobs.length, 0);
+    await assert.rejects(f.serve(), {
+      status: 401
+    });
+    assert.equal(f.jobs.length, 0);
   }
-  const responses = await Promise.allSettled(Array.from({ length: 20 }, (_, index) => f.serve(
-    index % 2 ? "rss" : "atom", { token: public_source ? "" : "user-" + index,
-      query: index % 2 ? "?a=1&b=2" : "?b=2&a=1" })));
-  assert.ok(responses.every(result => result.status === "rejected" && result.reason.status === 503
-    && result.reason.details.code === "FEED_GENERATING" && /正在生成/.test(result.reason.message)
-    && result.reason.headers["Retry-After"] === "5"));
+  const responses = await Promise.allSettled(Array.from({
+    length: 20
+  }, async (_, index) => await f.serve(index % 2 ? "rss" : "atom", {
+    token: public_source ? "" : "user-" + index,
+    query: index % 2 ? "?a=1&b=2" : "?b=2&a=1"
+  })));
+  assert.ok(responses.every(result => result.status === "rejected" && result.reason.status === 503 && result.reason.details.code === "FEED_GENERATING" && /正在生成/.test(result.reason.message) && result.reason.headers["Retry-After"] === "5"));
   await invoked;
-  assert.equal(f.calls, 1); assert.equal(f.jobs.length, 1); assert.equal(f.service.xml_tasks.size, 1);
-  await assert.rejects(f.serve("rss", { token: "valid-user", query: "?a=1&b=2" }), { status: 503 });
+  assert.equal(f.calls, 1);
+  assert.equal(f.jobs.length, 1);
+  assert.equal(f.service.xml_tasks.size, 1);
+  await assert.rejects(f.serve("rss", {
+    token: "valid-user",
+    query: "?a=1&b=2"
+  }), {
+    status: 503
+  });
   assert.equal(f.jobs.length, 1);
   let scheduled = Promise.resolve();
   if (public_source) {
-    for (const source of f.repo.public_schedule()) f.repo.public_attempt(source.key, 0);
+    for (const source of await f.repo.public_schedule()) await f.repo.public_attempt(source.key, 0);
     scheduled = f.service.refresh_due_snapshots();
   }
-  release(); await Promise.all([f.wait_for_xml(), scheduled]);
+  release();
+  await Promise.all([f.wait_for_xml(), scheduled]);
   assert.equal(f.service.xml_tasks.size, 0);
   for (const format of ["rss", "atom"]) {
-    assert.match((await f.serve(format, { token: "valid-user", query: "?a=1&b=2" })).body, /版本1/);
+    assert.match((await f.serve(format, {
+      token: "valid-user",
+      query: "?a=1&b=2"
+    })).body, /版本1/);
   }
-  assert.equal(f.calls, 1); assert.equal(f.jobs.length, 1);
+  assert.equal(f.calls, 1);
+  assert.equal(f.jobs.length, 1);
 });
-
 test("首次生成失败释放任务，下次访问可重新生成，凭证和不存在的路由不创建任务", async t => {
-  const f = fixture(false); t.after(() => f.db.close());
+  const f = fixture(false);
+  t.after(async () => await f.db.close());
   f.fail();
-  await assert.rejects(f.serve(), { status: 401 }); assert.equal(f.jobs.length, 0);
-  f.row.enabled = 0; f.service.enabled_routes = null;
-  await assert.rejects(f.serve("rss", { token: "user" }), { status: 404 }); assert.equal(f.jobs.length, 0);
-  f.row.enabled = 1; f.service.enabled_routes = null;
-  await assert.rejects(f.serve("rss", { token: "user" }), { status: 503 });
+  await assert.rejects(f.serve(), {
+    status: 401
+  });
+  assert.equal(f.jobs.length, 0);
+  f.row.enabled = 0;
+  f.service.enabled_routes = null;
+  await assert.rejects(f.serve("rss", {
+    token: "user"
+  }), {
+    status: 404
+  });
+  assert.equal(f.jobs.length, 0);
+  f.row.enabled = 1;
+  f.service.enabled_routes = null;
+  await assert.rejects(f.serve("rss", {
+    token: "user"
+  }), {
+    status: 503
+  });
   await f.wait_for_xml();
-  assert.equal(f.service.xml_tasks.size, 0); assert.equal(f.calls, 1);
+  assert.equal(f.service.xml_tasks.size, 0);
+  assert.equal(f.calls, 1);
   f.fail(false);
-  await assert.rejects(f.serve("rss", { token: "user" }), { status: 503 });
+  await assert.rejects(f.serve("rss", {
+    token: "user"
+  }), {
+    status: 503
+  });
   await f.wait_for_xml();
-  assert.equal(f.jobs.length, 2); assert.equal(f.calls, 2);
-  assert.match((await f.serve("rss", { token: "user" })).body, /版本2/);
+  assert.equal(f.jobs.length, 2);
+  assert.equal(f.calls, 2);
+  assert.match((await f.serve("rss", {
+    token: "user"
+  })).body, /版本2/);
 });
-
 test("旧版 XML 的过期字段不影响读取，后台失败保留 XML；新的参数在后台生成", async () => {
   const f = fixture();
   await f.serve("rss", {}, true);
   const key = "public-snapshot:" + rss_route_cache_key("/snapshot/1", []);
   f.sql.exec("UPDATE rss_route_cache SET expires_at = 1");
-  for (const source of f.repo.public_schedule()) f.repo.public_attempt(source.key, 0);
-  f.repo.delete_expired(Date.now());
-  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo, object_store: f.object_store });
-  assert.equal(f.repo.read(key).expires_at, 1);
-  assert.match((await f.serve()).body, /版本1/); assert.equal(f.calls, 1);
-  await assert.rejects(f.serve("atom", { query: "?page=2" }), { status: 503 });
+  for (const source of await f.repo.public_schedule()) await f.repo.public_attempt(source.key, 0);
+  await f.repo.delete_expired(Date.now());
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, {
+    store: f.repo,
+    object_store: f.object_store
+  });
+  assert.equal((await f.repo.read(key)).expires_at, 1);
+  assert.match((await f.serve()).body, /版本1/);
+  assert.equal(f.calls, 1);
+  await assert.rejects(f.serve("atom", {
+    query: "?page=2"
+  }), {
+    status: 503
+  });
   await f.wait_for_xml();
   await f.service.refresh_due_snapshots();
-  assert.match((await f.serve("rss", { query: "?page=2" })).body, /版本/);
+  assert.match((await f.serve("rss", {
+    query: "?page=2"
+  })).body, /版本/);
   const body = (await f.serve()).body;
   f.fail();
-  for (const source of f.repo.public_schedule()) f.repo.public_attempt(source.key, 0);
+  for (const source of await f.repo.public_schedule()) await f.repo.public_attempt(source.key, 0);
   await f.service.refresh_due_snapshots();
   assert.equal((await f.serve()).body, body);
-  f.db.close();
+  await f.db.close();
 });
-
 test("私密订阅请求只读，XML 无过期时间，重启及清理后 RSS/Atom 仍读取同一份内容", async t => {
-  let now = Date.now(); t.mock.method(Date, "now", () => now);
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
   const f = fixture(false);
-  await assert.rejects(f.serve(), { status: 401 }); assert.equal(f.calls, 0);
-  const options = { token: "user-token-id" };
-  await assert.rejects(f.serve("rss", options), { status: 503 });
+  await assert.rejects(f.serve(), {
+    status: 401
+  });
+  assert.equal(f.calls, 0);
+  const options = {
+    token: "user-token-id"
+  };
+  await assert.rejects(f.serve("rss", options), {
+    status: 503
+  });
   await f.wait_for_xml();
   const results = await Promise.all([f.serve("rss", options), f.serve("atom", options)]);
-  assert.equal(f.calls, 1); assert.ok(results.every(result => result.body.includes("版本1")));
+  assert.equal(f.calls, 1);
+  assert.ok(results.every(result => result.body.includes("版本1")));
   assert.equal(results[0].headers["Cache-Control"], "private, no-cache");
   now += 365 * 86400000;
-  f.repo.delete_expired(now);
-  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo, object_store: f.object_store });
-  assert.match((await f.serve("rss", options)).body, /版本1/); assert.equal(f.calls, 1);
+  await f.repo.delete_expired(now);
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, {
+    store: f.repo,
+    object_store: f.object_store
+  });
+  assert.match((await f.serve("rss", options)).body, /版本1/);
+  assert.equal(f.calls, 1);
   const key = "private-snapshot:" + rss_route_cache_key("/snapshot/1", []);
-  const state = f.ports.route_cache.inspect(key, now);
-  assert.equal(state.status, "fresh"); assert.equal("expires_at" in state, false);
-  assert.equal(state.saved_at, now - 365 * 86400000); assert.equal(state.persistent, true);
-  assert.equal(f.repo.read(key).expires_at, 0);
-  assert.match((await f.serve("atom", options)).body, /版本1/); assert.equal(f.calls, 1);
+  const state = await f.ports.route_cache.inspect(key, now);
+  assert.equal(state.status, "fresh");
+  assert.equal("expires_at" in state, false);
+  assert.equal(state.saved_at, now - 365 * 86400000);
+  assert.equal(state.persistent, true);
+  assert.equal((await f.repo.read(key)).expires_at, 0);
+  assert.match((await f.serve("atom", options)).body, /版本1/);
+  assert.equal(f.calls, 1);
   assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM rss_public_feeds").get().count, 0);
-  f.db.close();
+  await f.db.close();
 });
-
 test("管理员强制刷新替换 XML，失败保留旧 XML；私密产物不发布到公开源", async () => {
   const f = fixture(false);
-  await f.serve("rss", { admin: true }, true);
-  assert.match((await f.serve("rss", { admin: true }, true)).body, /版本2/);
-  assert.match((await f.serve("atom", { token: "user-token-id" })).body, /版本2/);
+  await f.serve("rss", {
+    admin: true
+  }, true);
+  assert.match((await f.serve("rss", {
+    admin: true
+  }, true)).body, /版本2/);
+  assert.match((await f.serve("atom", {
+    token: "user-token-id"
+  })).body, /版本2/);
   f.fail();
-  await assert.rejects(f.serve("rss", { admin: true }, true), { status: 502 });
-  assert.match((await f.serve("rss", { token: "user-token-id" })).body, /版本2/);
+  await assert.rejects(f.serve("rss", {
+    admin: true
+  }, true), {
+    status: 502
+  });
+  assert.match((await f.serve("rss", {
+    token: "user-token-id"
+  })).body, /版本2/);
   f.set_public(true);
-  await assert.rejects(f.serve(), { status: 503 });
+  await assert.rejects(f.serve(), {
+    status: 503
+  });
   await f.wait_for_xml();
-  f.db.close();
+  await f.db.close();
 });
-
 test("public 声明不绕过目录私密设置；转私密后后台任务撤下，匿名不能读旧 XML", async () => {
   const f = fixture();
   await f.serve("rss", {}, true);
   f.set_public(false);
-  f.row.metadata_json = JSON.stringify({ path: "/snapshot/:id", public: true });
+  f.row.metadata_json = JSON.stringify({
+    path: "/snapshot/:id",
+    public: true
+  });
   f.service.enabled_routes = null;
-  await assert.rejects(f.serve(), { status: 401 });
-  for (const source of f.repo.public_schedule()) f.repo.public_attempt(source.key, 0);
+  await assert.rejects(f.serve(), {
+    status: 401
+  });
+  for (const source of await f.repo.public_schedule()) await f.repo.public_attempt(source.key, 0);
   await f.service.refresh_due_snapshots();
   assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM rss_public_feeds").get().count, 0);
-  assert.ok(f.repo.read("public-snapshot:" + rss_route_cache_key("/snapshot/1", [])));
-  f.db.close();
+  assert.ok(await f.repo.read("public-snapshot:" + rss_route_cache_key("/snapshot/1", [])));
+  await f.db.close();
 });
-
 test("兼容旧版公开及私密 XML，抓取时间在刷新后准确保存，临时缓存淘汰不删除 XML", async t => {
-  let now = Date.now(); t.mock.method(Date, "now", () => now);
-  const { db, repo } = snapshot_store(); t.after(() => db.close());
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const {
+    db,
+    repo
+  } = snapshot_store();
+  t.after(() => db.close());
   const saved_at = now - 86400000;
   for (const prefix of ["public-snapshot:", "private-snapshot:"]) {
-    repo.write({ key: prefix + "old", output_json: "{}", invoked: 0,
-      expires_at: saved_at + RSS_ROUTE_CACHE_TTL_MS, created_at: saved_at, rendered: [["rss\n", "old XML"]] });
+    await repo.write({
+      key: prefix + "old",
+      output_json: "{}",
+      invoked: 0,
+      expires_at: saved_at + RSS_ROUTE_CACHE_TTL_MS,
+      created_at: saved_at,
+      rendered: [["rss\n", "old XML"]]
+    });
   }
-  repo.delete_expired(now);
-  const cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 1, { store: repo });
+  await repo.delete_expired(now);
+  const cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 1, {
+    store: repo
+  });
   for (const prefix of ["public-snapshot:", "private-snapshot:"]) {
-    assert.equal(cache.inspect(prefix + "old").saved_at, saved_at);
-    assert.equal((await cache.resolve(prefix + "old", now)).rendered.get("rss\n"), "old XML");
-    await cache.run(prefix + "old", now, async () => ({ output: "{}", invoked: false,
-      rendered: new Map([["rss\n", "new XML"]]) }), { force: true });
-    assert.equal(repo.read(prefix + "old").saved_at, now);
+    assert.equal((await cache.inspect(prefix + "old")).saved_at, saved_at);
+    assert.equal(await (await cache.resolve(prefix + "old", now)).rendered.get("rss\n"), "old XML");
+    await cache.run(prefix + "old", now, async () => ({
+      output: "{}",
+      invoked: false,
+      rendered: new Map([["rss\n", "new XML"]])
+    }), {
+      force: true
+    });
+    assert.equal((await repo.read(prefix + "old")).saved_at, now);
   }
   for (const key of ["temporary-a", "temporary-b"]) {
     now++;
-    await cache.run(key, now, async () => ({ output: key, invoked: false }));
+    await cache.run(key, now, async () => ({
+      output: key,
+      invoked: false
+    }));
   }
-  assert.equal(repo.count(), 1);
+  assert.equal(await repo.count(), 1);
   for (const prefix of ["public-snapshot:", "private-snapshot:"]) {
-    assert.equal((await cache.resolve(prefix + "old", now)).rendered.get("rss\n"), "new XML");
+    assert.equal(await (await cache.resolve(prefix + "old", now)).rendered.get("rss\n"), "new XML");
   }
 });
-
 test("15:44 生成的 XML 在 15:54 Cookie 同步、清理和重启后仍可读取", async t => {
   let now = Date.parse("2026-10-16T15:44:00+08:00");
   t.mock.method(Date, "now", () => now);
-  const f = fixture(); t.after(() => f.db.close());
+  const f = fixture();
+  t.after(async () => await f.db.close());
   await f.serve("rss", {}, true);
   const key = "public-snapshot:" + rss_route_cache_key("/snapshot/1", []);
   const saved_at = now;
-  f.service.repo.rss_cookies = { get: () => [], put() {} };
-  f.service.app.cookie_push_settings = { decrypt: async body => body };
+  f.service.repo.rss_cookies = {
+    get: () => [],
+    put() {}
+  };
+  f.service.app.cookie_push_settings = {
+    decrypt: async body => body
+  };
   now += RSS_ROUTE_CACHE_TTL_MS;
   await f.service.update_rss_cookies(new Request("https://internal/cookies", {
-    method: "PUT", body: JSON.stringify([{ domain: ".kuaishou.com", name: "sid", value: "updated" }]),
+    method: "PUT",
+    body: JSON.stringify([{
+      domain: ".kuaishou.com",
+      name: "sid",
+      value: "updated"
+    }])
   }));
-  f.repo.delete_expired(now);
-  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: f.repo, object_store: f.object_store });
-  const state = f.ports.route_cache.inspect(key, now);
+  await f.repo.delete_expired(now);
+  f.ports.route_cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, {
+    store: f.repo,
+    object_store: f.object_store
+  });
+  const state = await f.ports.route_cache.inspect(key, now);
   assert.equal(state.status, "fresh");
   assert.equal(state.saved_at, saved_at);
   assert.equal(state.persistent, true);
   for (const format of ["rss", "atom"]) assert.match((await f.serve(format)).body, /版本1/);
   assert.equal(f.calls, 1);
 });
-
 test("大 XML 分块持久化，超过 L1 预算仍可返回；删除与清理不会留下分块", async () => {
-  const { db, repo } = snapshot_store();
-  const cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: repo, max_bytes: 1 });
+  const {
+    db,
+    repo
+  } = snapshot_store();
+  const cache = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, {
+    store: repo,
+    max_bytes: 1
+  });
   const xml = "🐈快照".repeat(100000);
-  const result = await cache.run("private-snapshot:large", Date.now(), async () => ({ output: "{}", invoked: false,
-    rendered: new Map([["rss\n", xml], ["atom\n", xml]]) }));
-  assert.equal(result.rendered.get("rss\n"), xml); assert.equal(cache.stats().entries, 0);
-  cache.invalidate_all();
-  const rebuilt = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, { store: repo });
-  assert.equal((await rebuilt.resolve("private-snapshot:large", Date.now())).rendered.get("atom\n"), xml);
+  const result = await cache.run("private-snapshot:large", Date.now(), async () => ({
+    output: "{}",
+    invoked: false,
+    rendered: new Map([["rss\n", xml], ["atom\n", xml]])
+  }));
+  assert.equal(await result.rendered.get("rss\n"), xml);
+  assert.equal(cache.stats().entries, 0);
+  await cache.invalidate_all();
+  const rebuilt = new RssRouteCache(RSS_ROUTE_CACHE_TTL_MS, 100, {
+    store: repo
+  });
+  assert.equal(await (await rebuilt.resolve("private-snapshot:large", Date.now())).rendered.get("atom\n"), xml);
   assert.ok(db.prepare("SELECT COUNT(*) AS count FROM rss_route_cache_chunks").get().count > 1);
-  repo.delete_expired(Date.now() + RSS_ROUTE_CACHE_TTL_MS);
-  assert.equal((await rebuilt.resolve("private-snapshot:large", Date.now() + RSS_ROUTE_CACHE_TTL_MS)).rendered.get("rss\n"), xml);
-  repo.delete_oldest(0);
-  assert.ok(repo.read("private-snapshot:large"));
-  repo.delete("private-snapshot:large");
+  await repo.delete_expired(Date.now() + RSS_ROUTE_CACHE_TTL_MS);
+  assert.equal(await (await rebuilt.resolve("private-snapshot:large", Date.now() + RSS_ROUTE_CACHE_TTL_MS)).rendered.get("rss\n"), xml);
+  await repo.delete_oldest(0);
+  assert.ok(await repo.read("private-snapshot:large"));
+  await repo.delete("private-snapshot:large");
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM rss_route_cache_chunks").get().count, 0);
   db.close();
 });
-
 test("定时登记有界，任意请求头不能强制刷新；query token 不进入 XML", async () => {
   const f = fixture(false);
   const input = new Request("https://internal/_public/feed/rss/snapshot/1?token=secret", {
-    headers: { "X-Api-Access-Token-ID": "test-user", "X-FindRSS-Force-Refresh": "1" },
+    headers: {
+      "X-Api-Access-Token-ID": "test-user",
+      "X-FindRSS-Force-Refresh": "1"
+    }
   });
-  await assert.rejects(f.service.serve_rss_route("rss", "/snapshot/1", input), { status: 503 });
+  await assert.rejects(f.service.serve_rss_route("rss", "/snapshot/1", input), {
+    status: 503
+  });
   await f.wait_for_xml();
   const first = await f.service.serve_rss_route("rss", "/snapshot/1", input);
   const second = await f.service.serve_rss_route("rss", "/snapshot/1", input);
-  assert.equal(first.body, second.body); assert.equal(f.calls, 1);
+  assert.equal(first.body, second.body);
+  assert.equal(f.calls, 1);
   assert.doesNotMatch(first.body, /secret|token=/);
-  assert.equal(f.repo.register_public("first", "/first", [], "", 1), true);
-  assert.equal(f.repo.register_public("second", "/second", [], "", 1), false);
-  assert.equal(f.repo.register_public("first", "/first", [], "", 1), true);
-  f.db.close();
+  assert.equal(await f.repo.register_public("first", "/first", [], "", 1), true);
+  assert.equal(await f.repo.register_public("second", "/second", [], "", 1), false);
+  assert.equal(await f.repo.register_public("first", "/first", [], "", 1), true);
+  await f.db.close();
 });

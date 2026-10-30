@@ -1,16 +1,18 @@
 # FindRSS Worker 技术指南
 
+**当前版本使用空 D1 库，不迁移旧 DO 数据。** 部署前请完成[资源创建与建表](backend-architecture.md#首次部署)。
+
 项目介绍、截图与快速开始见 [Worker README](../README.md)。
 
 一个 Cloudflare Worker 提供共享 API，admin、discover 和 rank 各自保留独立前端入口与页面，由统一前端构建处理。
 
-`/rank/` 的页面与静态资源由 `rank.js` 分发。Worker `scheduled` 每 5 分钟向 API Durable Object 提交 Hot 后台任务，由现有 `ServiceBackgroundTasks` 异步调用 `rank/loader.js`，在 QuickJS 沙箱中并发运行仓库 Hot 示例的第一条路由 example，逐脚本写入 R2 `rank/scripts/<脚本名>.json`。JSON 保存完成后，`rank/home.js` 读取并校验这些快照，重新生成 gzip 完整 SSR HTML，连同页面版本及样式哈希原子发布到 `rank/index.html`。JSON 读写或 HTML 发布失败时保留旧完整页面，任务记录失败；脚本采集错误仍参与 HTML 生成并显示错误原因。默认访问只读一份 HTML，带筛选条件时只根据页面内嵌数据渲染首屏。缓存按页面版本隔离，新 HTML 发布后不再命中旧版本响应；不执行脚本、不等待上游。浏览器使用相同 Model/View hydration，不提供用户 Cookie 或设备权限。源码清单由 `scripts/sync_hot_scripts.js` 生成，浏览器产物不含采集源码。完整行为与验证见 [rank/README.md](../rank/README.md)。
+`/rank/` 的页面与静态资源由 `rank.js` 分发。Worker `scheduled` 每 5 分钟将 Hot 后台任务写入 D1 并投递 Queue，由现有 `ServiceBackgroundTasks` 异步调用 `rank/loader.js`，在 QuickJS 沙箱中并发运行仓库 Hot 示例的第一条路由 example，逐脚本写入 R2 `rank/scripts/<脚本名>.json`。JSON 保存完成后，`rank/home.js` 读取并校验这些快照，重新生成 gzip 完整 SSR HTML，连同页面版本及样式哈希原子发布到 `rank/index.html`。JSON 读写或 HTML 发布失败时保留旧完整页面，任务记录失败；脚本采集错误仍参与 HTML 生成并显示错误原因。默认访问只读一份 HTML，带筛选条件时只根据页面内嵌数据渲染首屏。缓存按页面版本隔离，新 HTML 发布后不再命中旧版本响应；不执行脚本、不等待上游。浏览器使用相同 Model/View hydration，不提供用户 Cookie 或设备权限。源码清单由 `scripts/sync_hot_scripts.js` 生成，浏览器产物不含采集源码。完整行为与验证见 [rank/README.md](../rank/README.md)。
 
 - admin：`admin/`，后台入口 `/admin/`，使用自己的 HTML、脚本、样式和管理员登录。
 - discover：`discover/`，广场入口 `/`，使用自己的 HTML、脚本、样式和 SSR。
 - rank：`rank/`，排行榜入口 `/rank/`，使用独立 Model/View、HTML 与样式，后台提前生成 SSR 快照。
 
-`POST /admin/api/hot/snapshot` 支持管理员异步提交 Hot 快照任务，复用后台会话或管理员 Bearer/Basic 鉴权，带 Origin 时拒绝跨站请求。接口经 `/_admin/hot/snapshot` 提交到 API DO 的 `ServiceHotSnapshots`，立即返回 HTTP 202 和 `{ task_id, task }`。同一任务先更新脚本 JSON，再重新生成并发布 rank HTML，第二步完成前保持进行中。手动与定时触发复用同一任务键，进行中时返回同一 ID。任务在 `/admin/tasks` 和 `GET /admin/api/background-tasks` 中展示，复用实时通知、失败记录、重启中断与取消能力；取消信号传入 QuickJS 以及 JSON、HTML 写入前检查。采集错误、JSON 持久化或 HTML 发布错误均记为任务失败，已保存的快照保留。详情及调用示例见 [排行榜说明](../rank/README.md)。
+`POST /admin/api/hot/snapshot` 支持管理员异步提交 Hot 快照任务，复用后台会话或管理员 Bearer/Basic 鉴权，带 Origin 时拒绝跨站请求。接口经 `/_admin/hot/snapshot` 提交到 应用 Worker 的 `ServiceHotSnapshots`，立即返回 HTTP 202 和 `{ task_id, task }`。同一任务先更新脚本 JSON，再重新生成并发布 rank HTML，第二步完成前保持进行中。手动与定时触发复用同一任务键，进行中时返回同一 ID。任务在 `/admin/tasks` 和 `GET /admin/api/background-tasks` 中展示，复用实时通知、失败记录、租约恢复与取消能力；取消信号传入 QuickJS 以及 JSON、HTML 写入前检查。采集错误、JSON 持久化或 HTML 发布错误均记为任务失败，已保存的快照保留。详情及调用示例见 [排行榜说明](../rank/README.md)。
 
 脚本模块的 `kind` 决定专属访问前缀：`/rss/<path>`、`/atom/<path>` 仅匹配 RSS 脚本；`GET/HEAD /api/hot/<path>` 仅匹配 Hot 脚本并返回 JSON，路径参数与查询参数透传。类型由显式 `export const kind = "rss"` / `"hot"` 声明，兼容顶部标记和基类推断。两类均保留原路径直达和 Debug。Hot 请求复用当前正式版本、配置、访问凭证和 Cookie 授权校验，并使用独立临时缓存；RSS 目录对同路径源的公开设置与积分计费不套用到 Hot 接口，Hot 的匿名访问由自身 `route.public` 决定。
 
@@ -18,19 +20,19 @@ rank 后台采集以示例地址匹配已发布、启用的 Hot 脚本，命中�
 
 三套前端分别使用自己的页面外壳和业务状态；admin 与 discover 调用共享 API，rank 在定时任务中调用内置 Hot 示例沙箱，页面请求只读快照。
 
-订阅广场构建时请求公开目录接口并复用 Timeless SSR 生成含首屏内容、内嵌 CSS 和完整目录的 HTML。默认先启动本地 API Worker，等待就绪后再构建，结束后关闭该实例；`DISCOVERY_API_ORIGIN` 指定接口来源时直接使用指定接口，生产构建应指定线上接口，取数失败不覆盖已有产物。运行时继续将目录和文章快照写入 R2。自动抓取引起的目录更新按一分钟窗口合并发布；手动刷新、目录编辑、权限和头像修改立即发布。待发布标记与截止时间持久化，重启后由 alarm 继续处理；首页边缘缓存 60 秒；缺少产物时兼容读取 DO，发布失败持久化标记并由 alarm 重试。搜索/筛选/分页在浏览器完成，客户端通过 hydrate 接管首屏。详见 [广场构建说明](../discover/README.md#部署)与[静态发布说明](../discover/README.md#静态发布与更新)。
+订阅广场构建时请求公开目录接口并复用 Timeless SSR 生成含首屏内容、内嵌 CSS 和完整目录的 HTML。默认先启动本地 API Worker，等待就绪后再构建，结束后关闭该实例；`DISCOVERY_API_ORIGIN` 指定接口来源时直接使用指定接口，生产构建应指定线上接口，取数失败不覆盖已有产物。运行时继续将目录和文章快照写入 R2。自动抓取引起的目录更新按一分钟窗口合并发布；手动刷新、目录编辑、权限和头像修改立即发布。待发布标记与截止时间持久化，重启后由 Cron 继续处理；首页边缘缓存 60 秒；缺少产物时读取 D1，发布失败持久化标记并由 Cron 重试。搜索/筛选/分页在浏览器完成，客户端通过 hydrate 接管首屏。详见 [广场构建说明](../discover/README.md#部署)与[静态发布说明](../discover/README.md#静态发布与更新)。
 
-自有私密订阅源通过 `discovery_sources.credit_cost` 配置每次成功访问的积分，默认 1，取值为 0 到 1000000000 的整数；新库与旧库迁移均默认 1。读取 RSS/Atom XML（含缓存命中）在返回前以同步事务更新 token 余额、累计用量并写入账本，余额不足返回 402；账本写入失败会回滚余额。后台生成、管理预览与该源脚本内的设备调用不再重复扣费。公开源免费，外部源不在本 Worker 计费。计价优先匹配路由与归一化 query，忽略域名和 RSS/Atom 格式；未匹配 query 时沿用同路径私密源的配置。
+自有私密订阅源通过 `discovery_sources.credit_cost` 配置每次成功访问的积分，默认 1，取值为 0 到 1000000000 的整数；新库默认 1。读取 RSS/Atom XML（含缓存命中）在返回前以D1 原子提交更新 token 余额、累计用量并写入账本，余额不足返回 402；账本写入失败会回滚余额。后台生成、管理预览与该源脚本内的设备调用不再重复扣费。公开源免费，外部源不在本 Worker 计费。计价优先匹配路由与归一化 query，忽略域名和 RSS/Atom 格式；未匹配 query 时沿用同路径私密源的配置。
 
-订阅广场卡片直接读取 `discovery_source_snapshots` 中的文章快照，与目录一起返回，不逐源请求 `/api/preview`。DO alarm 按源规则更新启用的公开源及私密自有源，最大并发默认 4 个，可在设置中调整为 1 至 16，默认每 1 小时抓取。后台「设置 → 订阅源抓取」配置默认规则，新增或编辑订阅源时可继承默认，或单独选择按间隔、智能刷新、每天指定时间、多个时间点、分时段、自定义五段 Cron、仅手动；定时规则支持 IANA 时区和星期，分时段支持跨午夜，时段外可停止抓取。间隔范围为 5 分钟至 24 小时。智能刷新在有新文章时缩短间隔、无新文章时延长，首次和手动抓取不调整学习结果。规则与上次尝试时间持久化，重启后恢复；错过多个时刻只补抓一次，再计算后续时间。已登记自有源的 XML 与广场预览共用抓取规则，固定 XML 后台调度会跳过这些源。未登记的公开 query 组合沿用 10 分钟后台调度；私密自有源也按规则自动生成 XML，订阅读取仍要求有效凭证；选择仅手动可停止自动抓取。XML 由后台按抓取规则或由管理员手动生成，永久持久化，无过期时间，也不参与普通缓存的容量淘汰。公开及私密订阅的 `/rss`、`/atom` 请求在已有 XML 时直接读取；尚未生成时，首次访问创建后台生成任务，并立即返回 503「订阅源 XML 正在生成，请稍后重试」（`FEED_GENERATING`，`Retry-After: 5`）。相同地址及归一化 query 的 RSS/Atom 并发访问共用一个任务，生成期间均返回正在生成；成功后直接返回 XML，失败后释放任务，下次访问可重试。私密源创建任务前仍需通过鉴权。后台更新失败时继续提供上次成功生成的 XML。下次抓取时间只用于调度，不影响当前 XML 是否可读。私密源仅保存抓取状态与内容指纹，不保存或发布文章预览，外部私密源的快照由上游管理。后台「强制刷新快照」可立即更新单个源，包括仅手动模式。每份快照保存最近 3 篇文章、封面地址及实际宽高，前端按比例占位；图片尺寸读取失败仍保留文章和封面。抓取失败保留上次成功快照，到下一次规则时间再试；编辑源地址、切换 token 访问要求或删除源时清理旧快照。封面尺寸支持 PNG、JPEG、WebP、GIF，其他格式使用默认比例。
+订阅广场卡片直接读取 `discovery_source_snapshots` 中的文章快照，与目录一起返回，不逐源请求 `/api/preview`。Cron + Queue 按源规则更新启用的公开源及私密自有源，最大并发默认 4 个，可在设置中调整为 1 至 16，默认每 1 小时抓取。后台「设置 → 订阅源抓取」配置默认规则，新增或编辑订阅源时可继承默认，或单独选择按间隔、智能刷新、每天指定时间、多个时间点、分时段、自定义五段 Cron、仅手动；定时规则支持 IANA 时区和星期，分时段支持跨午夜，时段外可停止抓取。间隔范围为 5 分钟至 24 小时。智能刷新在有新文章时缩短间隔、无新文章时延长，首次和手动抓取不调整学习结果。规则与上次尝试时间持久化，重启后恢复；错过多个时刻只补抓一次，再计算后续时间。已登记自有源的 XML 与广场预览共用抓取规则，固定 XML 后台调度会跳过这些源。未登记的公开 query 组合沿用 10 分钟后台调度；私密自有源也按规则自动生成 XML，订阅读取仍要求有效凭证；选择仅手动可停止自动抓取。XML 由后台按抓取规则或由管理员手动生成，永久持久化，无过期时间，也不参与普通缓存的容量淘汰。公开及私密订阅的 `/rss`、`/atom` 请求在已有 XML 时直接读取；尚未生成时，首次访问创建后台生成任务，并立即返回 503「订阅源 XML 正在生成，请稍后重试」（`FEED_GENERATING`，`Retry-After: 5`）。相同地址及归一化 query 的 RSS/Atom 并发访问共用一个任务，生成期间均返回正在生成；成功后直接返回 XML，失败后释放任务，下次访问可重试。私密源创建任务前仍需通过鉴权。后台更新失败时继续提供上次成功生成的 XML。下次抓取时间只用于调度，不影响当前 XML 是否可读。私密源仅保存抓取状态与内容指纹，不保存或发布文章预览，外部私密源的快照由上游管理。后台「强制刷新快照」可立即更新单个源，包括仅手动模式。每份快照保存最近 3 篇文章、封面地址及实际宽高，前端按比例占位；图片尺寸读取失败仍保留文章和封面。抓取失败保留上次成功快照，到下一次规则时间再试；编辑源地址、切换 token 访问要求或删除源时清理旧快照。封面尺寸支持 PNG、JPEG、WebP、GIF，其他格式使用默认比例。
 
 XML 快照生成时复用封面处理逻辑，为条目封面、图集图片、Live Photo 静态图及引用图片计算元数据，按 URL 去重、每份快照最多同时下载 4 张。RSS/Atom 共用结果，并将 `width`、`height`、`blurhash` 写入 `media:thumbnail` 和图片 `media:content` 属性；普通订阅读取直接返回保存的 XML，目录预览优先读取这些属性。仅获取尺寸时最多读 64 KiB；计算 BlurHash 时最多读 2 MiB，完整图片不超过 400 万像素才解码，GIF 只读取尺寸。下载或解码失败、格式不支持时省略缺失属性，仍保留图片与订阅内容；已有 XML 在下次成功刷新后补齐这些属性。
 
-自动抓取按设置中的最大并发数运行，每个源完成后独立释放位置，后续到期源不必等待同批最慢的任务；存在到期源和空闲位置时，最早在 5 秒后继续调度。维护或统计异常时仍启动抓取并重新安排 alarm。普通请求每分钟检查一次调度，恢复缺失或滞留超过一分钟的过期 alarm，同时直接启动到期源补抓，不依赖 alarm 实际唤醒。补抓沿用原规则、并发限制及运行中任务去重；错过多个周期只补抓一次，未来计划和仅手动模式保持不变。首次安排失败允许下次请求重试，无需逐源手动抓取。并发设置持久化并在保存后用于后续自动抓取；调低时不终止已开始的任务，只有空出足够位置后才启动新任务。只修改并发数不会改变规则更新时间或推迟已有计划，旧库升级默认保持 4。
+自动抓取由每分钟 Cron 查询 D1 调度索引，再向 Queue 投递任务。消费者通过 D1 租约和全局并发数领取任务；失效租约和投递中断由 Cron 恢复，不依赖普通请求触发，也不使用 DO Alarm。错过多个周期只补抓一次，未来计划和仅手动模式保持不变。调低并发不会终止已开始的任务；只修改并发数不推迟已有计划。
 
 XML 在脚本、Cookie、授权或订阅源配置变更后仍保留，配置变更只使普通临时缓存失效；后台移除定时任务也不删除 XML。已有 XML 只在下一次成功刷新时覆盖，访问继续按当前路由状态和权限校验。
 
-自有订阅的快照按格式独立保存在 `API_STORAGE` R2 桶的 `rss/snapshots/<版本 UUID>/` 目录：`feed.json` 保存原始 feed JSON，`feed.xml` 保存 RSS XML，`feed.atom` 保存 Atom XML，各文件直接保存对应正文并设置匹配的 Content-Type。SQLite 的 `rss_route_cache` 只保存各文件指针、生成时间和大小等元数据；调度信息仍保存在 SQLite。格式指针可扩展，后续新增 HTML 等渲染结果时可保存为独立文件，无需修改数据库结构。热点请求从内存读取，冷请求读取整组 R2 文件，并合并同一版本的并发读取。每次刷新先上传整组新文件，全部成功后再提交数据库指针；部分上传、取消或数据库提交失败时清理新文件并保留旧快照，成功替换后清理整组旧对象，清理失败仅记录日志。旧 R2 打包 JSON、旧 SQLite 正文及分块继续可读，在下一次成功刷新时迁入独立 R2 文件并清理旧对象或分块；仅手动源需手动刷新才能迁移。无 R2 绑定时沿用 SQLite；已经指向 R2 的快照需要原桶才能读取。普通脚本和保存前的临时预览仍按 TTL 存在 SQLite。
+自有订阅的快照按格式保存在 `API_STORAGE` 的 `rss/snapshots/<UUID>/` 中：`feed.json`、`feed.xml`、`feed.atom` 保存实际正文。D1 保存指针，R2 `rss/manifests/` 保存分发清单；请求先检查 D1 权限，再从响应缓存/R2 读取正文。响应缓存按公开 origin 隔离，缓存 60 秒，缺少清单时回源 D1。刷新先上传全部文件，再提交带当前版本校验的 D1 指针并发布清单；失败时保留旧快照，未提交的新对象会尝试清理。文件与 D1 不构成跨资源事务，清单发布失败由后台任务重试。
 
 | 路径 | 功能 |
 | --- | --- |
@@ -43,17 +45,17 @@ XML 在脚本、Cookie、授权或订阅源配置变更后仍保留，配置变�
 
 `server/` 保留共享 API 的领域、仓储、服务和 HTTP 分层。项目使用一份 `package.json`、lockfile 和 Wrangler 配置；`index.js` 分发 admin、discover 和 API 请求，HTTP/API 模块直接放项目根目录，通过函数调用 `server/` 内的业务服务；管理会话、Bearer Token 与 WebSocket Origin 校验继续保留。
 
-DO 的数据库初始化先读取 schema 版本；首次升级才执行补列、旧任务导入、平台与标签导入和历史状态计数回填。后续 schema 变更须递增 `server/repository/schema.js` 的 `API_SCHEMA_VERSION`，并给一次性数据迁移添加对应版本判断，避免重放旧任务。脚本迁入 R2 全部完成后保存独立完成标记，失败或分批未完成时继续重试。调用状态计数由 SQLite 触发器随增删和状态变化维护，概览、设备页和队列背压读取计数表，不再扫描全部调用历史。后台任务列表按状态范围读取索引，保留最近 100 条及进行中任务。旧 XML 分块随缓存行删除按键回收，孤立分块仅在首次升级时清理。脚本对象清理按脚本批量读取版本引用，在异步删除后重新检查引用。
+数据库由 `migrations/` 中的 SQL 在部署前初始化，Worker 启动和请求不执行 DDL、旧数据回填或 schema 版本检查。设备调用状态计数由 D1 触发器维护，队列背压读取计数表。后台生成任务保存在 `jobs`，调度索引保存在 `schedules`。
 
-设备活动时间保存在可随 WebSocket 休眠恢复的附件中，后台在线设备展示实时值；SQLite 每五分钟保存一次检查点，正常关闭和出错时立即保存离线状态，重复关闭不重复写入。连接异常消失且没有关闭事件时，最后活跃时间最多回退到五分钟前的检查点。任务心跳仍逐次持久化完整的两分钟租约；重复确认已运行任务只续租，不重写状态及相关索引。Schema v2 删除当前查询不使用的设备状态和任务 token 索引，不删除业务数据，不重放旧任务迁移或计数回填。
+设备连接心跳仅更新可休眠恢复的 WebSocket 附件；需要业务校验的任务消息交由 Worker 读取 D1。任务心跳按租约 token 更新到期时间；重复确认已运行任务只续租。过期凭证连接、设备任务租约由 Cron 检查和回收。
 
-Schema v3 为最近调用、按发布者查询的调用、管理及公开订阅源列表补齐排序索引。订阅源先分页再关联快照与头像，总数和来源类型缓存五分钟，新增、编辑、删除时立即失效；数据库外部维护的变更最多五分钟后反映在列表总数和来源类型中。后台任务只在实例首次插入时加载最近 100 条的时间及 rowid，后续按维护的边界裁剪，保留规则及进行中任务不变。首次升级需要扫描现有记录建立索引，后续启动不会重复建索引或重放历史数据迁移。
+D1 保留最近调用、按发布者查询、订阅源分页及路径权限查询索引；订阅源先分页再关联快照和头像，路由公开性使用路径索引查询。KV 缓存脚本候选、来源与标签，最终权限仍查询 D1。
 
-公开 RSS 在 DO 重建后会逐个重新登记；已有地址只按主键确认存在，不再统计整表或使调度缓存失效。新地址仍通过 SQL 检查数量上限，登记成功后直接补入已加载的调度缓存。1000 个已有地址逐个登记并读取调度的隔离测试，实际 SQL 读取从 3,004,000 行降至 3,000 行，写入为 0；此数值仅覆盖该登记链路，不代表线上总消耗。
+公开 RSS 在新 Worker 请求中按主键确认是否已登记。已有地址只读，不重写调度表；新地址登记通过 SQL 检查数量上限，由触发器创建待计算的调度记录。真实本地 D1 测试验证已有公开 XML 的读取写入为零，不包含私密源计费。
 
-`node --test scripts/sql_read_budget_smoke.test.mjs` 使用隔离的本地 Workers SQLite 和实际 `rowsRead`、`rowsWritten`，校验 100/1000 源、1 万条历史调用下的分页、任务裁剪、目录合并发布、计数、冷启动、保留期和对象清理读取预算，以及索引升级、心跳和任务写入预算；不访问线上数据库。1000 源场景下，复用总数和类型缓存后管理列表读取 20 条为 44 行、公开列表为 64 行；最近 50 条调用及按发布者查询均读取 50 行；连续创建并完成 1000 个后台任务读取 4998 行，写入仍为 7999 行。每 20 秒心跳一小时，设备 SQL 写入从 360 行降至 12 行；当前普通任务从创建到完成写入 30 行，其中 2 行为 v3 新增的调用列表索引（不含心跳、日志、积分和清理，首次建立状态计数时行数略高）。这些预算不包含 alarm 等平台写入，实际总量仍取决于设备数、任务数和抓取频率，无法对任意流量保证不超过免费额度。
+原 DO SQLite 的读写预算不能用于估算本实现。D1 计费读取、写入及索引更新，KV 另计读写，R2 与 Queue 各有操作计费；普通订阅读取仍需进行 D1 权限检查，私密源还需原子扣费。评估实际流量时应分别观察各资源的用量。[后端架构](backend-architecture.md)列出了缓存和调度边界。
 
-写入检查覆盖仓储内的 SQL 变更、SQLite 触发器和索引、DO KV、Alarm 以及 R2 对象操作。Schema v4 删除已由普通缓存部分索引取代的 `rss_route_cache_expiry`，已有数据库只升级一次，不重放历史数据回填。隔离测试中升级只写入 1 行 schema 版本，之后初始化为 0 行写入。
+写入检查覆盖 D1 事务回滚、任务领取与租约、KV 失败回源、R2 发布和 WebSocket 连接；旧 DO 的行数预算及 schema 升级过程已停用。
 
 | 写入范围 | 检查结果与写入约束 |
 | --- | --- |
@@ -72,7 +74,7 @@ Schema v3 为最近调用、按发布者查询的调用、管理及公开订阅�
 
 快照批量预算用仓储操作模拟已有自有 RSS 源刷新：后台任务插入、结束及裁剪 8 行，源尝试与结果 2 行，RSS 尝试时间及其索引 2 行，XML 指针覆盖 1 行，共 13 行/源。100 和 1000 源分别写 1300 和 13000 行；不包含首次登记、旧分块迁移、变化的学习间隔、头像、目录 KV、Alarm、脚本内设备调用、访问计数及积分操作。仅按这一场景计算，1000 个源每小时刷新已需约 31.2 万行/天，仍超过 [Workers Free 的 10 万行/天写入额度](https://developers.cloudflare.com/durable-objects/platform/pricing/)。去掉重复写入不会消除正常业务成本，不能承诺任意规模或抓取频率均处于免费额度内。
 
-设备日志和脚本执行日志通过结构化 `console` 对象交给 [Cloudflare Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/) 采集、存储和索引，不再读写或清理 DO 的 `device_logs`、`script_logs`，也不在 R2 保存日志正文或索引。日志包含设备、连接、任务、分类、脚本、来源、完整错误堆栈及执行输出；敏感参数先脱敏，整条按 UTF-8 控制在 240 KiB 以内，超大元数据保留截断预览。配置保持 `head_sampling_rate: 1`，关闭额外的 `invocation_logs`，避免每个心跳再产生一条请求日志；实际采集仍受 Cloudflare 套餐额度及保留策略限制。
+设备日志和脚本执行日志通过结构化 `console` 对象交给 [Cloudflare Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/) 采集、存储和索引，业务执行不读写 `device_logs`、`script_logs` 表，也不在 R2 保存日志正文或索引。日志包含设备、连接、任务、分类、脚本、来源、完整错误堆栈及执行输出；敏感参数先脱敏，整条按 UTF-8 控制在 240 KiB 以内，超大元数据保留截断预览。配置保持 `head_sampling_rate: 1`，关闭额外的 `invocation_logs`，避免每个心跳再产生一条请求日志；实际采集仍受 Cloudflare 套餐额度及保留策略限制。
 
 后台日志查询、分类筛选和 `before_id` 数字分页接口保持不变，服务端通过 [Workers Observability 查询 API](https://developers.cloudflare.com/api/resources/workers/subresources/observability/subresources/telemetry/methods/query/) 获取最近 3 天日志，对应当前 Workers Free 的保留期。官方事件游标用于内部翻页，同毫秒内的日志完整取回后再按业务 ID 排序。最近两分钟的日志在内存合并去重，最多 500 条 / 2 MiB，补齐索引延迟；实例重建后依赖 Cloudflare 索引。Webhook 直接使用本次错误发送，不依赖日志查询授权或索引就绪。
 
@@ -102,12 +104,16 @@ npm run deploy
 
 也可以在本目录执行 `npm ci` 后使用 `npm run build|dev|test|dry-run|deploy`。`npm run build` 构建两个页面模块和共享静态资源，输出 `dist/assets/`；Wrangler 从 `index.js` 打包服务端与 QuickJS WASM。只将 `dist/assets/` 提供给 ASSETS；后端 bundle、WASM 和源码不作为静态文件公开。
 
+## 后端资源与初始化
+
+当前使用 Worker + D1 + KV + R2 + Cron/Queue，DO 仅维护 WebSocket。部署前创建资源并执行空库建表；不读取或迁移旧 DO 数据，也不使用旧 DO 备份格式导入。配置、事务边界、缓存一致性和任务恢复见[后端架构与部署](backend-architecture.md)。
+
 ## 网站与构建结构
 
-- `index.js` 是唯一 Worker 入口，导出 `APIDurableObject` 并接入 `router.js`。
-- `router.js` 分发前台、后台和现有 API；内部 DO 路径不对公网开放，自定义脚本图片路径保留回退。
+- `index.js` 是唯一 Worker 入口，导出 `RealtimeHubDO`、`ApplicationEntrypoint` 并接入 `router.js`。
+- `router.js` 分发前台、后台和现有 API；内部业务路径不对公网开放，自定义脚本图片路径保留回退。
 - `api.js` 负责设备、RSS/Atom、MCP 和管理业务接口。
-- `durable_object_router.js` 处理 DO 内部请求；`socket_hub.js`、`*_socket.js` 处理 WebSocket。
+- `application_router.js` 处理 Worker 内部请求；`server/infra/realtime_do.js` 处理 WebSocket 并通过 RPC 调用 Worker。
 - `admin.js` 负责管理员登录、Cookie 会话、后台 API 入口和后台页面映射。
 - `discover.js` 负责前台页面和目录、搜索、预览、头像接口。
 - `server/infra/discovery_home.js` 负责首页 SSR，复用 `discover/index.js` 的视图与页面模板。
@@ -122,7 +128,7 @@ npm run deploy
 
 本项目不使用 Go CLI、Go 嵌入产物或 Pages 部署。Go API 服务、设备客户端是仓库中的独立实现，不参与本项目构建。
 
-生产 secret 使用 Wrangler secret，真实值不写入源码。必需值为 `ADMIN_PASSWORD`；Device Token 在后台「设备管理」创建，可设置备注、有效期、撤销和按需查看明文，旧 `DEVICE_TOKEN` 会自动导入。中央账号会话签名优先用 `READER_SESSION_SECRET`，未配置时依次回退旧 `DEVICE_TOKEN`、`ADMIN_PASSWORD`。Cookie 推送凭据按所用功能配置。首次部署需创建配置中的 R2 桶 `findrss-storage`。
+生产 secret 使用 Wrangler secret，真实值不写入源码。必需值为 `ADMIN_PASSWORD`；Device Token 在后台「设备管理」创建，可设置备注、有效期、撤销和按需查看明文，凭证保存在 D1，不自动导入旧 DO 中的设备 Token。中央账号会话签名优先用 `READER_SESSION_SECRET`，未配置时依次回退旧 `DEVICE_TOKEN`、`ADMIN_PASSWORD`。Cookie 推送凭据按所用功能配置。首次部署需创建配置中的 R2 桶 `findrss-storage`。
 
 `/admin/discovery` 新增或编辑订阅源时，`/rss/`、`/atom/` 地址必须匹配 `kind: rss` 的脚本路由，地址智能提示也只列出这类脚本的路由。普通外部订阅地址沿用原校验。
 
@@ -134,21 +140,21 @@ npm run deploy
 
 `/public/` 仅按上述路径映射 `discovery/avatars/` 和 `scripts/`，不提供目录列表或任意对象 key 读取。`rss/snapshots/` 中的 RSS / Atom / JSON 正文不通过该入口公开，继续由原订阅路由按权限读取；R2 桶本身无需开启公开访问。
 
-`FINDRSS_HOSTNAME` 是订阅地址中 `{{hostname}}` 的实际 origin。留空时使用当前请求的 origin，可同时通过 workers.dev 域名和自定义域名访问；需要固定订阅域名时再配置此变量。Worker 会将访问 origin 传递给 Durable Object，手动刷新快照使用本次请求的 origin，发现页定时快照刷新使用持久化保存的最近一次访问 origin。
+`FINDRSS_HOSTNAME` 是订阅地址中 `{{hostname}}` 的实际 origin。留空时使用当前请求的 origin，可同时通过 workers.dev 域名和自定义域名访问；需要固定订阅域名时再配置此变量。Worker 会将访问 origin 传递给内部业务路由，手动刷新快照使用本次请求的 origin，发现页定时快照刷新使用持久化保存的最近一次访问 origin。
 
 `/admin/scripts` 的新增与编辑表单使用全屏三栏：左侧代码，中间对话，右侧调试。Debug 为每条路由显示一行路径输入框和「运行调试」按钮，默认填入该路由的 example，可编辑路径及 query；`/debug` 是固定前缀，不出现在输入框中，调试和脚本助手提交请求时统一添加。修改草稿后通过管理员端点 `POST /admin/api/scripts/routes` 编译读取路由元数据，不调用 handler，已有路由保留各自输入。点击对应按钮按地址匹配当前草稿的路由和 params/query；⌘/Ctrl + Enter 与实时调试使用当前选中的路由。首次运行后，「实时调试」会在停止编辑 800ms 后重新执行；执行期间的修改只补跑最后一份草稿。`POST /admin/api/scripts/debug` 仅允许管理员访问，使用真实抓取与授权 Cookie，不保存草稿、不读写公开响应缓存，返回与 `/debug` 相同的上下文、上游请求、日志、完整输出和错误堆栈。链接主机不作为抓取目标，query 中的 token 不传入脚本。原「Mock 测试」仍走独立的 `/scripts/test`；表单不再显示 Mock 路由序号；「保存后开放 /debug」只控制保存后公开路由的 Debug 配置。
 
 新增脚本默认「保存草稿」，允许保存未完成代码；「发布正式」会重新校验模块及全部路由冲突，再开放启用中的路由。发布必须指定 `version`（可使用已保存草稿的版本号），格式严格为 `1.0.0` 三段数字，不允许前导零或预发布后缀，每次发布都须高于该脚本上次正式版本；直接修改正式脚本的源码或版本号也按发布校验。列表展示版本号，旧脚本显示「未编号」，下次发布需填写版本；列表「发布正式」会打开编辑器填写版本号。草稿版本可以留空，退回草稿仍保留上次正式版本作为递增基准。启停和 Debug 开关不升级版本。`metadata_json` 保存 `version`、`published_version` 和当前源码的 SHA-256 `script_hash`，无需新增数据库列。Cookie 授权同时绑定版本号、精确源码哈希及权限范围，改代码或升级版本都要重新确认；确认下一版的授权不会提前替换在线版本的授权。`POST|PATCH /admin/api/scripts` 接受 `status: "draft" | "published"`；PATCH 未传状态时保留当前状态，POST 未传状态时按正式处理并要求版本号。对已发布脚本提交 `status: "draft"` 和 `script` 时，将工作副本单独写入 `metadata_json.draft`，保留正式行的源码、路由、版本、启停状态和 Cookie 授权，不使正式缓存或公开目录失效。管理 API 在正式字段之外返回 `draft`，编辑器优先读取其中的源码、版本、类型和调试设置；重新发布才校验并替换正式行，成功后移除工作副本。仅提交 `status: "draft"`（不含 `script`）表示明确退回草稿，以当前正式源码覆盖工作副本并立即撤下路由；已有独立草稿时，界面先确认覆盖，API 必须同时提交 `overwrite_draft: true`，否则返回 409 并保留原状态；独立草稿不占用数据库的 `path` 唯一索引，已有正式路由继续占用自己的路径。
 
-脚本统一使用 `script` 命名：管理 API 为 `/admin/api/scripts`，旧 `/admin/api/rss-scripts` 前缀仍兼容相同鉴权与行为。DO 启动时在事务内将旧 `rss_scripts`、`rss_script_logs`、`rss_script_agent_settings` 表原地改名为 `scripts`、`script_logs`、`script_agent_settings`，保留脚本、日志和加密模型密钥；迁移可重复执行，回退旧版前需恢复旧表名。结构化日志事件改为 `script.exec`。`RSSScript` 仍是 RSS 类型的基类，`HotRankScript`、`kind: "rss" | "hot"`、`/rss` 与 `/atom` 地址继续沿用。
+脚本统一使用 `script` 命名，管理 API 为 `/admin/api/scripts`，旧 `/admin/api/rss-scripts` 前缀仍兼容相同鉴权与行为。D1 空库直接创建 `scripts`、`script_logs`、`script_agent_settings` 等表，不执行旧表改名。结构化日志事件为 `script.exec`，`RSSScript`、`HotRankScript` 与订阅地址继续沿用。
 
-Cloudflare Worker 改名会创建新的 DO 命名空间：已有生产数据需要保留原 Worker 名部署，或先安排数据迁移。当前 DO 类名为 `APIDurableObject`，R2 桶名为 `findrss-storage`；已有部署升级前需安排 DO 类名迁移和旧桶数据迁移，并将原管理密钥以相同值配置为 `ADMIN_PASSWORD`，以保留已有加密凭证的解密能力。
+当前 DO 类为 `RealtimeHubDO`，只维护连接，无业务表。Worker 改名时同步修改 `APPLICATION_SERVICE.service`；业务数据由显式绑定的 D1 和 R2 决定。旧 DO 版本的数据不会自动出现在本实现中。
 
 脚本卡片的 Cookie 状态使用与实际 RSS 请求相同的校验：存在授权 ID 不等于当前版本、源码与脚本权限仍获授权。公开订阅源列表不参与授权校验，新增、删除、启停或调整订阅源公开性不影响脚本授权；兼容旧授权记录中的 `visibility.public_sources`，读取时忽略该字段。脚本版本、源码、Cookie 权限声明或脚本路由访问范围改变，以及撤销授权后，卡片会显示「Cookie 需要重新确认」。点击「重新确认 Cookie 权限」可在当前版本上重新确认，无需升级版本或运行脚本。管理员检查端点为 `POST /admin/api/scripts/<id>/cookie-permissions`，只校验并返回确认信息，不执行 handler、不自动授权。
 
-脚本工作区现在是「代码 / 脚本助手 / Debug」三栏。脚本助手 `XiaoxunScriptAgent` 只注册当前草稿的 `get_script_draft`、`edit_script_draft`、`debug_script_draft` 三个工具。点击中栏「大模型设置」，可管理厂商列表、API Key、模型配置、参数、启用开关和连接测试页面。可配置最多 16 个厂商、每厂商 32 个模型，并保留相同的内置厂商预设和自定义入口。中栏对话提供 ProseMirror 输入框与模型选择，左下角按厂商分组、搜索和切换模型；每轮请求携带准确的厂商与模型标识，所选项删除或停用时不会自动换到其他厂商。设置经管理员接口保存到 API DO 的 `script_agent_settings`，各厂商密钥分别使用 `ADMIN_PASSWORD` 派生的 AES-GCM 密钥加密，GET 不返回密钥；支持删除密钥，移除厂商会清理对应凭证；更新设置时 API Key 留空保留原密钥，轮换 `ADMIN_PASSWORD` 后需重新输入模型 API Key。
+脚本工作区现在是「代码 / 脚本助手 / Debug」三栏。脚本助手 `XiaoxunScriptAgent` 只注册当前草稿的 `get_script_draft`、`edit_script_draft`、`debug_script_draft` 三个工具。点击中栏「大模型设置」，可管理厂商列表、API Key、模型配置、参数、启用开关和连接测试页面。可配置最多 16 个厂商、每厂商 32 个模型，并保留相同的内置厂商预设和自定义入口。中栏对话提供 ProseMirror 输入框与模型选择，左下角按厂商分组、搜索和切换模型；每轮请求携带准确的厂商与模型标识，所选项删除或停用时不会自动换到其他厂商。设置经管理员接口保存到 应用 Worker 的 `script_agent_settings`，各厂商密钥分别使用 `ADMIN_PASSWORD` 派生的 AES-GCM 密钥加密，GET 不返回密钥；支持删除密钥，移除厂商会清理对应凭证；更新设置时 API Key 留空保留原密钥，轮换 `ADMIN_PASSWORD` 后需重新输入模型 API Key。
 
-`GET|PUT /admin/api/scripts/agent/settings` 管理模型目录与密钥；`POST /admin/api/scripts/agent/test` 可在保存前使用草稿地址、参数和临时密钥测试连接；旧单模型配置自动转为默认厂商，保存目录时保留加密密钥。Workers AI 仅在部署注入 `AI` 绑定时可用；`GET /admin/api/scripts/agent/ws` 在当前管理员会话下传送流式回答、草稿修改和 Debug 结果。模型修改通过沙箱编译校验后立即更新左侧草稿，按版本拒绝过期结果；手动改代码或调试链接、停止对话或关闭表单都会取消当前运行。对话仅修改当前未保存草稿，不自动保存、发布或切换其他脚本。会话历史仅保留在当前编辑工作区，重新打开表单或刷新页面后开始新对话。单次运行最多 8 轮工具调用、3 分钟，API DO 最多同时运行 4 轮对话。
+`GET|PUT /admin/api/scripts/agent/settings` 管理模型目录与密钥；`POST /admin/api/scripts/agent/test` 可在保存前使用草稿地址、参数和临时密钥测试连接；旧单模型配置自动转为默认厂商，保存目录时保留加密密钥。Workers AI 仅在部署注入 `AI` 绑定时可用；`GET /admin/api/scripts/agent/ws` 在当前管理员会话下传送流式回答、草稿修改和 Debug 结果。模型修改通过沙箱编译校验后立即更新左侧草稿，按版本拒绝过期结果；手动改代码或调试链接、停止对话或关闭表单都会取消当前运行。对话仅修改当前未保存草稿，不自动保存、发布或切换其他脚本。会话历史仅保留在当前编辑工作区，重新打开表单或刷新页面后开始新对话。单次运行最多 8 轮工具调用、3 分钟，WebSocket Hub 最多同时转发 4 轮对话。
 
 全局 XiaoxunAgent 与脚本助手 XiaoxunScriptAgent 每轮模型调用均注入同一份 [脚本 SDK 知识](../server/lib/script_agent_runtime_knowledge.js) 和 [feed JSON → XML 知识](../server/lib/script_agent_feed_knowledge.js)。SDK 知识覆盖 `@findrss/util` 各工具的签名和返回值、Result/parseJSON、RSSScript/HotRankScript、显式 Cookie 授权、日志与草稿发布约定，并包含经过真实 QuickJS 执行验证的 RSS、热榜和 Cookie 示例；共享知识不增加助手的操作权限。feed 知识说明顶层字段对应 RSS `channel`、`items` 数组对应 `item`，并列出 Atom 映射、字段类型、时间回退、HTML 转义、图片/多图/附件/动态照片格式及完整示例。RSS/Atom 订阅脚本必须直接返回含 `items` 数组的 feed 对象，不能再包 `channel` 或预先转为 XML/JSON 字符串；不支持的原生 RSS 字段名不会自动映射。`HotRankScript` 的普通路由返回榜单快照，不适用这份 XML 输出规则。示例由测试交给真实 `FeedModel` 渲染并解析验证，助手运行测试同时检查每轮请求携带这份知识。
 
@@ -159,9 +165,9 @@ Cloudflare Worker 改名会创建新的 DO 命名空间：已有生产数据需�
 
 ## 脚本源码存储与版本回退
 
-配置 `API_STORAGE` 时，新正式版本源码存入 R2 的 `scripts/<脚本 UUID>/<版本号>.js`（例如 `1.0.0.js`），草稿继续存入 `scripts/<脚本 UUID>/objects/<SHA-256>.js`。正式版本对象不可覆盖：同版本相同源码复用，已存在同版本但源码不同则拒绝写入；源码指针仍保存 SHA-256 和字节数，用于完整性校验与 Cookie 授权。已有 hash 路径的正式版、历史版本及尚无合法版本号的旧脚本保持可读，不强制搬迁。SQLite 的 `scripts` 只保留源码指针和元数据，不再重复写入 `published_script` 正文；`script_releases` 保存不可变的正式版本索引，`script_release_events` 记录发布、迁移和回退操作。版本元数据过大时拒绝保存，避免超出 DO SQLite 的单行限制。没有 R2 绑定时兼容小脚本内联存储，大脚本明确报错；已经引用 R2 的源码不能降级成空源码。
+配置 `API_STORAGE` 时，新正式版本源码存入 R2 的 `scripts/<脚本 UUID>/<版本号>.js`（例如 `1.0.0.js`），草稿继续存入 `scripts/<脚本 UUID>/objects/<SHA-256>.js`。正式版本对象不可覆盖：同版本相同源码复用，已存在同版本但源码不同则拒绝写入；源码指针仍保存 SHA-256 和字节数，用于完整性校验与 Cookie 授权。已有 hash 路径的正式版、历史版本及尚无合法版本号的旧脚本保持可读，不强制搬迁。D1 的 `scripts` 只保留源码指针和元数据，不再重复写入 `published_script` 正文；`script_releases` 保存不可变的正式版本索引，`script_release_events` 记录发布、迁移和回退操作。版本元数据过大时拒绝保存，避免超出 D1 的单行限制。没有 R2 绑定时兼容小脚本内联存储，大脚本明确报错；已经引用 R2 的源码不能降级成空源码。
 
-保存先上传 R2，再在同步事务内重新检查脚本是否被并发修改、路由是否冲突，以及 Cookie 授权是否仍有效，然后写入版本记录并切换指针。上传或事务失败均保留原正式版本。启动时最多迁移四份旧脚本，剩余脚本通过 alarm 分批迁移，失败可重试；迁移前后的内联源码与 R2 指针均可读取。只能为迁移时仍存在的正式版本建立历史，无法恢复此前已被覆盖的源码。
+保存先上传 R2，再在 D1 乐观事务中重新检查脚本是否被并发修改、路由是否冲突，以及 Cookie 授权是否仍有效，最后原子写入版本记录并切换指针。冲突返回 409，上传或事务失败保留原正式版本。本实现不在启动或 Cron 中搬迁旧 DO 脚本。
 
 脚本列表默认返回元数据、源码大小、当前版本和授权状态，不下载 R2 源码。编辑时通过详情接口读取正式源码和独立草稿。路由匹配与已有 RSS/Atom 快照访问只读元数据和授权记录；真正执行时才读取源码并校验 SHA-256。源码缓存按估计字符串内存限制为 24MB，同一对象的并发冷读合并，Cookie 撤销仍实时检查。当前、历史及草稿引用的对象均保留，未引用对象经过至少 24 小时后按脚本分批回收；删除脚本后清理该脚本的版本记录和对象。
 
@@ -373,7 +379,7 @@ export const route = {
 
 snapshot 包含以稳定名称为键的 content、record、list 检测对象。正文比较归一化后的字符串，字段递归比较并使用 JSON Pointer，列表使用稳定 ID 匹配条目；ordered 列表通过共同成员的相对顺序识别移动，新增或移除造成的位置偏移不会批量误报。列表 coverage 为 complete/window/partial，窗口须有稳定 scope；partial、incomplete、目标集合或结构变化返回 inconclusive，不推进基线。明确业务对象不存在时用 present=false，抓取失败和选择器失效返回 Result.Err。
 
-`ServiceDetection` 复用后台任务、全局/单任务刷新策略与 alarm 调度。检测表保存基线及最近执行 ID，历史表保存摘要和 R2 对象键。每条任务保留最近 20 次执行及当前基线，64KB 以上的历史结果要求 API_STORAGE；快照上限 1MB，结果上限 8MB。R2 写入后在事务中再次检查来源、授权、记录版本及基线，失败时清理新对象，保留旧基线。
+`ServiceDetection` 复用后台任务、全局/单任务刷新策略与 Cron/Queue 调度。检测表保存基线及最近执行 ID，历史表保存摘要和 R2 对象键。每条任务保留最近 20 次执行及当前基线，64KB 以上的历史结果要求 API_STORAGE；快照上限 1MB，结果上限 8MB。R2 写入后在事务中再次检查来源、授权、记录版本及基线，失败时清理新对象，保留旧基线。
 
 管理员接口 `/admin/api/detections` 支持 GET/POST；`/<id>` 支持 PATCH/DELETE；`/<id>/run` 和 `/<id>/reset` 支持 POST；`/<id>/runs` 与 `/<id>/runs/<run_id>` 支持 GET。历史不公开。`GET/HEAD /api/detect/<脚本路由>` 按原路由权限无状态试采样，不读取或推进正式任务基线，不复用采集内容缓存。Debug 和 AI 脚本助手可传 previous 旧快照复测，结果不会写入正式任务。
 

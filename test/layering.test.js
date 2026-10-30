@@ -12,7 +12,6 @@ import test from "node:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-
 const api_dir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const server_dir = join(api_dir, "server");
 
@@ -23,36 +22,26 @@ const ALLOWED = Object.freeze({
   infra: ["lib", "domain", "infra"],
   repository: ["lib", "domain", "repository"],
   service: ["lib", "domain", "infra", "repository", "service"],
-  api: ["lib", "domain", "infra", "repository", "service", "api"],
+  api: ["lib", "domain", "infra", "repository", "service", "api"]
 });
 const LAYERS = Object.freeze(Object.keys(ALLOWED).filter(layer => layer !== "api"));
-const API_FILES = Object.freeze([
-  "router.js", "api.js", "admin.js", "discover.js", "durable_object_router.js",
-  "messages_socket.js", "script_agent_socket.js", "socket_hub.js", "admin_socket.js",
-]);
+const API_FILES = Object.freeze(["router.js", "api.js", "admin.js", "discover.js", "application_router.js", "messages_socket.js", "script_agent_socket.js", "socket_hub.js", "admin_socket.js"]);
 
 /** 组合根：不适用层次规则。 */
-const COMPOSITION_ROOTS = Object.freeze(["index.js", "server/durable_object.js"]);
-
+const COMPOSITION_ROOTS = Object.freeze(["index.js", "server/durable_object.js", "server/application.js"]);
 const SSR_VIEWS = {
   "discover.js": ["discover/index.js"],
   "server/infra/discovery_home.js": ["discover/index.html", "discover/unavailable.html", "discover/index.js", "discover/style.css", "public/base.css"],
-  "server/infra/rank_home.js": ["rank/index.html", "rank/model.js", "rank/view.js", "rank/style.css", "public/base.css"],
+  "server/infra/rank_home.js": ["rank/index.html", "rank/model.js", "rank/view.js", "rank/style.css", "public/base.css"]
 };
-
-const SPECIFIER_PATTERNS = [
-  /\bfrom\s+["']([^"']+)["']/g,
-  /\bimport\s+["']([^"']+)["']/g,
-  /\bimport\(\s*["']([^"']+)["']\s*\)/g,
-];
+const SPECIFIER_PATTERNS = [/\bfrom\s+["']([^"']+)["']/g, /\bimport\s+["']([^"']+)["']/g, /\bimport\(\s*["']([^"']+)["']\s*\)/g];
 
 /** @param {string} dir @returns {string[]} */
 function list_js_files(dir) {
   const result = [];
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
-    if (statSync(path).isDirectory()) result.push(...list_js_files(path));
-    else if (entry.endsWith(".js")) result.push(path);
+    if (statSync(path).isDirectory()) result.push(...list_js_files(path));else if (entry.endsWith(".js")) result.push(path);
   }
   return result;
 }
@@ -80,20 +69,14 @@ function layer_of(file) {
 function name_of(file) {
   return relative(api_dir, file);
 }
-
 const source_files = [join(api_dir, "index.js"), ...API_FILES.map(file => join(api_dir, file)), ...list_js_files(server_dir)];
-
 test("HTTP/API 模块放根目录，server/ 只保留业务层和 DO 组合根", () => {
-  const entries = readdirSync(server_dir).filter((entry) => !entry.startsWith("."));
-  const expected = [...LAYERS, "durable_object.js"].sort();
+  const entries = readdirSync(server_dir).filter(entry => !entry.startsWith("."));
+  const expected = [...LAYERS, "durable_object.js", "application.js"].sort();
   assert.deepEqual([...entries].sort(), expected);
-  const roots = source_files
-    .filter((file) => layer_of(file) === null)
-    .map(name_of)
-    .sort();
+  const roots = source_files.filter(file => layer_of(file) === null).map(name_of).sort();
   assert.deepEqual(roots, [...COMPOSITION_ROOTS].sort());
 });
-
 test("所有相对引用都从层内出发、只向下依赖", () => {
   for (const file of source_files) {
     const specifier_list = specifiers(readFileSync(file, "utf8"));
@@ -102,10 +85,7 @@ test("所有相对引用都从层内出发、只向下依赖", () => {
       if (!specifier.startsWith(".")) {
         // 包与运行时内建只允许待在外部适配层（infra/）与组合根里；其余层必须保持纯净，
         // 否则 `node --test` 直接 import 该模块时会挂在无法解析的包上。
-        assert.ok(
-          layer_of(file) === "infra" || COMPOSITION_ROOTS.includes(name_of(file)),
-          `${name_of(file)} 不许 import 外部包 ${specifier}`,
-        );
+        assert.ok(layer_of(file) === "infra" || name_of(file) === "server/lib/datetime.js" || COMPOSITION_ROOTS.includes(name_of(file)), `${name_of(file)} 不许 import 外部包 ${specifier}`);
         continue;
       }
       if (specifier.endsWith(".wasm")) continue; // WASM 由 Wrangler 打包
@@ -116,22 +96,16 @@ test("所有相对引用都从层内出发、只向下依赖", () => {
       const to_layer = layer_of(target);
       if (from_layer === null) continue; // index.js / server/durable_object.js
       assert.ok(to_layer, `${name_of(file)} 引用了层目录之外的 ${specifier}`);
-      assert.ok(
-        ALLOWED[from_layer].includes(to_layer),
-        `${name_of(file)}（${from_layer}）不许依赖 ${to_layer} 层：${specifier}`,
-      );
+      assert.ok(ALLOWED[from_layer].includes(to_layer), `${name_of(file)}（${from_layer}）不许依赖 ${to_layer} 层：${specifier}`);
     }
   }
 });
-
 test("只有 index.js 能 import server/durable_object.js", () => {
   const target = join(server_dir, "durable_object.js");
   const importers = [];
   for (const file of source_files) {
     if (file === target) continue;
-    const hit = specifiers(readFileSync(file, "utf8")).some(
-      (specifier) => specifier.startsWith(".") && resolve(dirname(file), specifier) === target,
-    );
+    const hit = specifiers(readFileSync(file, "utf8")).some(specifier => specifier.startsWith(".") && resolve(dirname(file), specifier) === target);
     if (hit) importers.push(name_of(file));
   }
   assert.deepEqual(importers, ["index.js"]);

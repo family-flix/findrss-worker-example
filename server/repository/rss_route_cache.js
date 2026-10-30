@@ -12,13 +12,18 @@ const chunk_marker = "findrss-snapshot-chunks-v1";
 const chunk_size = 64 * 1024;
 const temporary_entries = "key NOT LIKE 'public-snapshot:%' AND key NOT LIKE 'private-snapshot:%'";
 const public_schedule_states = new WeakMap();
-
 export class RepositoryRssRouteCache {
-  /** @param {{ sql: SqlStorage, storage?: DurableObjectStorage }} deps */
-  constructor({ sql, storage }) {
+  /** @param {{ sql: D1Store, storage?: D1Store }} deps */
+  constructor({
+    sql,
+    storage
+  }) {
     this.sql = sql;
-    this.transaction = storage ? task => storage.transactionSync(task) : task => task();
-    if (!public_schedule_states.has(sql)) public_schedule_states.set(sql, { rows: null, loaded_at: 0 });
+    this.transaction = storage ? async task => await storage.transaction(task) : task => task();
+    if (!public_schedule_states.has(sql)) public_schedule_states.set(sql, {
+      rows: null,
+      loaded_at: 0
+    });
     this.public_schedule_state = public_schedule_states.get(sql);
   }
 
@@ -26,18 +31,11 @@ export class RepositoryRssRouteCache {
    * @param {string} key
    * @returns {{ output_json: string, invoked: number, expires_at: number, saved_at?: number, rendered?: [string, string][], object_key?: string, object_rendered?: [string, string][], bytes?: number } | null}
    */
-  read(key) {
-    const row = (
-      this.sql
-        .exec(
-          "SELECT output_json, invoked, expires_at FROM rss_route_cache WHERE key = ?",
-          key)
-        .toArray()[0] ?? null
-    );
+  async read(key) {
+    const row = (await this.sql.exec("SELECT output_json, invoked, expires_at FROM rss_route_cache WHERE key = ?", key)).toArray()[0] ?? null;
     if (!row) return null;
     if (row.output_json === chunk_marker) {
-      row.output_json = this.sql.exec("SELECT body FROM rss_route_cache_chunks WHERE key = ? ORDER BY chunk_index", key)
-        .toArray().map(chunk => chunk.body).join("");
+      row.output_json = (await this.sql.exec("SELECT body FROM rss_route_cache_chunks WHERE key = ? ORDER BY chunk_index", key)).toArray().map(chunk => chunk.body).join("");
     }
     if (row.output_json.startsWith(snapshot_prefix)) {
       const snapshot = JSON.parse(row.output_json.slice(snapshot_prefix.length));
@@ -60,60 +58,62 @@ export class RepositoryRssRouteCache {
    * }} entry
    * @returns {void}
    */
-  write(entry) {
-    const body = entry.object_key ? snapshot_prefix + JSON.stringify({ object_key: entry.object_key, object_rendered: entry.object_rendered, saved_at: entry.saved_at, bytes: entry.bytes })
-      : entry.rendered ? snapshot_prefix + JSON.stringify({ output: entry.output_json, rendered: entry.rendered, saved_at: entry.saved_at }) : entry.output_json;
+  async write(entry) {
+    const body = entry.object_key ? snapshot_prefix + JSON.stringify({
+      object_key: entry.object_key,
+      object_rendered: entry.object_rendered,
+      saved_at: entry.saved_at,
+      bytes: entry.bytes
+    }) : entry.rendered ? snapshot_prefix + JSON.stringify({
+      output: entry.output_json,
+      rendered: entry.rendered,
+      saved_at: entry.saved_at
+    }) : entry.output_json;
     const chunked = entry.rendered && body.length > chunk_size;
-    this.transaction(() => {
-      this.sql.exec("DELETE FROM rss_route_cache_chunks WHERE key = ?", entry.key);
+    await this.transaction(async () => {
+      await this.sql.exec("DELETE FROM rss_route_cache_chunks WHERE key = ?", entry.key);
       if (chunked) {
         for (let offset = 0, index = 0; offset < body.length; index++) {
           let end = Math.min(offset + chunk_size, body.length);
           // SQLite 按 UTF-8 保存，不能把一个 emoji 的代理对拆到两个参数里。
           const last = body.charCodeAt(end - 1);
           if (end < body.length && last >= 0xD800 && last <= 0xDBFF) end--;
-          this.sql.exec("INSERT INTO rss_route_cache_chunks (key, chunk_index, body) VALUES (?, ?, ?)", entry.key, index, body.slice(offset, end));
+          await this.sql.exec("INSERT INTO rss_route_cache_chunks (key, chunk_index, body) VALUES (?, ?, ?)", entry.key, index, body.slice(offset, end));
           offset = end;
         }
       }
-      this.sql.exec(
-        `INSERT INTO rss_route_cache (key, output_json, invoked, expires_at, created_at)
+      await this.sql.exec(`INSERT INTO rss_route_cache (key, output_json, invoked, expires_at, created_at)
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(key) DO UPDATE SET
            output_json = excluded.output_json,
            invoked = excluded.invoked,
-           expires_at = excluded.expires_at`,
-        entry.key,
-        chunked ? chunk_marker : body,
-        entry.invoked,
-        entry.expires_at,
-        entry.created_at);
+           expires_at = excluded.expires_at`, entry.key, chunked ? chunk_marker : body, entry.invoked, entry.expires_at, entry.created_at ?? entry.saved_at ?? Date.now());
     });
   }
 
   /** @param {string} key @returns {void} */
-  delete(key) {
-    this.transaction(() => {
-      this.sql.exec("DELETE FROM rss_route_cache_chunks WHERE key = ?", key);
-      this.sql.exec("DELETE FROM rss_route_cache WHERE key = ?", key);
+  async delete(key) {
+    await this.transaction(async () => {
+      await this.sql.exec("DELETE FROM rss_route_cache_chunks WHERE key = ?", key);
+      await this.sql.exec("DELETE FROM rss_route_cache WHERE key = ?", key);
     });
   }
 
   /** @param {number} now @returns {void} */
-  delete_expired(now) {
-    this.sql.exec("DELETE FROM rss_route_cache WHERE expires_at <= ? AND " + temporary_entries, now);
+  async delete_expired(now) {
+    await this.sql.exec("DELETE FROM rss_route_cache WHERE expires_at <= ? AND " + temporary_entries, now);
   }
 
   /** 配置变更只清理普通缓存，XML 仅在成功刷新时覆盖。 @returns {void} */
-  clear() {
-    this.transaction(() => {
-      this.sql.exec("DELETE FROM rss_route_cache WHERE " + temporary_entries);
+  async clear() {
+    await this.transaction(async () => {
+      await this.sql.exec("DELETE FROM rss_route_cache WHERE " + temporary_entries);
     });
   }
 
   /** @returns {number} */
-  count() {
-    const row = this.sql.exec("SELECT COUNT(*) AS total FROM rss_route_cache WHERE " + temporary_entries).toArray()[0];
+  async count() {
+    const row = (await this.sql.exec("SELECT COUNT(*) AS total FROM rss_route_cache WHERE " + temporary_entries)).toArray()[0];
     return row === undefined ? 0 : Number(row.total);
   }
 
@@ -124,58 +124,49 @@ export class RepositoryRssRouteCache {
    * @param {number} keep
    * @returns {void}
    */
-  delete_oldest(keep) {
+  async delete_oldest(keep) {
     if (keep <= 0) {
-      this.sql.exec("DELETE FROM rss_route_cache WHERE " + temporary_entries);
+      await this.sql.exec("DELETE FROM rss_route_cache WHERE " + temporary_entries);
       return;
     }
-    this.sql.exec(
-      `DELETE FROM rss_route_cache WHERE key IN (
+    await this.sql.exec(`DELETE FROM rss_route_cache WHERE key IN (
          SELECT key FROM rss_route_cache WHERE ${temporary_entries} ORDER BY created_at DESC LIMIT -1 OFFSET ?
-       )`,
-      keep);
+       )`, keep);
   }
-
-  register_public(key, pathname, query, self_url, max_entries) {
+  async register_public(key, pathname, query, self_url, max_entries) {
     // 冷启动会重新登记已有源；不能为每个源重新计数并使整张调度缓存失效。
-    if (this.sql.exec("SELECT key FROM rss_public_feeds WHERE key = ?", key).toArray().length) return true;
-    this.sql.exec(`INSERT INTO rss_public_feeds (key, pathname, query_json, self_url)
-      SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM rss_public_feeds) < ? ON CONFLICT(key) DO NOTHING`,
-      key, pathname, JSON.stringify([...query]), self_url, max_entries);
-    const row = this.sql.exec("SELECT * FROM rss_public_feeds WHERE key = ?", key).toArray()[0];
+    if ((await this.sql.exec("SELECT key FROM rss_public_feeds WHERE key = ?", key)).toArray().length) return true;
+    await this.sql.exec(`INSERT INTO rss_public_feeds (key, pathname, query_json, self_url)
+      SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM rss_public_feeds) < ? ON CONFLICT(key) DO NOTHING`, key, pathname, JSON.stringify([...query]), self_url, max_entries);
+    const row = (await this.sql.exec("SELECT * FROM rss_public_feeds WHERE key = ?", key)).toArray()[0];
     if (!row) return false;
     this.public_schedule_state.rows?.set(key, row);
     return true;
   }
-
-  public_next_at(interval) {
-    return this.sql.exec("SELECT MIN(attempted_at + ?) AS next_at FROM rss_public_feeds", interval).toArray()[0]?.next_at ?? null;
+  async public_next_at(interval) {
+    return (await this.sql.exec("SELECT MIN(attempted_at + ?) AS next_at FROM rss_public_feeds", interval)).toArray()[0]?.next_at ?? null;
   }
-
-  public_schedule() {
+  async public_schedule() {
     const now = Date.now();
     const state = this.public_schedule_state;
     if (!state.rows || now - state.loaded_at >= 300000 || now < state.loaded_at) {
-      state.rows = new Map(this.sql.exec("SELECT * FROM rss_public_feeds ORDER BY attempted_at, key").toArray()
-        .map(row => [row.key, row]));
+      state.rows = new Map((await this.sql.exec("SELECT * FROM rss_public_feeds ORDER BY attempted_at, key")).toArray().map(row => [row.key, row]));
       state.loaded_at = now;
     }
-    return [...state.rows.values()].map(row => ({ ...row }))
-      .sort((a, b) => a.attempted_at - b.attempted_at || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    return [...state.rows.values()].map(row => ({
+      ...row
+    })).sort((a, b) => a.attempted_at - b.attempted_at || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   }
-
-  public_due(before, limit) {
-    return this.sql.exec("SELECT * FROM rss_public_feeds WHERE attempted_at <= ? ORDER BY attempted_at, key LIMIT ?", before, limit).toArray();
+  async public_due(before, limit) {
+    return (await this.sql.exec("SELECT * FROM rss_public_feeds WHERE attempted_at <= ? ORDER BY attempted_at, key LIMIT ?", before, limit)).toArray();
   }
-
-  public_attempt(key, now) {
-    this.sql.exec("UPDATE rss_public_feeds SET attempted_at = ? WHERE key = ?", now, key);
+  async public_attempt(key, now) {
+    await this.sql.exec("UPDATE rss_public_feeds SET attempted_at = ? WHERE key = ?", now, key);
     const row = this.public_schedule_state.rows?.get(key);
     if (row) row.attempted_at = now;
   }
-
-  delete_public(key) {
+  async delete_public(key) {
     this.public_schedule_state.rows = null;
-    this.sql.exec("DELETE FROM rss_public_feeds WHERE key = ?", key);
+    await this.sql.exec("DELETE FROM rss_public_feeds WHERE key = ?", key);
   }
 }

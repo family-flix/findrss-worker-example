@@ -4,8 +4,10 @@
 // 字段归一（截断、枚举兜底、JSON 序列化）由调用方在写前完成。
 
 export class RepositoryScriptLog {
-  /** @param {{ sql: SqlStorage }} deps */
-  constructor({ sql }) {
+  /** @param {{ sql: D1Store }} deps */
+  constructor({
+    sql
+  }) {
     this.sql = sql;
   }
 
@@ -18,30 +20,12 @@ export class RepositoryScriptLog {
    * }} fields
    * @returns {void}
    */
-  insert(fields) {
-    this.sql.exec(
-      `INSERT INTO script_logs (
+  async insert(fields) {
+    await this.sql.exec(`INSERT INTO script_logs (
         route, path, source, method, pathname, params_json, query_json,
         status, phase, level, message, error_text, lines_json,
         elapsed_ms, invoked, device_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      fields.route,
-      fields.path,
-      fields.source,
-      fields.method,
-      fields.pathname,
-      fields.params_json,
-      fields.query_json,
-      fields.status,
-      fields.phase,
-      fields.level,
-      fields.message,
-      fields.error_text,
-      fields.lines_json,
-      fields.elapsed_ms,
-      fields.invoked,
-      fields.device_id,
-      fields.created_at);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, fields.route, fields.path, fields.source, fields.method, fields.pathname, fields.params_json, fields.query_json, fields.status, fields.phase, fields.level, fields.message, fields.error_text, fields.lines_json, fields.elapsed_ms, fields.invoked, fields.device_id, fields.created_at);
   }
 
   /**
@@ -51,46 +35,34 @@ export class RepositoryScriptLog {
    * @param {number} limit
    * @returns {Record<string, unknown>[]}
    */
-  list_by_route(route, before_id, limit) {
+  async list_by_route(route, before_id, limit) {
     if (before_id === null) {
-      return this.sql
-        .exec(
-          "SELECT * FROM script_logs WHERE route = ? ORDER BY id DESC LIMIT ?",
-          route,
-          limit)
-        .toArray();
+      return (await this.sql.exec("SELECT * FROM script_logs WHERE route = ? ORDER BY id DESC LIMIT ?", route, limit)).toArray();
     }
-    return this.sql
-      .exec(
-        `SELECT * FROM script_logs WHERE route = ? AND id < ?
-         ORDER BY id DESC LIMIT ?`,
-        route,
-        before_id,
-        limit)
-      .toArray();
+    return (await this.sql.exec(`SELECT * FROM script_logs WHERE route = ? AND id < ?
+         ORDER BY id DESC LIMIT ?`, route, before_id, limit)).toArray();
   }
 
   /** 所有脚本的错误消息共用既有日志，按 id 倒序分页。 */
-  list_errors(before_id, limit) {
-    return this.sql.exec(
-      `SELECT logs.*, scripts.metadata_json AS script_metadata_json
+  async list_errors(before_id, limit) {
+    return (await this.sql.exec(`SELECT logs.*, scripts.metadata_json AS script_metadata_json
        FROM script_logs AS logs LEFT JOIN scripts AS scripts ON scripts.route = logs.route
        WHERE logs.status = 'error' AND (? IS NULL OR logs.id < ?)
-       ORDER BY logs.id DESC LIMIT ?`, before_id, before_id, limit).toArray();
+       ORDER BY logs.id DESC LIMIT ?`, before_id, before_id, limit)).toArray();
   }
 
   /** @param {string} route @returns {void} */
-  delete_for_route(route) {
-    this.sql.exec("DELETE FROM script_logs WHERE route = ?", route);
+  async delete_for_route(route) {
+    await this.sql.exec("DELETE FROM script_logs WHERE route = ?", route);
   }
 
   /** @param {number} read_id @returns {void} */
-  delete_errors_through(read_id) {
-    this.sql.exec("DELETE FROM script_logs WHERE status = 'error' AND id <= ?", read_id);
+  async delete_errors_through(read_id) {
+    await this.sql.exec("DELETE FROM script_logs WHERE status = 'error' AND id <= ?", read_id);
   }
 
   /** @param {number} cutoff @returns {void} */
-  delete_before(cutoff) {
-    this.sql.exec("DELETE FROM script_logs WHERE created_at < ?", cutoff);
+  async delete_before(cutoff) {
+    await this.sql.exec("DELETE FROM script_logs WHERE created_at < ?", cutoff);
   }
 }

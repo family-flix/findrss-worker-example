@@ -4,16 +4,16 @@
 // 租约时长（lease_deadline）与是否重试（is_retryable）的判定由调用方用 domain 助手在写前算好。
 
 export class RepositoryCall {
-  /** @param {{ sql: SqlStorage }} deps */
-  constructor({ sql }) {
+  /** @param {{ sql: D1Store }} deps */
+  constructor({
+    sql
+  }) {
     this.sql = sql;
   }
 
   /** @param {string} id @returns {Record<string, unknown> | undefined} */
-  find(id) {
-    return this.sql
-      .exec("SELECT * FROM calls WHERE id = ? LIMIT 1", id)
-      .toArray()[0];
+  async find(id) {
+    return (await this.sql.exec("SELECT * FROM calls WHERE id = ? LIMIT 1", id)).toArray()[0];
   }
 
   /**
@@ -21,13 +21,8 @@ export class RepositoryCall {
    * @param {string} publisher_device_id @param {string} idempotency_key
    * @returns {Record<string, unknown> | undefined}
    */
-  find_by_idempotency(publisher_device_id, idempotency_key) {
-    return this.sql
-      .exec(
-        "SELECT * FROM calls WHERE publisher_device_id = ? AND idempotency_key = ? LIMIT 1",
-        publisher_device_id,
-        idempotency_key)
-      .toArray()[0];
+  async find_by_idempotency(publisher_device_id, idempotency_key) {
+    return (await this.sql.exec("SELECT * FROM calls WHERE publisher_device_id = ? AND idempotency_key = ? LIMIT 1", publisher_device_id, idempotency_key)).toArray()[0];
   }
 
   /**
@@ -43,32 +38,21 @@ export class RepositoryCall {
    * @param {string} method @param {string} args_json
    * @returns {Record<string, unknown> | undefined}
    */
-  find_inflight_by_coalesce(coalesce_key, publisher_device_id, method, args_json) {
-    return this.sql
-      .exec(
-        `SELECT * FROM calls
+  async find_inflight_by_coalesce(coalesce_key, publisher_device_id, method, args_json) {
+    return (await this.sql.exec(`SELECT * FROM calls
          WHERE coalesce_key = ? AND publisher_device_id = ? AND method = ? AND args_json = ?
            AND status IN ('queued', 'assigned', 'running')
-         ORDER BY created_at LIMIT 1`,
-        coalesce_key,
-        publisher_device_id,
-        method,
-        args_json)
-      .toArray()[0];
+         ORDER BY created_at LIMIT 1`, coalesce_key, publisher_device_id, method, args_json)).toArray()[0];
   }
 
   /** @returns {number} 排队中的调用数（背压判定）。 */
-  count_queued() {
-    return Number(
-      this.sql.exec("SELECT count FROM call_status_counts WHERE status = 'queued'")
-        .toArray()[0]?.count ?? 0);
+  async count_queued() {
+    return Number((await this.sql.exec("SELECT count FROM call_status_counts WHERE status = 'queued'")).toArray()[0]?.count ?? 0);
   }
 
   /** @returns {Array<{ status: string, count: number }>} 按状态分组计数。 */
-  count_by_status() {
-    return this.sql
-      .exec("SELECT status, count FROM call_status_counts WHERE count > 0 ORDER BY status")
-      .toArray();
+  async count_by_status() {
+    return (await this.sql.exec("SELECT status, count FROM call_status_counts WHERE count > 0 ORDER BY status")).toArray();
   }
 
   /**
@@ -76,35 +60,17 @@ export class RepositoryCall {
    * @param {string} publisher_device_id @param {string} status @param {number} limit
    * @returns {Record<string, unknown>[]}
    */
-  list(publisher_device_id, status, limit) {
+  async list(publisher_device_id, status, limit) {
     if (publisher_device_id !== "" && status !== "") {
-      return this.sql
-        .exec(
-          "SELECT * FROM calls WHERE publisher_device_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
-          publisher_device_id,
-          status,
-          limit)
-        .toArray();
+      return (await this.sql.exec("SELECT * FROM calls WHERE publisher_device_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?", publisher_device_id, status, limit)).toArray();
     }
     if (publisher_device_id !== "") {
-      return this.sql
-        .exec(
-          "SELECT * FROM calls WHERE publisher_device_id = ? ORDER BY created_at DESC LIMIT ?",
-          publisher_device_id,
-          limit)
-        .toArray();
+      return (await this.sql.exec("SELECT * FROM calls WHERE publisher_device_id = ? ORDER BY created_at DESC LIMIT ?", publisher_device_id, limit)).toArray();
     }
     if (status !== "") {
-      return this.sql
-        .exec(
-          "SELECT * FROM calls WHERE status = ? ORDER BY created_at DESC LIMIT ?",
-          status,
-          limit)
-        .toArray();
+      return (await this.sql.exec("SELECT * FROM calls WHERE status = ? ORDER BY created_at DESC LIMIT ?", status, limit)).toArray();
     }
-    return this.sql
-      .exec("SELECT * FROM calls ORDER BY created_at DESC LIMIT ?", limit)
-      .toArray();
+    return (await this.sql.exec("SELECT * FROM calls ORDER BY created_at DESC LIMIT ?", limit)).toArray();
   }
 
   /**
@@ -119,23 +85,15 @@ export class RepositoryCall {
    * @param {number} limit
    * @returns {Record<string, unknown>[]}
    */
-  list_dispatchable(device_ids, methods, limit) {
+  async list_dispatchable(device_ids, methods, limit) {
     if (device_ids.length === 0 || methods.length === 0 || limit <= 0) return [];
-    const device_slots = device_ids.map(() => "?").join(", ");
-    const method_slots = methods.map(() => "?").join(", ");
-    return this.sql
-      .exec(
-        `SELECT * FROM calls
+    return (await this.sql.exec(`SELECT * FROM calls
          WHERE status = 'queued'
            AND (
-             (target_device_id IS NOT NULL AND target_device_id IN (${device_slots}))
-             OR (target_device_id IS NULL AND method IN (${method_slots}))
+             (target_device_id IS NOT NULL AND target_device_id IN (SELECT value FROM json_each(?)))
+             OR (target_device_id IS NULL AND method IN (SELECT value FROM json_each(?)))
            )
-         ORDER BY created_at LIMIT ?`,
-        ...device_ids,
-        ...methods,
-        limit)
-      .toArray();
+         ORDER BY created_at LIMIT ?`, JSON.stringify(device_ids), JSON.stringify(methods), limit)).toArray();
   }
 
   /**
@@ -143,34 +101,23 @@ export class RepositoryCall {
    * @param {number} now
    * @returns {Record<string, unknown>[]}
    */
-  list_expired_leases(now) {
-    return this.sql
-      .exec(
-        `SELECT * FROM calls
+  async list_expired_leases(now) {
+    return (await this.sql.exec(`SELECT * FROM calls
          WHERE status IN ('assigned', 'running')
-           AND lease_expires_at <= ?`,
-        now)
-      .toArray();
+           AND lease_expires_at <= ?`, now)).toArray();
   }
 
   /** @param {string} device_id @returns {Record<string, unknown>[]} */
-  list_active_for_device(device_id) {
-    return this.sql
-      .exec(
-        `SELECT * FROM calls
+  async list_active_for_device(device_id) {
+    return (await this.sql.exec(`SELECT * FROM calls
          WHERE assigned_device_id = ? AND status IN ('assigned', 'running')
-         ORDER BY created_at`,
-        device_id)
-      .toArray();
+         ORDER BY created_at`, device_id)).toArray();
   }
 
   /** @returns {number | null | undefined} 最近一个到期的租约时刻。 */
-  min_lease_expires_at() {
-    return this.sql
-      .exec(
-        `SELECT MIN(lease_expires_at) AS lease_expires_at FROM calls
-         WHERE status IN ('assigned', 'running') AND lease_expires_at IS NOT NULL`)
-      .toArray()[0]?.lease_expires_at;
+  async min_lease_expires_at() {
+    return (await this.sql.exec(`SELECT MIN(lease_expires_at) AS lease_expires_at FROM calls
+         WHERE status IN ('assigned', 'running') AND lease_expires_at IS NOT NULL`)).toArray()[0]?.lease_expires_at;
   }
 
   /**
@@ -182,76 +129,47 @@ export class RepositoryCall {
    * }} fields
    * @returns {void}
    */
-  insert(fields) {
-    this.sql.exec(
-      `INSERT INTO calls (
+  async insert(fields) {
+    await this.sql.exec(`INSERT INTO calls (
         id, method, publisher_device_id, access_token_id, credit_cost, target_device_id,
         idempotency_key, coalesce_key, args_json, status, attempt_count, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)`,
-      fields.id,
-      fields.method,
-      fields.publisher_device_id,
-      fields.access_token_id,
-      fields.credit_cost,
-      fields.target_device_id,
-      fields.idempotency_key,
-      fields.coalesce_key,
-      fields.args_json,
-      fields.created_at,
-      fields.updated_at);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?)`, fields.id, fields.method, fields.publisher_device_id, fields.access_token_id, fields.credit_cost, fields.target_device_id, fields.idempotency_key, fields.coalesce_key, fields.args_json, fields.created_at, fields.updated_at);
   }
 
   /** @param {string} id @param {number} lease_expires_at @param {number} now @returns {void} */
-  set_running(id, lease_expires_at, now) {
-    this.sql.exec(
-      "UPDATE calls SET status = 'running', lease_expires_at = ?, updated_at = ? WHERE id = ?",
-      lease_expires_at,
-      now,
-      id);
+  async set_running(id, lease_expires_at, now, expected_lease = null) {
+    const result = await this.sql.exec("UPDATE calls SET status = 'running', lease_expires_at = ?, updated_at = ? WHERE id = ? AND (? IS NULL OR (lease_token = ? AND status IN ('assigned','running')))", lease_expires_at, now, id, expected_lease, expected_lease);
+    return result.rowsWritten !== 0;
   }
 
   /** @param {string} id @param {number} lease_expires_at @param {number} now @returns {void} */
-  set_heartbeat(id, lease_expires_at, now) {
-    this.sql.exec(
-      "UPDATE calls SET lease_expires_at = ?, updated_at = ? WHERE id = ?",
-      lease_expires_at,
-      now,
-      id);
+  async set_heartbeat(id, lease_expires_at, now, expected_lease = null) {
+    const result = await this.sql.exec("UPDATE calls SET lease_expires_at = ?, updated_at = ? WHERE id = ? AND (? IS NULL OR (lease_token = ? AND status IN ('assigned','running')))", lease_expires_at, now, id, expected_lease, expected_lease);
+    return result.rowsWritten !== 0;
   }
 
   /** @param {string} id @param {string} result_json @param {number} now @returns {void} */
-  set_completed(id, result_json, now) {
-    this.sql.exec(
-      `UPDATE calls SET status = 'completed', result_json = ?, error_message = NULL,
-       lease_expires_at = NULL, updated_at = ?, completed_at = ? WHERE id = ?`,
-      result_json,
-      now,
-      now,
-      id);
+  async set_completed(id, result_json, now, expected_lease = null) {
+    const result = await this.sql.exec(`UPDATE calls SET status = 'completed', result_json = ?, error_message = NULL,
+       lease_expires_at = NULL, updated_at = ?, completed_at = ? WHERE id = ? AND (? IS NULL OR (lease_token = ? AND status IN ('assigned','running')))`, result_json, now, now, id, expected_lease, expected_lease);
+    return result.rowsWritten !== 0;
   }
 
   /** @param {string} id @param {string} error_message @param {number} now @returns {void} */
-  set_failed(id, error_message, now) {
-    this.sql.exec(
-      `UPDATE calls SET status = 'failed', error_message = ?, lease_expires_at = NULL,
-       updated_at = ?, completed_at = ? WHERE id = ?`,
-      error_message,
-      now,
-      now,
-      id);
+  async set_failed(id, error_message, now, expected_lease = null) {
+    const result = await this.sql.exec(`UPDATE calls SET status = 'failed', error_message = ?, lease_expires_at = NULL,
+       updated_at = ?, completed_at = ? WHERE id = ? AND (? IS NULL OR (lease_token = ? AND status IN ('assigned','running')))`, error_message, now, now, id, expected_lease, expected_lease);
+    return result.rowsWritten !== 0;
   }
 
   /**
    * 可重试失败：清掉租约回到排队。
    * @param {string} id @param {string} error_message @param {number} now @returns {void}
    */
-  set_requeued(id, error_message, now) {
-    this.sql.exec(
-      `UPDATE calls SET status = 'queued', assigned_device_id = NULL, lease_token = NULL,
-       lease_expires_at = NULL, error_message = ?, updated_at = ? WHERE id = ?`,
-      error_message,
-      now,
-      id);
+  async set_requeued(id, error_message, now, expected_lease = null) {
+    const result = await this.sql.exec(`UPDATE calls SET status = 'queued', assigned_device_id = NULL, lease_token = NULL,
+       lease_expires_at = NULL, error_message = ?, updated_at = ? WHERE id = ? AND (? IS NULL OR (lease_token = ? AND status IN ('assigned','running')))`, error_message, now, id, expected_lease, expected_lease);
+    return result.rowsWritten !== 0;
   }
 
   /**
@@ -260,28 +178,19 @@ export class RepositoryCall {
    * @param {number} lease_expires_at @param {number} now
    * @returns {void}
    */
-  assign(id, device_id, lease_token, lease_expires_at, now) {
-    this.sql.exec(
-      `UPDATE calls SET status = 'assigned', assigned_device_id = ?, lease_token = ?,
+  async assign(id, device_id, lease_token, lease_expires_at, now) {
+    await this.sql.exec(`UPDATE calls SET status = 'assigned', assigned_device_id = ?, lease_token = ?,
        lease_expires_at = ?, attempt_count = attempt_count + 1, updated_at = ?
-       WHERE id = ? AND status = 'queued'`,
-      device_id,
-      lease_token,
-      lease_expires_at,
-      now,
-      id);
+       WHERE id = ? AND status = 'queued'`, device_id, lease_token, lease_expires_at, now, id);
   }
 
   /**
    * 下发失败：把已指派的调用退回排队。
    * @param {string} id @param {number} now @returns {void}
    */
-  release(id, now) {
-    this.sql.exec(
-      `UPDATE calls SET status = 'queued', assigned_device_id = NULL, lease_token = NULL,
-       lease_expires_at = NULL, updated_at = ? WHERE id = ?`,
-      now,
-      id);
+  async release(id, now, expected_lease = null) {
+    await this.sql.exec(`UPDATE calls SET status = 'queued', assigned_device_id = NULL, lease_token = NULL,
+       lease_expires_at = NULL, updated_at = ? WHERE id = ? AND status = 'assigned' AND (? IS NULL OR lease_token = ?)`, now, id, expected_lease, expected_lease);
   }
 
   /**
@@ -289,16 +198,11 @@ export class RepositoryCall {
    * @param {string} device_id @param {string} error_message @param {number} now
    * @returns {void}
    */
-  fail_for_device(device_id, error_message, now) {
-    this.sql.exec(
-      `UPDATE calls
+  async fail_for_device(device_id, error_message, now) {
+    await this.sql.exec(`UPDATE calls
        SET status = 'failed', assigned_device_id = NULL, lease_token = NULL,
            lease_expires_at = NULL, error_message = ?, updated_at = ?, completed_at = ?
-       WHERE assigned_device_id = ? AND status IN ('assigned', 'running')`,
-      error_message,
-      now,
-      now,
-      device_id);
+       WHERE assigned_device_id = ? AND status IN ('assigned', 'running')`, error_message, now, now, device_id);
   }
 
   /**
@@ -306,33 +210,22 @@ export class RepositoryCall {
    * @param {number} now @param {number} max_attempts
    * @returns {void}
    */
-  sweep_expired(now, max_attempts) {
-    this.sql.exec(
-      `UPDATE calls
+  async sweep_expired(now, max_attempts) {
+    await this.sql.exec(`UPDATE calls
        SET status = 'failed', error_message = 'task lease expired too many times',
            updated_at = ?, completed_at = ?
        WHERE status IN ('assigned', 'running')
-         AND lease_expires_at <= ? AND attempt_count >= ?`,
-      now,
-      now,
-      now,
-      max_attempts);
-    this.sql.exec(
-      `UPDATE calls
+         AND lease_expires_at <= ? AND attempt_count >= ?`, now, now, now, max_attempts);
+    await this.sql.exec(`UPDATE calls
        SET status = 'queued', assigned_device_id = NULL, lease_token = NULL,
            lease_expires_at = NULL, updated_at = ?
        WHERE status IN ('assigned', 'running')
-         AND lease_expires_at <= ? AND attempt_count < ?`,
-      now,
-      now,
-      max_attempts);
+         AND lease_expires_at <= ? AND attempt_count < ?`, now, now, max_attempts);
   }
 
   /** @param {number} cutoff @returns {void} */
-  delete_completed_before(cutoff) {
-    this.sql.exec(
-      `DELETE FROM calls
-       WHERE status IN ('completed', 'failed') AND completed_at < ?`,
-      cutoff);
+  async delete_completed_before(cutoff) {
+    await this.sql.exec(`DELETE FROM calls
+       WHERE status IN ('completed', 'failed') AND completed_at < ?`, cutoff);
   }
 }

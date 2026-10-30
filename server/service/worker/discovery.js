@@ -1,7 +1,6 @@
 // 外层 Worker 侧的处理函数：只碰 env 与 Request/Response，不 import DO 类。
 // 订阅广场公开端点：{{hostname}} 模板展开与来源类型/头像的只读转发。
 import { SourceAddressModel } from "../../domain/source_address.js";
-import { API_OBJECT_NAME } from "../../lib/constants.js";
 import { DISCOVERY_CATEGORIES } from "../../lib/constants.js";
 import { error_response, json_response } from "../../lib/http.js";
 import { valid_identifier } from "../../lib/identifiers.js";
@@ -9,14 +8,15 @@ import { DiscoverySourceModel } from "../../domain/discovery_source.js";
 import { discovery_feed_defaults, discovery_feed_preview, fetch_discovery_feed, fetch_discovery_avatar } from "../../infra/feed_fetch.js";
 import { public_script_route } from "./script_route.js";
 import { FINDRSS_LOGO_PNG } from "../../lib/brand.js";
-
 export async function admin_discovery_preview(env, request) {
   let body;
   try {
     const text = await request.text();
     if (text.length > 4096) return error_response("request body is too large", 413);
     body = JSON.parse(text);
-  } catch { return error_response("invalid JSON", 400); }
+  } catch {
+    return error_response("invalid JSON", 400);
+  }
   const origin = feed_hostname_origin(env);
   const address = String(body?.feed_url ?? "").trim();
   const is_template = address.startsWith(SourceAddressModel.HOST_TOKEN);
@@ -29,10 +29,11 @@ export async function admin_discovery_preview(env, request) {
   if (script_id && !valid_identifier(script_id)) return error_response("脚本 ID 无效", 400);
   let feed_url, target;
   try {
-    feed_url = internal_preview ? new URL(address, origin || new URL(request.url).origin).href
-      : SourceAddressModel.resolve_feed_url(address, origin);
+    feed_url = internal_preview ? new URL(address, origin || new URL(request.url).origin).href : SourceAddressModel.resolve_feed_url(address, origin);
     target = new URL(feed_url);
-  } catch { return error_response("订阅源地址无效或未配置 FINDRSS_HOSTNAME", 400); }
+  } catch {
+    return error_response("订阅源地址无效或未配置 FINDRSS_HOSTNAME", 400);
+  }
   const route = /^\/(rss|atom)(\/.*)$/.exec(target.pathname);
   if (is_template && !route) return error_response(template_error, 400);
   let xml;
@@ -40,8 +41,11 @@ export async function admin_discovery_preview(env, request) {
   if (managed) {
     const internal = new URL("https://internal/_admin/feed/" + route[1] + route[2]);
     internal.search = target.search;
-    const response = await env.API.getByName(API_OBJECT_NAME).fetch(new Request(internal, {
-      headers: { "X-Feed-Public-URL": feed_url, "X-RSS-Preview-Script-ID": script_id },
+    const response = await env.APPLICATION.fetch(new Request(internal, {
+      headers: {
+        "X-Feed-Public-URL": feed_url,
+        "X-RSS-Preview-Script-ID": script_id
+      }
     }));
     if (!response.ok) return response;
     xml = await response.text();
@@ -51,39 +55,71 @@ export async function admin_discovery_preview(env, request) {
     xml = result.xml;
   }
   try {
-    if (body?.include_feed === true) return json_response({ feed_url, xml, feed: discovery_feed_preview(xml, feed_url) });
+    if (body?.include_feed === true) return json_response({
+      feed_url,
+      xml,
+      feed: discovery_feed_preview(xml, feed_url)
+    });
     const defaults = discovery_feed_defaults(xml, feed_url);
     defaults.source_type = DiscoverySourceModel.infer_type(feed_url);
-    const category_labels = { recommended: "推荐", technology: "科技", development: "开发",
-      business: "商业", science: "科学", design: "设计", life: "生活" };
-    defaults.category = [...DISCOVERY_CATEGORIES].find((category) =>
-      defaults.tags.some((tag) => tag.toLowerCase() === category || tag === category_labels[category]),
-    ) ?? "recommended";
+    const category_labels = {
+      recommended: "推荐",
+      technology: "科技",
+      development: "开发",
+      business: "商业",
+      science: "科学",
+      design: "设计",
+      life: "生活"
+    };
+    defaults.category = [...DISCOVERY_CATEGORIES].find(category => defaults.tags.some(tag => tag.toLowerCase() === category || tag === category_labels[category])) ?? "recommended";
     let avatar = null;
     let avatar_error = "";
     if (defaults.avatar_url) {
       try {
         avatar = await fetch_discovery_avatar(defaults.avatar_url, {
           local_origin: new URL(origin || request.url).origin,
-          fetch_local: (url, options) => new URL(url).pathname === "/findrss-logo.png"
-            ? Promise.resolve(new Response(FINDRSS_LOGO_PNG, { headers: { "Content-Type": "image/png" } }))
-            : public_script_route(env, new Request(url, options)),
+          fetch_local: (url, options) => new URL(url).pathname === "/findrss-logo.png" ? Promise.resolve(new Response(FINDRSS_LOGO_PNG, {
+            headers: {
+              "Content-Type": "image/png"
+            }
+          })) : public_script_route(env, new Request(url, options))
         });
+      } catch (error) {
+        avatar_error = error.message;
       }
-      catch (error) { avatar_error = error.message; }
     }
     let preview_id;
     if (body?.cache_snapshot === true) {
-      const response = await env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal/_admin/discovery/preview-cache", {
-        method: "POST", body: JSON.stringify({ feed_url: address, resolved_feed_url: feed_url, xml, managed }),
+      const response = await env.APPLICATION.fetch(new Request("https://internal/_admin/discovery/preview-cache", {
+        method: "POST",
+        body: JSON.stringify({
+          feed_url: address,
+          resolved_feed_url: feed_url,
+          xml,
+          managed
+        })
       }));
       if (!response.ok) return response;
-      ({ preview_id } = await response.json());
+      ({
+        preview_id
+      } = await response.json());
     }
-    return json_response({ feed_url, defaults, avatar, avatar_error, ...(preview_id ? { preview_id } : {}) });
+    return json_response({
+      feed_url,
+      defaults,
+      avatar,
+      avatar_error,
+      ...(preview_id ? {
+        preview_id
+      } : {})
+    });
   } catch (error) {
     const message = error.message || "订阅源解析失败";
-    return body?.include_feed === true ? json_response({ error: message, feed_url, xml }, 422) : error_response(message, 422);
+    return body?.include_feed === true ? json_response({
+      error: message,
+      feed_url,
+      xml
+    }, 422) : error_response(message, 422);
   }
 }
 
@@ -93,8 +129,7 @@ export async function admin_discovery_preview(env, request) {
  * @returns {string}
  */
 export function feed_hostname_origin(env) {
-  const configured = (String(env.FINDRSS_HOSTNAME ?? "").trim()
-    || String(env.FEED_HOSTNAME ?? "").trim()).replace(/\/+$/, "");
+  const configured = (String(env.FINDRSS_HOSTNAME ?? "").trim() || String(env.FEED_HOSTNAME ?? "").trim()).replace(/\/+$/, "");
   if (configured === "") return "";
   return /^https?:\/\//i.test(configured) ? configured : "https://" + configured;
 }
@@ -132,7 +167,7 @@ export async function resolve_discovery_source_feed_urls(response, origin, keep_
   headers.delete("Content-Length");
   return new Response(JSON.stringify(payload), {
     status: response.status,
-    headers,
+    headers
   });
 }
 
@@ -142,7 +177,7 @@ export async function resolve_discovery_source_feed_urls(response, origin, keep_
  * @returns {Promise<Response>}
  */
 export async function public_discovery_sources(env, request) {
-  const object = env.API.getByName(API_OBJECT_NAME);
+  const object = env.APPLICATION;
   const source_url = new URL(request.url);
   const internal_url = new URL("https://internal/_public/discovery/sources");
   internal_url.search = source_url.search;
@@ -152,10 +187,11 @@ export async function public_discovery_sources(env, request) {
   // 公开目录也要替换模板，但不回传存储原文——那是管理端的编辑态字段。
   return resolve_discovery_source_feed_urls(response, feed_hostname_origin(env), false);
 }
-
 export async function public_discovery_catalog(env) {
-  return env.API.getByName(API_OBJECT_NAME).fetch(new Request("https://internal/_public/discovery/catalog", {
-    headers: { "X-Feed-Public-URL": feed_hostname_origin(env) },
+  return env.APPLICATION.fetch(new Request("https://internal/_public/discovery/catalog", {
+    headers: {
+      "X-Feed-Public-URL": feed_hostname_origin(env)
+    }
   }));
 }
 
@@ -167,9 +203,11 @@ export async function public_discovery_catalog(env) {
  * @returns {Promise<Response>}
  */
 export async function public_discovery_source(env, source_id) {
-  const object = env.API.getByName(API_OBJECT_NAME);
+  const object = env.APPLICATION;
   const response = await object.fetch(new Request("https://internal/_public/discovery/sources/" + source_id, {
-    headers: { "X-Feed-Public-URL": feed_hostname_origin(env) },
+    headers: {
+      "X-Feed-Public-URL": feed_hostname_origin(env)
+    }
   }));
   return resolve_discovery_source_feed_urls(response, feed_hostname_origin(env), false);
 }
@@ -181,6 +219,6 @@ export async function public_discovery_source(env, source_id) {
  * @returns {Promise<Response>}
  */
 export async function public_discovery_avatar(env, source_id) {
-  const object = env.API.getByName(API_OBJECT_NAME);
+  const object = env.APPLICATION;
   return object.fetch("https://internal/_public/discovery/avatars/" + source_id);
 }

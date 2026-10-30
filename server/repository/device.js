@@ -4,16 +4,16 @@
 // 字段归一（截断、枚举兜底、JSON 序列化）由调用方在写前完成。
 
 export class RepositoryDevice {
-  /** @param {{ sql: SqlStorage }} deps */
-  constructor({ sql }) {
+  /** @param {{ sql: D1Store }} deps */
+  constructor({
+    sql
+  }) {
     this.sql = sql;
   }
 
   /** @param {string} device_id @returns {DeviceRegistryRow | undefined} */
-  find(device_id) {
-    return this.sql
-      .exec("SELECT * FROM devices WHERE device_id = ? LIMIT 1", device_id)
-      .toArray()[0];
+  async find(device_id) {
+    return (await this.sql.exec("SELECT * FROM devices WHERE device_id = ? LIMIT 1", device_id)).toArray()[0];
   }
 
   /**
@@ -21,27 +21,20 @@ export class RepositoryDevice {
    * @param {string} device_id
    * @returns {{ disabled: number } | undefined}
    */
-  find_disabled(device_id) {
-    return this.sql
-      .exec("SELECT disabled FROM devices WHERE device_id = ? LIMIT 1", device_id)
-      .toArray()[0];
+  async find_disabled(device_id) {
+    return (await this.sql.exec("SELECT disabled FROM devices WHERE device_id = ? LIMIT 1", device_id)).toArray()[0];
   }
 
   /** @param {string} device_id @returns {boolean} */
-  is_registered(device_id) {
-    return this.sql
-      .exec("SELECT 1 FROM devices WHERE device_id = ? LIMIT 1", device_id)
-      .toArray().length > 0;
+  async is_registered(device_id) {
+    return (await this.sql.exec("SELECT 1 FROM devices WHERE device_id = ? LIMIT 1", device_id)).toArray().length > 0;
   }
 
   /** @returns {DeviceRegistryRow[]} */
-  list_registry() {
-    return this.sql
-      .exec(
-        `SELECT device_id, connection_id, methods_json, device_name, device_os, connected_at,
+  async list_registry() {
+    return (await this.sql.exec(`SELECT device_id, connection_id, methods_json, device_name, device_os, connected_at,
                 max_concurrency, last_seen_at, disconnected_at, status, disabled
-         FROM devices ORDER BY device_id`)
-      .toArray();
+         FROM devices ORDER BY device_id`)).toArray();
   }
 
   /**
@@ -51,24 +44,17 @@ export class RepositoryDevice {
    * @param {string} device_id
    * @returns {number}
    */
-  count_active_for_device(device_id) {
-    const row = this.sql
-      .exec(
-        `SELECT COUNT(*) AS active_count FROM calls
-         WHERE assigned_device_id = ? AND status IN ('assigned', 'running')`,
-        device_id)
-      .toArray()[0];
+  async count_active_for_device(device_id) {
+    const row = (await this.sql.exec(`SELECT COUNT(*) AS active_count FROM calls
+         WHERE assigned_device_id = ? AND status IN ('assigned', 'running')`, device_id)).toArray()[0];
     return row === undefined ? 0 : Number(row.active_count);
   }
 
   /** @returns {DeviceLoadRow[]} 每台设备在飞（assigned/running）的任务数。 */
-  list_load_counts() {
-    return this.sql
-      .exec(
-        `SELECT assigned_device_id, COUNT(*) AS active_count FROM calls
+  async list_load_counts() {
+    return (await this.sql.exec(`SELECT assigned_device_id, COUNT(*) AS active_count FROM calls
          WHERE status IN ('assigned', 'running') AND assigned_device_id IS NOT NULL
-         GROUP BY assigned_device_id`)
-      .toArray();
+         GROUP BY assigned_device_id`)).toArray();
   }
 
   /**
@@ -79,9 +65,8 @@ export class RepositoryDevice {
    * }} fields
    * @returns {void}
    */
-  upsert_connection(fields) {
-    this.sql.exec(
-      `INSERT INTO devices (
+  async upsert_connection(fields) {
+    await this.sql.exec(`INSERT INTO devices (
          device_id, connection_id, methods_json, connected_at,
          device_name, device_os, max_concurrency, last_seen_at, disconnected_at, status
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'online')
@@ -94,15 +79,7 @@ export class RepositoryDevice {
          connected_at = excluded.connected_at,
          last_seen_at = excluded.last_seen_at,
          disconnected_at = NULL,
-         status = 'online'`,
-      fields.device_id,
-      fields.connection_id,
-      fields.methods_json,
-      fields.connected_at,
-      fields.device_name,
-      fields.device_os,
-      fields.max_concurrency,
-      fields.last_seen_at);
+         status = 'online'`, fields.device_id, fields.connection_id, fields.methods_json, fields.connected_at, fields.device_name, fields.device_os, fields.max_concurrency, fields.last_seen_at);
   }
 
   /**
@@ -110,17 +87,12 @@ export class RepositoryDevice {
    * @param {string} device_id @param {string} connection_id @param {number} now
    * @returns {void}
    */
-  set_seen(device_id, connection_id, now) {
+  async set_seen(device_id, connection_id, now) {
     // 用数据库时间戳限流，DO 休眠或重启后仍不会重新按每条消息落库。
-    this.sql.exec(
-      `UPDATE devices
+    await this.sql.exec(`UPDATE devices
        SET last_seen_at = ?, status = 'online', disconnected_at = NULL
        WHERE device_id = ? AND connection_id = ?
-         AND (last_seen_at <= ? OR status <> 'online' OR disconnected_at IS NOT NULL)`,
-      now,
-      device_id,
-      connection_id,
-      now - 5 * 60 * 1000);
+         AND (last_seen_at <= ? OR status <> 'online' OR disconnected_at IS NOT NULL)`, now, device_id, connection_id, now - 5 * 60 * 1000);
   }
 
   /**
@@ -128,16 +100,11 @@ export class RepositoryDevice {
    * @param {string} device_id @param {string} connection_id @param {number} now
    * @returns {void}
    */
-  set_offline(device_id, connection_id, now) {
-    this.sql.exec(
-      `UPDATE devices
+  async set_offline(device_id, connection_id, now) {
+    await this.sql.exec(`UPDATE devices
        SET status = 'offline', last_seen_at = ?, disconnected_at = ?
        WHERE device_id = ? AND connection_id = ?
-         AND (status <> 'offline' OR disconnected_at IS NULL)`,
-      now,
-      now,
-      device_id,
-      connection_id);
+         AND (status <> 'offline' OR disconnected_at IS NULL)`, now, now, device_id, connection_id);
   }
 
   /**
@@ -145,27 +112,20 @@ export class RepositoryDevice {
    * @param {string} device_id @param {string} connection_id @param {number} now
    * @returns {void}
    */
-  set_stale_offline(device_id, connection_id, now) {
-    this.sql.exec(
-      `UPDATE devices
+  async set_stale_offline(device_id, connection_id, now) {
+    await this.sql.exec(`UPDATE devices
        SET status = 'offline', disconnected_at = ?
-       WHERE device_id = ? AND connection_id = ? AND status = 'online'`,
-      now,
-      device_id,
-      connection_id);
+       WHERE device_id = ? AND connection_id = ? AND status = 'online'`, now, device_id, connection_id);
   }
 
   /** @param {string} device_id @param {boolean} disabled @returns {void} */
-  set_disabled(device_id, disabled) {
-    this.sql.exec(
-      "UPDATE devices SET disabled = ? WHERE device_id = ?",
-      disabled ? 1 : 0,
-      device_id);
+  async set_disabled(device_id, disabled) {
+    await this.sql.exec("UPDATE devices SET disabled = ? WHERE device_id = ?", disabled ? 1 : 0, device_id);
   }
 
   /** @param {string} device_id @returns {void} */
-  delete(device_id) {
-    this.sql.exec("DELETE FROM devices WHERE device_id = ?", device_id);
+  async delete(device_id) {
+    await this.sql.exec("DELETE FROM devices WHERE device_id = ?", device_id);
   }
 
   /**
@@ -176,23 +136,11 @@ export class RepositoryDevice {
    * }} fields
    * @returns {void}
    */
-  insert_log(fields) {
-    this.sql.exec(
-      `INSERT INTO device_logs (
+  async insert_log(fields) {
+    await this.sql.exec(`INSERT INTO device_logs (
         device_id, connection_id, category, event_type, direction, level,
         task_id, method, message, metadata_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      fields.device_id,
-      fields.connection_id,
-      fields.category,
-      fields.event_type,
-      fields.direction,
-      fields.level,
-      fields.task_id,
-      fields.method,
-      fields.message,
-      fields.metadata_json,
-      fields.created_at);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, fields.device_id, fields.connection_id, fields.category, fields.event_type, fields.direction, fields.level, fields.task_id, fields.method, fields.message, fields.metadata_json, fields.created_at);
   }
 
   /**
@@ -200,55 +148,31 @@ export class RepositoryDevice {
    * @param {string} device_id @param {string} category @param {number | null} before_id @param {number} limit
    * @returns {DeviceLogRow[]}
    */
-  list_logs(device_id, category, before_id, limit) {
+  async list_logs(device_id, category, before_id, limit) {
     if (before_id !== null && category !== "") {
-      return this.sql
-        .exec(
-          `SELECT * FROM device_logs
+      return (await this.sql.exec(`SELECT * FROM device_logs
            WHERE device_id = ? AND category = ? AND id < ?
-           ORDER BY id DESC LIMIT ?`,
-          device_id,
-          category,
-          before_id,
-          limit)
-        .toArray();
+           ORDER BY id DESC LIMIT ?`, device_id, category, before_id, limit)).toArray();
     }
     if (before_id !== null) {
-      return this.sql
-        .exec(
-          `SELECT * FROM device_logs WHERE device_id = ? AND id < ?
-           ORDER BY id DESC LIMIT ?`,
-          device_id,
-          before_id,
-          limit)
-        .toArray();
+      return (await this.sql.exec(`SELECT * FROM device_logs WHERE device_id = ? AND id < ?
+           ORDER BY id DESC LIMIT ?`, device_id, before_id, limit)).toArray();
     }
     if (category !== "") {
-      return this.sql
-        .exec(
-          `SELECT * FROM device_logs WHERE device_id = ? AND category = ?
-           ORDER BY id DESC LIMIT ?`,
-          device_id,
-          category,
-          limit)
-        .toArray();
+      return (await this.sql.exec(`SELECT * FROM device_logs WHERE device_id = ? AND category = ?
+           ORDER BY id DESC LIMIT ?`, device_id, category, limit)).toArray();
     }
-    return this.sql
-      .exec(
-        `SELECT * FROM device_logs WHERE device_id = ?
-         ORDER BY id DESC LIMIT ?`,
-        device_id,
-        limit)
-      .toArray();
+    return (await this.sql.exec(`SELECT * FROM device_logs WHERE device_id = ?
+         ORDER BY id DESC LIMIT ?`, device_id, limit)).toArray();
   }
 
   /** @param {number} cutoff @returns {void} */
-  delete_logs_before(cutoff) {
-    this.sql.exec("DELETE FROM device_logs WHERE created_at < ?", cutoff);
+  async delete_logs_before(cutoff) {
+    await this.sql.exec("DELETE FROM device_logs WHERE created_at < ?", cutoff);
   }
 
   /** @param {string} device_id @returns {void} */
-  delete_logs_for(device_id) {
-    this.sql.exec("DELETE FROM device_logs WHERE device_id = ?", device_id);
+  async delete_logs_for(device_id) {
+    await this.sql.exec("DELETE FROM device_logs WHERE device_id = ?", device_id);
   }
 }

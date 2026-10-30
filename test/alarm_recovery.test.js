@@ -1,148 +1,202 @@
-import assert from "node:assert/strict";
-import test from "node:test";
-import { readFileSync } from "node:fs";
-import vm from "node:vm";
-
-const source = readFileSync(new URL("../server/durable_object.js", import.meta.url), "utf8");
-const methods = vm.runInNewContext("(class {" + source.slice(source.indexOf("  async alarm()"), source.lastIndexOf("\n}")) + "})", {
-  CallModel: { MAX_ATTEMPTS: 3 },
-  console: { warn() {} },
-}).prototype;
-
-for (const stage of ["cleanup", "dispatch"]) {
-  test(`${stage} 失败仍执行订阅源抓取并安排下一次 alarm`, async () => {
-    const failure = new Error(stage + " failed");
-    const calls = [], pending = [];
-    const fail = name => { if (stage === name) throw failure; };
-    const object = {
-      maintain_alarm: methods.maintain_alarm,
-      repo: { calls: { list_expired_leases: () => [], sweep_expired() {} } },
-      ctx: { waitUntil: promise => pending.push(promise) },
-      app: {
-        scripts: { prune_script_objects: async () => {}, refresh_due_snapshots: async () => { calls.push("xml"); } },
-        devices: { close_unauthorized_connections() {} },
-        maintenance: { prune_retention() { fail("cleanup"); }, prune_events() {} },
-        tasks: { async dispatch_pending() { fail("dispatch"); } },
-        discovery: {
-          refresh_due_snapshots: async () => { calls.push("discovery"); },
-          ensure_catalog: async () => {},
-        },
-      },
-      schedule_alarm: async () => { calls.push("schedule"); },
-    };
-    await methods.alarm.call(object).catch(error => assert.equal(error, failure));
-    await Promise.all(pending);
-    assert.ok(calls.includes("discovery"));
-    assert.ok(calls.includes("xml"));
-    assert.ok(calls.includes("schedule"));
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { d1_fixture } from './support/d1.js';
+import { D1Store } from '../server/infra/d1.js';
+import { ServiceJobs } from '../server/service/jobs.js';
+function fixture(t, options = {}) {
+  const db = d1_fixture(),
+    pending = [],
+    sent = [];
+  t.after(async () => {
+    await Promise.allSettled(pending);
+    db.sql.close();
   });
-}
-
-test("抓取入口同步抛错不阻止其他抓取及重新安排 alarm", async () => {
-  const calls = [], pending = [];
-  const object = {
-    maintain_alarm: methods.maintain_alarm,
-    repo: { calls: { list_expired_leases: () => [], sweep_expired() {} } },
-    ctx: { waitUntil: promise => pending.push(promise) },
+  const make = () => new ServiceJobs({
+    store: new D1Store(db),
+    queue: {
+      send: async message => sent.push(message)
+    },
+    wait_until: promise => pending.push(promise),
     app: {
-      scripts: { prune_script_objects: async () => {}, refresh_due_snapshots: async () => { calls.push("xml"); } },
-      devices: { close_unauthorized_connections() {} },
-      maintenance: { prune_retention() {}, prune_events() {} },
-      tasks: { async dispatch_pending() {} },
-      statistics: new Proxy({}, { get() { assert.fail("alarm 不可读取或生成概览统计"); } }),
-      discovery: { refresh_due_snapshots() { throw new Error("schedule failed"); }, ensure_catalog: async () => {} },
-    },
-    schedule_alarm: async () => { calls.push("schedule"); },
-  };
-  await methods.alarm.call(object);
-  await Promise.all(pending);
-  assert.deepEqual(calls, ["xml", "schedule"]);
-});
-
-function request_fixture() {
-  let now = 1000, scheduled = 0, catalog = 0, discovery = 0, xml = 0, fail = false;
-  const pending = [];
-  const fetch = vm.runInNewContext("({" + source.match(/  async fetch\(request\) \{[\s\S]*?\n  \}/)[0] + "}).fetch", {
-    route: () => "ok", URL, Date: { now: () => now }, console: { warn() {} },
+      snapshot_settings: {
+        settings: async () => ({
+          max_concurrency: 2
+        })
+      },
+      hot_snapshots: {
+        start: async () => {}
+      },
+      ...options
+    }
   });
-  const object = {
-    discovery_alarm_started: false, discovery_alarm_checked_at: 0,
-    app: { discovery: { ensure_catalog: async () => { catalog++; }, refresh_due_snapshots: async () => { discovery++; } },
-      scripts: { refresh_due_snapshots: async () => { xml++; } } },
-    ctx: { waitUntil: promise => pending.push(promise) },
-    async schedule_alarm() { scheduled++; if (fail) throw new Error("storage unavailable"); },
-  };
   return {
-    object, set_now: value => { now = value; }, set_fail: value => { fail = value; },
-    get scheduled() { return scheduled; }, get catalog() { return catalog; },
-    get discovery() { return discovery; }, get xml() { return xml; },
-    async request() {
-      assert.equal(await fetch.call(object, new Request("https://internal/_admin/background-tasks")), "ok");
-      await Promise.all(pending.splice(0));
-    },
+    db,
+    make,
+    sent,
+    pending,
+    jobs: make()
   };
 }
-
-test("普通列表请求每分钟重新检查调度，恢复丢失的 alarm 且不重复初始化目录", async () => {
-  const f = request_fixture();
-  await f.request(); assert.equal(f.scheduled, 1); assert.equal(f.catalog, 1);
-  await f.request(); assert.equal(f.scheduled, 1);
-  f.set_now(61000);
-  await f.request(); assert.equal(f.scheduled, 2); assert.equal(f.catalog, 1);
-});
-
-test("普通请求每分钟兜底启动到期抓取，不依赖 alarm 真正唤醒且不重复触发", async () => {
-  const f = request_fixture();
-  await f.request();
-  assert.equal(f.discovery, 1); assert.equal(f.xml, 1);
-  await f.request();
-  assert.equal(f.discovery, 1); assert.equal(f.xml, 1);
-  f.set_now(61000);
-  await f.request();
-  assert.equal(f.discovery, 2); assert.equal(f.xml, 2);
-  assert.equal(f.catalog, 1);
-});
-
-test("兜底抓取入口失败不影响 API 响应、其他抓取和后续恢复", async () => {
-  const f = request_fixture();
-  f.object.app.discovery.refresh_due_snapshots = () => { throw new Error("抓取入口异常"); };
-  await f.request();
-  assert.equal(f.xml, 1);
-  assert.equal(f.scheduled, 1);
-  f.object.app.discovery.refresh_due_snapshots = async () => {};
-  f.set_now(61000);
-  await f.request();
-  assert.equal(f.xml, 2);
-});
-
-test("滞留超过一分钟的过期 alarm 重新登记，未来和刚到期的 alarm 不被推迟", async () => {
-  const now = Date.now(), writes = [];
-  let current = now - 120000;
-  const object = {
-    repo: { calls: { min_lease_expires_at: () => null }, device_tokens: { min_expires_at: () => null } },
-    app: { discovery: { next_snapshot_at: () => now + 5000 }, scripts: { next_snapshot_at: () => null },
-      statistics: new Proxy({}, { get() { assert.fail("调度不可查询概览快照时间"); } }) },
-    ctx: { storage: { getAlarm: async () => current, setAlarm: async value => { writes.push(value); current = value; } } },
+const task = {
+  kind: 'hot_snapshot',
+  title: 'hot',
+  target: '/rank/'
+};
+test('投递失败保留 D1 待办，新的 Cron 实例会补投；并发扫描不重复投递', async t => {
+  const f = fixture(t);
+  f.jobs.queue.send = async () => {
+    throw new Error('Queue unavailable');
   };
-  // 只执行真实 schedule_alarm；补齐其常量依赖，不运行 Cloudflare DO 壳。
-  const schedule = vm.runInNewContext("({" + source.slice(source.lastIndexOf("  async schedule_alarm()"), source.lastIndexOf("\n}")) + "}).schedule_alarm",
-    { Date: { now: () => now }, MAINTENANCE_MILLISECONDS: 86400000 });
-  await schedule.call(object);
-  assert.deepEqual(writes, [now + 5000]);
-  current = now + 3000;
-  await schedule.call(object);
-  current = now - 1000;
-  await schedule.call(object);
-  assert.equal(writes.length, 1);
-  object.app.discovery.next_snapshot_at = () => null;
-  current = null;
-  await schedule.call(object);
-  assert.equal(writes.at(-1), now + 86400000); // 空闲时不再为概览每五分钟唤醒。
+  const queued = await f.jobs.enqueue('hot-snapshot', task);
+  await Promise.all(f.pending);
+  assert.equal(f.db.sql.prepare('SELECT sent_at FROM jobs WHERE id=?').get(queued.id).sent_at, null);
+  await Promise.all([f.make().dispatch(), f.make().dispatch()]);
+  assert.deepEqual(f.sent, [{
+    id: queued.id
+  }]);
 });
-
-test("首次安排 alarm 失败后，下次请求能够重试", async () => {
-  const f = request_fixture(); f.set_fail(true);
-  await f.request(); assert.equal(f.scheduled, 1); assert.equal(f.object.discovery_alarm_started, false);
-  f.set_fail(false);
-  await f.request(); assert.equal(f.scheduled, 2); assert.equal(f.object.discovery_alarm_started, true);
+test('消费者崩溃后租约过期重投，旧租约不能提交写入，超过三次记失败', async t => {
+  const f = fixture(t),
+    queued = await f.jobs.enqueue('hot-snapshot', task, false);
+  f.db.sql.prepare("UPDATE jobs SET status='running',attempts=1,lease_token='old',lease_until=? WHERE id=?").run(Date.now() - 1, queued.id);
+  const stale = new D1Store(f.db);
+  stale.job = {
+    id: queued.id,
+    token: 'old'
+  };
+  await assert.rejects(stale.put('late-result', 1), /CHECK constraint/);
+  await f.jobs.dispatch();
+  assert.equal(f.db.sql.prepare('SELECT status FROM jobs WHERE id=?').get(queued.id).status, 'queued');
+  await f.jobs.consume(queued.id);
+  assert.equal(f.db.sql.prepare('SELECT status FROM jobs WHERE id=?').get(queued.id).status, 'completed');
+  assert.equal(await new D1Store(f.db).get('late-result'), undefined);
+  const exhausted = await f.jobs.enqueue('next', task, false);
+  f.db.sql.prepare("UPDATE jobs SET status='running',attempts=3,lease_until=? WHERE id=?").run(Date.now() - 1, exhausted.id);
+  await f.jobs.dispatch();
+  assert.equal(f.db.sql.prepare('SELECT status FROM jobs WHERE id=?').get(exhausted.id).status, 'failed');
+});
+test('多个 Worker 消费者共用 D1 并发上限，重复消息不会重复执行', async t => {
+  const running = [],
+    f = fixture(t, {
+      hot_snapshots: {
+        start: () => new Promise(resolve => running.push(resolve))
+      }
+    });
+  const tasks = await Promise.all(Array.from({
+    length: 3
+  }, (_, i) => f.jobs.enqueue('hot-' + i, task, false)));
+  const a = f.make(),
+    b = f.make(),
+    c = f.make();
+  const first = a.consume(tasks[0].id),
+    second = b.consume(tasks[1].id);
+  await new Promise(setImmediate);
+  assert.equal(running.length, 2);
+  assert.deepEqual(await c.consume(tasks[2].id), {
+    retry: true
+  });
+  assert.deepEqual(await c.consume(tasks[0].id), {
+    retry: false
+  });
+  running.splice(0).forEach(resolve => resolve());
+  await Promise.all([first, second]);
+  const third = c.consume(tasks[2].id);
+  await new Promise(setImmediate);
+  running.splice(0).forEach(resolve => resolve());
+  await third;
+  assert.equal(f.db.sql.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status='completed'").get().n, 3);
+});
+test('取消中的任务不能发布 D1 结果，下一次投递不会重新开始', async t => {
+  let release, started;
+  const ready = new Promise(resolve => {
+    started = resolve;
+  });
+  const f = fixture(t),
+    queued = await f.jobs.enqueue('hot-snapshot', task, false);
+  f.jobs.app.hot_snapshots.start = async () => {
+    started();
+    await new Promise(resolve => {
+      release = resolve;
+    });
+    await f.jobs.store.put('cancelled-result', 1);
+  };
+  const pending = f.jobs.consume(queued.id);
+  await ready;
+  await f.make().cancel(queued.id);
+  release();
+  await pending;
+  await f.jobs.consume(queued.id);
+  assert.equal(f.db.sql.prepare('SELECT status FROM jobs WHERE id=?').get(queued.id).status, 'cancelled');
+  assert.equal(await new D1Store(f.db).get('cancelled-result'), undefined);
+});
+test('排队后的自动任务重新检查启停与手动规则，Cron 不依赖 DO Alarm', async t => {
+  const f = fixture(t);
+  f.db.sql.exec(`INSERT INTO clips(id,title,url,selector,enabled,poll_policy_json,created_at,config_version) VALUES('clip','clip','https://example.com','body',0,'{"mode":"manual"}',0,'version')`);
+  const queued = await f.jobs.enqueue('clip:clip', {
+    kind: 'clip',
+    automatic: true,
+    target: 'clip'
+  }, false);
+  await f.jobs.consume(queued.id);
+  assert.equal(f.db.sql.prepare('SELECT status FROM jobs WHERE id=?').get(queued.id).status, 'cancelled');
+  assert.equal(f.db.sql.prepare("SELECT due_at FROM schedules WHERE target_id='clip'").get(), undefined);
+});
+test('某个 Cron 步骤失败仍执行后续投递、目录和维护', async t => {
+  const f = fixture(t),
+    steps = [];
+  f.jobs.schedule_due = async () => {
+    steps.push('schedule');
+    throw new Error('schedule unavailable');
+  };
+  f.jobs.dispatch = async () => {
+    steps.push('dispatch');
+  };
+  f.jobs.app.discovery = {
+    ensure_catalog: async () => {
+      steps.push('catalog');
+      throw new Error('R2 unavailable');
+    }
+  };
+  f.jobs.app.hot_snapshots = {
+    start: async () => steps.push('hot')
+  };
+  f.jobs.maintenance = async () => steps.push('maintenance');
+  await assert.rejects(f.jobs.scheduled(Date.parse('2026-10-30T00:00:00Z')), AggregateError);
+  assert.deepEqual(steps, ['schedule', 'dispatch', 'catalog', 'hot', 'maintenance']);
+});
+test('源码清理游标保存在 D1，新 Cron 实例逐个处理脚本', async t => {
+  const visited = [],
+    f = fixture(t, {
+      scripts: {
+        source_store: {
+          available: true
+        },
+        prune_script_objects: async id => visited.push(id)
+      }
+    });
+  f.db.sql.exec("INSERT INTO scripts(route,title,script,metadata_json,created_at,updated_at) VALUES('a','a','','{}',0,0),('b','b','','{}',0,0)");
+  await f.jobs.prune_sources();
+  await f.make().prune_sources();
+  await f.make().prune_sources();
+  assert.deepEqual(visited, ['a', 'b', 'a']);
+});
+test('公开源抓取失败保留快照但任务记为失败并按退避重试', async t => {
+  const f = fixture(t, {
+    discovery: {
+      refresh_discovery_snapshot: async () => ({
+        snapshot: {
+          error: 'upstream offline'
+        }
+      })
+    }
+  });
+  const task = await f.jobs.enqueue('discovery:source', {
+    kind: 'snapshot',
+    source_id: 'source'
+  }, false);
+  await f.jobs.consume(task.id);
+  const row = f.db.sql.prepare('SELECT status,error,available_at FROM jobs WHERE id=?').get(task.id);
+  assert.equal(row.status, 'queued');
+  assert.equal(row.error, 'upstream offline');
+  assert.ok(row.available_at > Date.now());
 });

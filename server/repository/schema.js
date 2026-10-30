@@ -1,20 +1,10 @@
-// APIDurableObject 的建表 DDL。单独成模块，让「表集合」与「索引只引用同 DDL 里的列」
-// 能在纯 node --test 下静态断言（durable_object.js 依赖 `cloudflare:workers`，Node 加载不了）。
-//
-// **这里只放可以在任何库上先跑的 CREATE**：`CREATE TABLE IF NOT EXISTS` 对已存在的表是
-// no-op，不会补列，所以带 PRAGMA 守卫的 ALTER 与依赖它们的索引（calls_coalesce、
-// access_tokens_user、scripts_path）必须留在 constructor 里、按原顺序跑在 ALTER 之后。
-// 本轮之前它们和 CREATE 混在一起；提前 CREATE 是安全的，因为被 ALTER 的表在本 DDL 里
-// 已经带着新列（新库直接建全，老库靠随后的 ALTER 补，索引再其后）。
+// 业务表的 Node 测试夹具。生产空库使用 migrations/0001_application.sql，Worker 不执行启动 DDL。
+// 以下旧名称工具仅用于独立的历史 schema 测试，不在应用运行时调用。
 
 // 在建新表前迁移旧名称，避免已有脚本、执行日志与模型密钥被留在旧表。
 export function migrate_script_tables(sql) {
   const tables = new Set(sql.exec("SELECT name FROM sqlite_master WHERE type = 'table'").toArray().map(row => row.name));
-  for (const [previous, current, indexes] of [
-    ["rss_scripts", "scripts", ["rss_scripts_path"]],
-    ["rss_script_logs", "script_logs", ["rss_script_logs_route_time", "rss_script_logs_retention", "rss_script_logs_errors"]],
-    ["rss_script_agent_settings", "script_agent_settings", []],
-  ]) {
+  for (const [previous, current, indexes] of [["rss_scripts", "scripts", ["rss_scripts_path"]], ["rss_script_logs", "script_logs", ["rss_script_logs_route_time", "rss_script_logs_retention", "rss_script_logs_errors"]], ["rss_script_agent_settings", "script_agent_settings", []]]) {
     if (!tables.has(previous)) continue;
     if (tables.has(current)) throw new Error(`Cannot migrate ${previous}: ${current} already exists`);
     sql.exec(`ALTER TABLE ${previous} RENAME TO ${current}`);
@@ -26,56 +16,7 @@ export function migrate_script_tables(sql) {
 export const API_SCHEMA_VERSION = 6;
 
 /** 本模块 DDL 里恰好这些表。 @type {readonly string[]} */
-export const API_TABLE_NAMES = Object.freeze([
-  "api_schema_version",
-  "overview_snapshot",
-  "clips",
-  "detections",
-  "detection_runs",
-  "snapshot_settings",
-  "background_tasks",
-  "cookie_push_settings",
-  "webhook_settings",
-  "platforms",
-  "tags",
-  "rss_cookie_grants",
-  "device_tokens",
-  "mcp_tokens",
-  "mcp_calls",
-  "mcp_oauth_clients",
-  "mcp_oauth_requests",
-  "mcp_oauth_grants",
-  "mcp_oauth_credentials",
-  "script_agent_settings",
-  "calls",
-  "call_status_counts",
-  "devices",
-  "device_logs",
-  "users",
-  "user_credentials",
-  "reader_email_verifications",
-  "reader_signup_ip_limits",
-  "access_tokens",
-  "credit_transactions",
-  "user_events",
-  "redemption_campaigns",
-  "redemption_cards",
-  "redemption_uses",
-  "discovery_sources",
-  "discovery_source_avatars",
-  "discovery_source_seeds",
-  "discovery_source_snapshots",
-  "discovery_source_calls",
-  "scripts",
-  "script_releases",
-  "script_release_events",
-  "rss_cookie_store",
-  "script_logs",
-  "rss_route_cache",
-  "rss_route_cache_chunks",
-  "rss_public_feeds",
-]);
-
+export const API_TABLE_NAMES = Object.freeze(["api_schema_version", "overview_snapshot", "clips", "detections", "detection_runs", "snapshot_settings", "background_tasks", "cookie_push_settings", "webhook_settings", "platforms", "tags", "rss_cookie_grants", "device_tokens", "mcp_tokens", "mcp_calls", "mcp_oauth_clients", "mcp_oauth_requests", "mcp_oauth_grants", "mcp_oauth_credentials", "script_agent_settings", "calls", "call_status_counts", "devices", "device_logs", "users", "user_credentials", "reader_email_verifications", "reader_signup_ip_limits", "access_tokens", "credit_transactions", "user_events", "redemption_campaigns", "redemption_cards", "redemption_uses", "discovery_sources", "discovery_source_avatars", "discovery_source_seeds", "discovery_source_snapshots", "discovery_source_calls", "scripts", "script_releases", "script_release_events", "rss_cookie_store", "script_logs", "rss_route_cache", "rss_route_cache_chunks", "rss_public_feeds"]);
 export const API_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS api_schema_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -412,6 +353,7 @@ export const API_SCHEMA_SQL = `
     social_url TEXT NOT NULL DEFAULT '',
     social_urls_json TEXT NOT NULL DEFAULT '[]',
     feed_url TEXT NOT NULL UNIQUE,
+    route_pathname TEXT NOT NULL DEFAULT '',
     category TEXT NOT NULL,
     tags_json TEXT NOT NULL DEFAULT '[]',
     enabled INTEGER NOT NULL DEFAULT 1,

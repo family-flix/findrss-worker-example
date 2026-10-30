@@ -3,16 +3,16 @@
 // 纯 SQL 层：只回原始数据（解析后的 cookie 数组 / 写入），不 import domain、不造 Response。
 
 export class RepositoryRssCookie {
-  /** @param {{ sql: SqlStorage }} deps */
-  constructor({ sql }) {
+  /** @param {{ sql: D1Store }} deps */
+  constructor({
+    sql
+  }) {
     this.sql = sql;
   }
 
   /** @returns {Record<string, unknown>[]} */
-  get() {
-    const row = this.sql
-      .exec("SELECT cookies_json FROM rss_cookie_store WHERE id = 1")
-      .toArray()[0];
+  async get() {
+    const row = (await this.sql.exec("SELECT cookies_json FROM rss_cookie_store WHERE id = 1")).toArray()[0];
     if (row === undefined) return [];
     try {
       const cookies = JSON.parse(String(row.cookies_json));
@@ -27,12 +27,9 @@ export class RepositoryRssCookie {
    * @param {number} now
    * @returns {void}
    */
-  put(cookies, now) {
-    this.sql.exec(
-      `INSERT INTO rss_cookie_store (id, cookies_json, updated_at) VALUES (1, ?, ?)
+  async put(cookies, now) {
+    await this.sql.exec(`INSERT INTO rss_cookie_store (id, cookies_json, updated_at) VALUES (1, ?, ?)
        ON CONFLICT(id) DO UPDATE SET cookies_json = excluded.cookies_json,
-         updated_at = excluded.updated_at`,
-      JSON.stringify(cookies),
-      now);
+         updated_at = excluded.updated_at`, JSON.stringify(cookies), now);
   }
 }

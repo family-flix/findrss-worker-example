@@ -9,7 +9,6 @@ export const RETENTION_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
 export const WORKERS_LOG_RETENTION_MILLISECONDS = 3 * 24 * 60 * 60 * 1000;
 export const MAINTENANCE_MILLISECONDS = 24 * 60 * 60 * 1000;
 export const MAX_QUEUED_CALLS = 10_000;
-export const API_OBJECT_NAME = "api";
 export const MAX_ACCESS_TOKENS = 500;
 export const READER_VERIFICATION_TTL_MS = 15 * 60 * 1000;
 export const READER_VERIFICATION_RESEND_COOLDOWN_MS = 60 * 1000;
@@ -41,7 +40,7 @@ export const DISCOVERY_PLATFORM_LABELS = {
   youtube: "YouTube",
   instagram: "Instagram",
   telegram: "Telegram",
-  website: "网页",
+  website: "网页"
 };
 // 旧分类只用于兼容：读取为标签，新增源不再需要分类。
 export const DISCOVERY_CATEGORY_TAGS = {
@@ -50,17 +49,9 @@ export const DISCOVERY_CATEGORY_TAGS = {
   business: "商业",
   science: "科学",
   design: "设计",
-  life: "生活",
+  life: "生活"
 };
-export const DISCOVERY_CATEGORIES = new Set([
-  "recommended",
-  "technology",
-  "development",
-  "business",
-  "science",
-  "design",
-  "life",
-]);
+export const DISCOVERY_CATEGORIES = new Set(["recommended", "technology", "development", "business", "science", "design", "life"]);
 export const MAX_DISCOVERY_SOURCES = 1000;
 /** 详情页 `/s/<id>` 的「同类订阅源」条数。是内部链接网，不是内容列表，不需要更多。 */
 export const DISCOVERY_RELATED_LIMIT = 12;
@@ -93,7 +84,7 @@ export const SCRIPT_FAILURE_LOG_MAX_KEYS = 2048;
 export const MAX_SCRIPT_INVOKES = 20;
 /**
  * QuickJS 沙箱的并发泳道上限。每次执行都是一个全新的 wasm 实例（asyncify 状态不能复用），
- * 所以泳道数 = 同时在飞的 wasm 实例数，闸的是内存（DO 上限 128MB），不是并发能力。
+ * 所以泳道数 = 同时在飞的 wasm 实例数，闸的是内存（Worker 上限 128MB），不是并发能力。
  * 泳道按需创建、不预建：并发执行少时（含同 key 合并生效的场景）只会用到一两条。
  */
 export const MAX_SANDBOX_LANES = 16;
@@ -103,33 +94,19 @@ export const RSS_ROUTE_CACHE_TTL_MS = 10 * 60 * 1000;
 /** L1 与 L2 共用的条目数上限。 */
 export const RSS_ROUTE_CACHE_MAX_ENTRIES = 4096;
 /**
- * L1 的内存预算（近似值）。DO 的内存上限是 128MB，条目本体最大可达
+ * L1 的内存预算（近似值）。Worker 的内存上限是 128MB，条目本体最大可达
  * `SCRIPT_OUTPUT_BYTES` = 10MB，只按条数限容会撑爆，所以字节数也要设闸。
  */
 export const RSS_ROUTE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 /** 单条目允许落 L2 的大小上限：超过就只留 L1，不往 SQLite 塞大块 JSON。 */
 export const RSS_ROUTE_CACHE_PERSIST_MAX_BYTES = 256 * 1024;
-export const DEVICE_LOG_CATEGORIES = new Set([
-  "connection",
-  "heartbeat",
-  "call",
-  "response",
-  "system",
-]);
+export const DEVICE_LOG_CATEGORIES = new Set(["connection", "heartbeat", "call", "response", "system"]);
 export const DEVICE_LOG_LEVELS = new Set(["info", "warn", "error"]);
 export const DEVICE_LOG_DIRECTIONS = new Set(["inbound", "outbound", "internal"]);
 /** 脚本执行日志来源：真实请求 / 后台测试运行 / 保存时校验失败。 */
 export const SCRIPT_LOG_SOURCES = new Set(["request", "test", "save"]);
 /** 失败相位，用于区分错误发生在脚本生命周期的哪一段。 */
-export const SCRIPT_LOG_PHASES = new Set([
-  "ok",
-  "mock",
-  "metadata",
-  "module",
-  "runtime",
-  "invoke",
-  "output",
-]);
+export const SCRIPT_LOG_PHASES = new Set(["ok", "mock", "metadata", "module", "runtime", "invoke", "output"]);
 export const MAX_SCRIPT_LOG_ERROR_LENGTH = 8 * 1024;
 
 /**

@@ -1,15 +1,12 @@
-import { proxy_target_url } from "@findrss/feed-fetch";
+import { proxy_target_url } from "../../infra/feed_fetch.js";
 import { error_response, json_response } from "../../lib/http.js";
 import { rss_fetch_headers, RSS_FETCH_CREDENTIAL_HEADERS } from "../../infra/rss_fetch_headers.js";
 import { rss_response_text } from "../../infra/rss_response_text.js";
 import { tcp_http_fetch } from "../../infra/tcp_http.js";
 import { cookie_header } from "../../infra/rss_cookies.js";
-import { API_OBJECT_NAME } from "../../lib/constants.js";
-
 const preview_bytes = 64 * 1024;
 // shortcut: 媒体预览最多读取 16MB，需要播放更大的媒体时改用流式预览接口。
 const media_preview_bytes = 16 * 1024 * 1024;
-
 function response_kind(type, disposition) {
   if (/^attachment\b/i.test(disposition)) return "file";
   if (type.startsWith("image/")) return "img";
@@ -18,7 +15,6 @@ function response_kind(type, disposition) {
   if (!type || type.startsWith("text/") || /(?:json|xml)$/.test(type) || /^application\/(?:x-)?(?:java|ecma)script$/.test(type)) return "text";
   return "file";
 }
-
 function response_file(response, url, type) {
   const disposition = response.headers.get("Content-Disposition") || "";
   const extended = /(?:^|;)\s*filename\*\s*=\s*(?:"([^"\r\n]*)"|([^;\r\n]*))/i.exec(disposition);
@@ -27,37 +23,51 @@ function response_file(response, url, type) {
   if (extended) {
     const encoded = (extended[1] ?? extended[2]).trim();
     const utf8 = /^utf-8'[^']*'(.*)$/i.exec(encoded);
-    if (utf8) { try { name = decodeURIComponent(utf8[1]); } catch {} }
+    if (utf8) {
+      try {
+        name = decodeURIComponent(utf8[1]);
+      } catch {}
+    }
   }
   if (!name) {
     name = new URL(url).pathname.split("/").pop() || "未命名文件";
-    try { name = decodeURIComponent(name); } catch {}
+    try {
+      name = decodeURIComponent(name);
+    } catch {}
   }
   const length = response.headers.get("Content-Length");
   const size = length !== null && /^\d+$/.test(length) ? Number(length) : NaN;
-  return { name: name.split(/[\\/]/).pop().replace(/[\r\n\0]/g, "") || "未命名文件",
-    type: type || "未声明 Content-Type", size_bytes: Number.isSafeInteger(size) ? size : null };
+  return {
+    name: name.split(/[\\/]/).pop().replace(/[\r\n\0]/g, "") || "未命名文件",
+    type: type || "未声明 Content-Type",
+    size_bytes: Number.isSafeInteger(size) ? size : null
+  };
 }
-
 async function stored_cookies(env) {
-  const response = await env.API.getByName(API_OBJECT_NAME).fetch("https://internal/_admin/cookies");
+  const response = await env.APPLICATION.fetch("https://internal/_admin/cookies");
   if (!response.ok) throw new Error("读取已保存 Cookie 失败，请稍后重试");
   const value = await response.json();
   if (!Array.isArray(value.cookies)) throw new Error("Cookie 接口返回格式不正确");
   return value.cookies;
 }
-
 export async function admin_network_cookie_domains(env) {
   try {
     const counts = new Map();
     for (const cookie of await stored_cookies(env)) counts.set(cookie.domain, (counts.get(cookie.domain) || 0) + 1);
-    return json_response({ domains: [...counts].sort(([left], [right]) => left.localeCompare(right))
-      .map(([domain, count]) => ({ domain, count })) });
-  } catch (failure) { return error_response(failure.message || "读取 Cookie 域名失败", 502); }
+    return json_response({
+      domains: [...counts].sort(([left], [right]) => left.localeCompare(right)).map(([domain, count]) => ({
+        domain,
+        count
+      }))
+    });
+  } catch (failure) {
+    return error_response(failure.message || "读取 Cookie 域名失败", 502);
+  }
 }
-
 export async function admin_network_test(request, env, export_curl = false, load_cookies = () => stored_cookies(env)) {
-  if (request.method !== "POST") return error_response("method not allowed", 405, { Allow: "POST" });
+  if (request.method !== "POST") return error_response("method not allowed", 405, {
+    Allow: "POST"
+  });
   const execution = new URL(request.url).searchParams.get("execution") ?? "worker";
   if (!["worker", "script"].includes(execution)) return error_response("执行位置只支持 worker 或 script", 400);
   let body;
@@ -66,7 +76,9 @@ export async function admin_network_test(request, env, export_curl = false, load
     const text = await request.text();
     if (new TextEncoder().encode(text).byteLength > 32768) return error_response("请求体超过 32KB", 413);
     body = JSON.parse(text);
-  } catch { return error_response("请求体必须是 JSON", 400); }
+  } catch {
+    return error_response("请求体必须是 JSON", 400);
+  }
   if (!body || typeof body !== "object" || Array.isArray(body)) return error_response("请求体必须是 JSON 对象", 400);
   const url = proxy_target_url(body.url);
   if (!url) return error_response("请输入公网 HTTP(S) 网址，仅支持 80 / 443 端口", 400);
@@ -75,59 +87,108 @@ export async function admin_network_test(request, env, export_curl = false, load
   const transport = body.transport === undefined ? "fetch" : body.transport;
   if (!["fetch", "tcp"].includes(transport)) return error_response("transport 只支持 fetch 或 tcp", 400);
   let headers;
-  try { headers = rss_fetch_headers({ headers: body.headers }); }
-  catch (failure) { return error_response(failure.message.replaceAll("fetchText", "网络测试"), 400); }
+  try {
+    headers = rss_fetch_headers({
+      headers: body.headers
+    });
+  } catch (failure) {
+    return error_response(failure.message.replaceAll("fetchText", "网络测试"), 400);
+  }
   if (headers.cookie !== undefined) return error_response("请勾选已保存的 Cookie 域名，不要在请求头中填写 Cookie", 400);
   const domains = body.cookie_domains ?? [];
   if (!Array.isArray(domains) || domains.length > 5000 || domains.some(domain => typeof domain !== "string" || !domain || domain.length > 255 || /[\s/]/.test(domain))) {
     return error_response("Cookie 域名列表无效", 400);
   }
-  if (execution === "script" && env?.API) {
+  if (execution === "script" && env?.APPLICATION) {
     const internal_url = new URL("https://internal/_admin/network-test" + (export_curl ? "/curl" : ""));
     internal_url.searchParams.set("execution", "script");
-    return env.API.getByName(API_OBJECT_NAME).fetch(new Request(internal_url, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: request.signal,
+    return env.APPLICATION.fetch(new Request(internal_url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body),
+      signal: request.signal
     }));
   }
   let cookies = [];
   if (domains.length) {
-    try { cookies = await load_cookies(); }
-    catch (failure) { return error_response(failure.message || "读取已保存 Cookie 失败", 502); }
+    try {
+      cookies = await load_cookies();
+    } catch (failure) {
+      return error_response(failure.message || "读取已保存 Cookie 失败", 502);
+    }
     const available = new Set(cookies.map(cookie => cookie.domain));
     if (domains.some(domain => !available.has(domain))) return error_response("已选 Cookie 域名不存在，请刷新域名列表", 400);
     const selected = new Set(domains);
     cookies = cookies.filter(cookie => selected.has(cookie.domain));
   }
-
   if (export_curl) {
     const request_cookie = cookie_header(cookies, url);
     if (request_cookie) headers.cookie = request_cookie;
-    if (transport === "tcp") { headers.connection = "close"; headers["accept-encoding"] = "identity"; }
+    if (transport === "tcp") {
+      headers.connection = "close";
+      headers["accept-encoding"] = "identity";
+    }
     const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
     // shortcut: 只复现首个请求；需要比较重定向链时再逐跳生成命令，避免泄露 Cookie 或认证头。
-    const command = ["curl -q --globoff --silent --show-error --include " + (transport === "tcp" ? "--http1.1" : "--compressed") + " --max-time " + timeout_ms / 1000,
-      ...Object.entries(headers).map(([name, value]) => "  --header " + quote(value ? `${name}: ${value}` : `${name};`)),
-      "  --url " + quote(url)].join(" \\\n");
-    return json_response({ command });
+    const command = ["curl -q --globoff --silent --show-error --include " + (transport === "tcp" ? "--http1.1" : "--compressed") + " --max-time " + timeout_ms / 1000, ...Object.entries(headers).map(([name, value]) => "  --header " + quote(value ? `${name}: ${value}` : `${name};`)), "  --url " + quote(url)].join(" \\\n");
+    return json_response({
+      command
+    });
   }
-
   const started_at = Date.now();
   const signal = AbortSignal.timeout(timeout_ms);
-  const result = { url, timeout_ms, transport, execution, colo: request.cf?.colo || "", elapsed_ms: 0, headers_ms: null,
-    requests: [], status: null, status_text: "", headers: {}, body: "", body_bytes: 0, truncated: false, error: "", code: "",
-    body_kind: "text", content_type: "", file: null, preview_message: "" };
+  const result = {
+    url,
+    timeout_ms,
+    transport,
+    execution,
+    colo: request.cf?.colo || "",
+    elapsed_ms: 0,
+    headers_ms: null,
+    requests: [],
+    status: null,
+    status_text: "",
+    headers: {},
+    body: "",
+    body_bytes: 0,
+    truncated: false,
+    error: "",
+    code: "",
+    body_kind: "text",
+    content_type: "",
+    file: null,
+    preview_message: ""
+  };
   let current = url;
   let media;
   try {
     for (let hop = 0; hop <= 5; hop++) {
-      const trace = { url: current, status: null, elapsed_ms: 0 };
+      const trace = {
+        url: current,
+        status: null,
+        elapsed_ms: 0
+      };
       result.requests.push(trace);
       const hop_started_at = Date.now();
       let response;
       try {
         const request_cookie = cookie_header(cookies, current);
-        response = await (transport === "tcp" ? tcp_http_fetch : fetch)(current, { method: "GET", headers: { ...headers, ...(request_cookie ? { Cookie: request_cookie } : {}) }, redirect: "manual", signal });
-      } finally { trace.elapsed_ms = Date.now() - hop_started_at; }
+        response = await (transport === "tcp" ? tcp_http_fetch : fetch)(current, {
+          method: "GET",
+          headers: {
+            ...headers,
+            ...(request_cookie ? {
+              Cookie: request_cookie
+            } : {})
+          },
+          redirect: "manual",
+          signal
+        });
+      } finally {
+        trace.elapsed_ms = Date.now() - hop_started_at;
+      }
       trace.status = response.status;
       result.url = current;
       result.status = response.status;
@@ -159,32 +220,48 @@ export async function admin_network_test(request, env, export_curl = false, load
         result.body_kind = "file";
         result.preview_message = "响应正文为空";
       }
-      if (result.body_kind === "file") { await response.body?.cancel(); break; }
+      if (result.body_kind === "file") {
+        await response.body?.cancel();
+        break;
+      }
       const limit = is_media ? media_preview_bytes : preview_bytes;
       const reader = response.body?.getReader();
       if (reader) {
         const chunks = [];
         try {
           for (;;) {
-            const { done, value } = await reader.read();
+            const {
+              done,
+              value
+            } = await reader.read();
             if (done) break;
             const remaining = limit - result.body_bytes;
             chunks.push(value.subarray(0, remaining));
             result.body_bytes += Math.min(value.byteLength, remaining);
-            if (value.byteLength > remaining) { result.truncated = true; break; }
+            if (value.byteLength > remaining) {
+              result.truncated = true;
+              break;
+            }
           }
-        } finally { await reader.cancel(); }
+        } finally {
+          await reader.cancel();
+        }
         if (is_media) {
           if (result.truncated) {
             result.body_kind = "file";
             result.preview_message = "媒体超过 16MB，仅显示文件信息";
           } else {
-            media = new Blob(chunks, { type: result.content_type });
+            media = new Blob(chunks, {
+              type: result.content_type
+            });
           }
         } else {
           const bytes = new Uint8Array(result.body_bytes);
           let offset = 0;
-          for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+          for (const chunk of chunks) {
+            bytes.set(chunk, offset);
+            offset += chunk.byteLength;
+          }
           result.body = rss_response_text(bytes.buffer, response.headers.get("Content-Type") || "");
         }
         if (!result.truncated && result.file.size_bytes === null) result.file.size_bytes = result.body_bytes;
@@ -193,14 +270,18 @@ export async function admin_network_test(request, env, export_curl = false, load
     }
   } catch (failure) {
     result.code = signal.aborted ? "UPSTREAM_TIMEOUT" : "UPSTREAM_FETCH_FAILED";
-    result.error = signal.aborted ? `请求超过 ${timeout_ms / 1000} 秒，已超时` : (failure.message || "上游连接失败");
+    result.error = signal.aborted ? `请求超过 ${timeout_ms / 1000} 秒，已超时` : failure.message || "上游连接失败";
   }
   result.elapsed_ms = Date.now() - started_at;
   if (media) {
     const form = new FormData();
     form.set("result", JSON.stringify(result));
     form.set("media", media, result.file.name);
-    return new Response(form, { headers: { "Cache-Control": "no-store" } });
+    return new Response(form, {
+      headers: {
+        "Cache-Control": "no-store"
+      }
+    });
   }
   return json_response(result);
 }

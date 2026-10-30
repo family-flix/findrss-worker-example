@@ -21,17 +21,25 @@ const FAILABLE_OPS = new Set(["get", "put", "delete", "list", "head"]);
 export function create_memory_bucket() {
   /** @type {Map<string, { value: unknown, size: number, etag: string, uploaded: Date, httpMetadata: Record<string, unknown>, customMetadata: Record<string, unknown> }>} */
   const objects = new Map();
+  let revision = 0;
   /** @type {Record<string, number>} */
-  const calls = { get: 0, put: 0, delete: 0, list: 0, head: 0 };
+  const calls = {
+    get: 0,
+    put: 0,
+    delete: 0,
+    list: 0,
+    head: 0
+  };
   /** @type {Set<string>} */
   const failures = new Set();
 
   /** 消费掉一次注入的失败（一次性）。 */
-  const maybe_fail = (op) => {
+  const maybe_fail = op => {
     if (!failures.has(op)) return;
     failures.delete(op);
     const error = new Error(`memory bucket ${op} failed`);
-    /** @type {any} */ (error).code = "injected_failure";
+    /** @type {any} */
+    error.code = "injected_failure";
     throw error;
   };
 
@@ -39,7 +47,7 @@ export function create_memory_bucket() {
    * 把一个存储记录包装成 R2 对象的读接口。
    * @param {string} key
    */
-  const view = (key) => {
+  const view = key => {
     const record = objects.get(key);
     if (record === undefined) return null;
     return {
@@ -54,46 +62,54 @@ export function create_memory_bucket() {
       arrayBuffer: async () => {
         const bytes = await value_to_bytes(record.value);
         return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-      },
+      }
     };
   };
-
   return {
     objects,
     calls,
-
     async head(key) {
       calls.head += 1;
       maybe_fail("head");
       const record = objects.get(String(key));
       if (record === undefined) return null;
-      const { body: _body, text: _text, arrayBuffer: _arrayBuffer, ...meta } = view(String(key));
+      const {
+        body: _body,
+        text: _text,
+        arrayBuffer: _arrayBuffer,
+        ...meta
+      } = view(String(key));
       return meta;
     },
-
     async get(key) {
       calls.get += 1;
       maybe_fail("get");
       return view(String(key));
     },
-
     async put(key, value, options = {}) {
       calls.put += 1;
       maybe_fail("put");
       const name = String(key);
       if (options.onlyIf?.etagDoesNotMatch === "*" && objects.has(name)) return null;
+      if (options.onlyIf?.etagMatches && objects.get(name)?.etag !== options.onlyIf.etagMatches) return null;
       const size = byte_length(value);
       objects.set(name, {
         value,
         size: size === null ? 0 : size,
-        etag: `etag-${size === null ? "stream" : size}-${name.length}`,
+        etag: `etag-${++revision}-${size === null ? "stream" : size}-${name.length}`,
         uploaded: new Date(),
-        httpMetadata: { ...(options?.httpMetadata ?? {}) },
-        customMetadata: { ...(options?.customMetadata ?? {}) },
+        httpMetadata: {
+          ...(options?.httpMetadata ?? {})
+        },
+        customMetadata: {
+          ...(options?.customMetadata ?? {})
+        }
       });
-      return { key: name, size };
+      return {
+        key: name,
+        size
+      };
     },
-
     async delete(keys) {
       calls.delete += 1;
       maybe_fail("delete");
@@ -103,8 +119,12 @@ export function create_memory_bucket() {
       if (list.length > MAX_DELETE_KEYS) throw new Error(`delete accepts at most ${MAX_DELETE_KEYS} keys`);
       for (const key of list) objects.delete(String(key));
     },
-
-    async list({ prefix = "", cursor = null, limit = 1000, delimiter } = {}) {
+    async list({
+      prefix = "",
+      cursor = null,
+      limit = 1000,
+      delimiter
+    } = {}) {
       calls.list += 1;
       maybe_fail("list");
       const prefixes = new Set();
@@ -119,27 +139,32 @@ export function create_memory_bucket() {
       const effective = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 1000;
       let start = 0;
       if (cursor !== null && cursor !== undefined && String(cursor) !== "") {
-        const index = filtered.findIndex((key) => key > String(cursor));
+        const index = filtered.findIndex(key => key > String(cursor));
         start = index === -1 ? filtered.length : index;
       }
       const slice = filtered.slice(start, start + effective);
       const truncated = start + slice.length < filtered.length;
       return {
-        objects: slice.filter(key => !prefixes.has(key)).map((key) => view(key)),
+        objects: slice.filter(key => !prefixes.has(key)).map(key => view(key)),
         truncated,
         cursor: truncated ? slice[slice.length - 1] : null,
-        ...(delimiter ? { delimitedPrefixes: slice.filter(key => prefixes.has(key)) } : {}),
+        ...(delimiter ? {
+          delimitedPrefixes: slice.filter(key => prefixes.has(key))
+        } : {})
       };
     },
-
     /**
      * 布一次性的失败：下一次该操作抛错。`op ∈ {get, put, delete, list, head}`。
      * @param {{ op: string }} input
      * @returns {void}
      */
-    fail_next({ op } = { op: "" }) {
+    fail_next({
+      op
+    } = {
+      op: ""
+    }) {
       if (!FAILABLE_OPS.has(op)) throw new Error(`unknown failable op: ${op}`);
       failures.add(op);
-    },
+    }
   };
 }

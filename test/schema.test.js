@@ -10,14 +10,12 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-
 import { API_SCHEMA_SQL, API_TABLE_NAMES } from "../server/repository/schema.js";
-
 const api_dir = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** @returns {string[]} DDL 里实际声明的表名。 */
 function declared_tables() {
-  return [...API_SCHEMA_SQL.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map((match) => match[1]);
+  return [...API_SCHEMA_SQL.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map(match => match[1]);
 }
 
 /**
@@ -40,75 +38,39 @@ function declared_indexes() {
     indexes.push({
       name: match[1],
       table: match[2],
-      columns: match[3].split(",").map((column) => column.trim().split(/\s+/)[0]).filter(Boolean),
-      where: match[4],
+      columns: match[3].split(",").map(column => column.trim().split(/\s+/)[0]).filter(Boolean),
+      where: match[4]
     });
   }
   return indexes;
 }
-
 test("表集合与本模块声明一致，且恰好 47 张", () => {
   assert.deepEqual(declared_tables(), [...API_TABLE_NAMES]);
   assert.equal(API_TABLE_NAMES.length, 47);
   assert.ok(Object.isFrozen(API_TABLE_NAMES));
 });
-
-test("DDL 里的每个索引只引用同一份 DDL 里定义过的列", () => {
+test("DDL 里的每个索引只引用同一份 DDL 里定义过的列", async () => {
   const bodies = table_bodies();
   const indexes = declared_indexes();
   assert.ok(indexes.length >= 15, `索引数量异常：${indexes.length}`);
   for (const index of indexes) {
-    const body = bodies.get(index.table);
+    const body = await bodies.get(index.table);
     assert.ok(body, `${index.name} 指向未声明的表 ${index.table}`);
     for (const column of index.columns) {
-      assert.match(
-        body,
-        new RegExp(`(^|\\s)${column}\\s`),
-        `${index.name} 引用了 ${index.table} 里不存在的列 ${column}`,
-      );
+      assert.match(body, new RegExp(`(^|\\s)${column}\\s`), `${index.name} 引用了 ${index.table} 里不存在的列 ${column}`);
     }
     for (const column of index.where.matchAll(/(?<![.\w'"])([a-z_][a-z0-9_]*)\s+(?:IS|NOT|=|<>|<|>)/gi)) {
-      assert.match(
-        body,
-        new RegExp(`(^|\\s)${column[1]}\\s`),
-        `${index.name} 的 WHERE 引用了 ${index.table} 里不存在的列 ${column[1]}`,
-      );
+      assert.match(body, new RegExp(`(^|\\s)${column[1]}\\s`), `${index.name} 的 WHERE 引用了 ${index.table} 里不存在的列 ${column[1]}`);
     }
   }
 });
-
 test("依赖 ALTER 补列或已停用的索引不得进 API_SCHEMA_SQL", () => {
   for (const name of ["calls_access_token", "calls_coalesce", "access_tokens_user", "scripts_path", "rss_route_cache_expiry"]) {
-    assert.equal(
-      declared_indexes().some((index) => index.name === name),
-      false,
-      `${name} 依赖 ALTER 补的列 / 迁移循环，必须留在 constructor 里`,
-    );
+    assert.equal(declared_indexes().some(index => index.name === name), false, `${name} 依赖 ALTER 补的列 / 迁移循环，必须留在 constructor 里`);
   }
 });
-
-test("constructor 里 DDL、ALTER、依赖索引的执行顺序不能倒", () => {
-  const source = readFileSync(join(api_dir, "server/durable_object.js"), "utf8");
-  /** 两个锚点在源码里的先后。 @param {string} before @param {string} after */
-  const ordered = (before, after) => {
-    const first = source.indexOf(before);
-    const second = source.indexOf(after);
-    assert.ok(first >= 0, `找不到锚点：${before}`);
-    assert.ok(second >= 0, `找不到锚点：${after}`);
-    assert.ok(first < second, `顺序错了：${before} 必须早于 ${after}`);
-  };
-  ordered("exec(API_SCHEMA_SQL)", "ALTER TABLE calls ADD COLUMN access_token_id");
-  ordered("transactionSync(() => migrate_script_tables", "exec(API_SCHEMA_SQL)");
-  ordered("ALTER TABLE calls ADD COLUMN access_token_id", "calls_access_token");
-  ordered("ALTER TABLE calls ADD COLUMN coalesce_key", "calls_coalesce");
-  ordered("ALTER TABLE access_tokens ADD COLUMN user_id", "access_tokens_user");
-  ordered("ALTER TABLE scripts ADD COLUMN path", "scripts_path");
-  ordered("SELECT route, title, script, metadata_json FROM scripts", "scripts_path");
-  ordered("exec(API_SCHEMA_SQL)", "calls_access_token");
-  ordered("exec(API_SCHEMA_SQL)", "ALTER TABLE background_tasks ADD COLUMN source_id");
-  ordered("ALTER TABLE background_tasks ADD COLUMN source_id", "new RepositoryBackgroundTasks");
-  ordered("exec(API_SCHEMA_SQL)", "ALTER TABLE discovery_source_avatars ADD COLUMN object_key");
-  ordered("exec(API_SCHEMA_SQL)", "ALTER TABLE discovery_sources ADD COLUMN credit_cost INTEGER NOT NULL DEFAULT 1");
-  ordered("ALTER TABLE discovery_sources ADD COLUMN credit_cost INTEGER NOT NULL DEFAULT 1", "new RepositoryDiscoverySource");
-  ordered("ALTER TABLE discovery_source_avatars ADD COLUMN object_key", "new RepositoryDiscoverySource");
+test("业务表通过部署 SQL 初始化，Worker 和 WebSocket DO 不执行启动 DDL", () => {
+  const migration = readFileSync(join(api_dir, "migrations/0001_application.sql"), "utf8");
+  for (const table of [...API_TABLE_NAMES, "application_settings", "jobs", "schedules", "transaction_guard"]) assert.match(migration, new RegExp("CREATE TABLE(?: IF NOT EXISTS)? " + table + "\\s*\\("));
+  for (const file of ["server/application.js", "server/infra/realtime_do.js"]) assert.doesNotMatch(readFileSync(join(api_dir, file), "utf8"), /CREATE TABLE|ALTER TABLE|transactionSync|ctx\.storage/);
 });

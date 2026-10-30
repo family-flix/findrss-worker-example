@@ -43,7 +43,7 @@
   "compatibility_date": "2026-05-03",
   "compatibility_flags": ["nodejs_compat"],
   "triggers": {
-    "crons": ["*/5 * * * *"]
+    "crons": ["* * * * *"]
   },
   "browser": {
     "binding": "BROWSER"
@@ -80,28 +80,15 @@
       "bucket_name": "findrss-storage"
     }
   ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "API",
-        "class_name": "APIDurableObject"
-      }
-    ]
+  "d1_databases": [{ "binding": "DB", "database_name": "findrss-db", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }],
+  "kv_namespaces": [{ "binding": "CACHE", "id": "00000000000000000000000000000000" }],
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "findrss-jobs" }],
+    "consumers": [{ "queue": "findrss-jobs", "max_batch_size": 1, "max_concurrency": 16, "max_retries": 10 }]
   },
-  "exports": {
-    "APIDurableObject": {
-      "type": "durable-object",
-      "storage": "sqlite"
-    },
-    "HubDurableObject": {
-      "type": "durable-object",
-      "state": "deleted"
-    },
-    "BridgeDurableObject": {
-      "type": "durable-object",
-      "state": "deleted"
-    }
-  },
+  "services": [{ "binding": "APPLICATION_SERVICE", "service": "findrss-worker", "entrypoint": "ApplicationEntrypoint" }],
+  "durable_objects": { "bindings": [{ "name": "REALTIME", "class_name": "RealtimeHubDO" }] },
+  "exports": { "RealtimeHubDO": { "type": "durable-object", "storage": "sqlite" } },
   "secrets": {
     "required": [
       "ADMIN_PASSWORD"

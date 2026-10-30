@@ -2,11 +2,13 @@
 
 [返回项目介绍](../README.md)。本指南包含部署、本地运行、自定义订阅源与设备配置。
 
+**当前实现使用空 D1 库，不迁移旧 DO 数据。** 首次部署必须先按[后端资源配置与建表](backend-architecture.md#首次部署)完成 D1、KV、Queue 和 R2 配置；下列网页构建流程不能替代这一步。
+
 ## Fork 部署到 Cloudflare Workers
 
-**推荐使用此流程**。先 Fork 项目，再连接 Cloudflare Workers Builds，后续可以在 GitHub 通过 **Sync fork → Update branch** 更新。整个过程可在网页完成，无需安装 Git 或配置 GitHub 中的 Cloudflare API Token。
+**推荐使用此流程**。先 Fork 项目，再连接 Cloudflare Workers Builds，后续可以在 GitHub 通过 **Sync fork → Update branch** 更新。连接构建可在网页完成；初始化 D1 需使用 Wrangler。
 
-需要 GitHub 账号，以及可使用 Workers、SQLite Durable Objects 和 R2 的 Cloudflare 账号。
+需要 GitHub 账号，以及可使用 Workers、D1、KV、Queues、Durable Objects 和 R2 的 Cloudflare 账号。
 
 ### 1. Fork 仓库
 
@@ -16,9 +18,9 @@
 
 1. 在 Cloudflare 打开 **Workers & Pages → Create application**，通过 Hello World 创建一个 Worker，名称填写 `findrss-worker`，先完成初始部署。
 2. 进入该 Worker 的 **Settings → Variables and Secrets → Add**，类型选择 **Secret**，名称填写 `ADMIN_PASSWORD`，值设置为自行生成的随机长密码，保存并部署。这是 FindRSS 后台的登录密码。[Cloudflare Secrets 说明](https://developers.cloudflare.com/workers/configuration/secrets/#via-the-dashboard)
-3. 在 Cloudflare **R2 Object Storage** 中启用 R2，并创建名为 `findrss-storage` 的桶；已有该桶时可直接使用。部署会按 `wrangler.jsonc` 绑定此桶，并创建 Durable Object，无需手动创建 DO。
+3. 在 Cloudflare **R2 Object Storage** 中启用 R2，并创建名为 `findrss-storage` 的桶；已有该桶时可直接使用。部署会按 `wrangler.jsonc` 绑定此桶，并创建 WebSocket Durable Object。另按[后端资源步骤](backend-architecture.md#首次部署)创建 D1、KV、Queue，填入 ID 并执行远程建表。
 
-Worker 名称必须与仓库 `wrangler.jsonc` 中的 `name` 一致，R2 桶名必须与 `r2_buckets` 中的 `bucket_name` 一致。上面的默认名称可以直接使用原配置；若要自定义，请在自己的 Fork 中同步修改配置后再连接构建。已有站点升级时保留原名称和存储资源。
+Worker 名称必须与仓库 `wrangler.jsonc` 中的 `name` 和 `APPLICATION_SERVICE.service` 一致，R2 桶名必须与 `r2_buckets` 中的 `bucket_name` 一致。上面的默认名称可以直接使用原配置；若要自定义，请在自己的 Fork 中同步修改配置后再连接构建。旧 DO 版本不能直接无损升级到本实现；此版本不会读取旧 DO 数据。
 
 `ADMIN_PASSWORD` 应配置在 Worker 的 **Variables and Secrets** 中；**Builds** 中的变量只供构建过程使用，不会自动成为 Worker 的运行时密钥。[Cloudflare 构建配置说明](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/#build-settings)
 
@@ -38,7 +40,7 @@ Cloudflare 会根据锁文件安装依赖，`npm run deploy` 会先构建后台�
 
 **如果部署报错 `assets.directory` 指向的 `dist/assets` 不存在**：这个目录由构建生成，不随 Git 仓库提交。进入 **Settings → Builds** 检查并保存上表中的命令，尤其是将 `npx wrangler deploy` 改为 `npm run deploy`，再重新运行构建。更新 Fork 代码不会修改 Cloudflare 中已保存的构建设置。正常日志会先出现 `node scripts/build.js` 和 `FindRSS frontend assets built`，然后才运行 Wrangler 部署；如果已有这两条日志仍然报错，请检查完整日志中的部署命令和工作目录是否与上表一致。
 
-部署成功后打开 Worker 的站点地址，在地址后加 `/admin/`，使用 `ADMIN_PASSWORD` 登录。空库首次启动会自动创建 Apple 应用更新脚本和一条公开订阅源；添加自己的规则详见[创建自己的订阅源](#创建自己的订阅源)。自定义域名可在 Worker 的 **Settings → Domains & Routes** 中添加。
+部署成功后打开 Worker 的站点地址，在地址后加 `/admin/`，使用 `ADMIN_PASSWORD` 登录。数据库初始为空；添加自己的规则详见[创建自己的订阅源](#创建自己的订阅源)。自定义域名可在 Worker 的 **Settings → Domains & Routes** 中添加。
 
 后续按下方 [Fork 仓库更新步骤](#fork-仓库更新)更新即可。
 
@@ -52,9 +54,9 @@ Cloudflare 会根据锁文件安装依赖，`npm run deploy` 会先构建后台�
   </a>
 </p>
 
-点击上方 **Deploy to Cloudflare**，按引导连接 GitHub / GitLab，选择 Cloudflare 账号，设置 Worker 名称和密钥后部署。Cloudflare 会复制项目、配置 Workers Builds，并按 Wrangler 配置创建所需的 Durable Object 和 R2 资源。[官方部署说明](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
+点击上方 **Deploy to Cloudflare**，按引导连接 GitHub / GitLab，选择 Cloudflare 账号，设置 Worker 名称和密钥后部署。Cloudflare 会复制项目、配置 Workers Builds，再按[后端部署步骤](backend-architecture.md#首次部署)完成资源 ID 和建表配置。[官方部署说明](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
 
-部署时必须填写 `ADMIN_PASSWORD`，作为后台登录密码；该密钥没有默认值，请自行设置随机长密码。无需传入 `DEVICE_TOKEN`、`FINDRSS_HOSTNAME` 或 `FEED_HOSTNAME`，域名默认使用当前访问地址。使用项目定义的构建命令 `npm run build` 和部署命令 `npm run deploy`。完成后打开 Worker 域名的 `/admin/`，输入密码登录即可查看默认 Apple 脚本和订阅源；需要连接设备时，在「设备管理 → Device Token」创建凭证。
+部署时必须填写 `ADMIN_PASSWORD`，作为后台登录密码；该密钥没有默认值，请自行设置随机长密码。无需传入 `DEVICE_TOKEN`、`FINDRSS_HOSTNAME` 或 `FEED_HOSTNAME`，域名默认使用当前访问地址。使用项目定义的构建命令 `npm run build` 和部署命令 `npm run deploy`。完成后打开 Worker 域名的 `/admin/`，输入密码登录后导入、发布脚本并添加订阅源；需要连接设备时，在「设备管理 → Device Token」创建凭证。
 
 ## 更新已部署的站点
 
@@ -79,7 +81,7 @@ Cloudflare 会根据锁文件安装依赖，`npm run deploy` 会先构建后台�
 
 工作流已声明仓库内容写权限；如果提交时报权限错误，请检查仓库或组织的 Actions 策略，在 **Settings → Actions → General → Workflow permissions** 中允许 **Read and write permissions**。如果生产分支要求通过 Pull Request 才能更新，此工作流的直接推送会被拒绝，需要先调整对应分支规则或自行通过 PR 更新。
 
-更新以原项目代码为准，会替换应用文件并删除上游已经移除的文件，不适用于需要保留自行修改应用代码的部署。同步 `wrangler.jsonc` 时保留 Worker 名称、账号、自定义路由、`workers_dev` / `preview_urls`、已有变量及同名 R2 绑定的桶配置；Durable Object 绑定保留对外部 Worker 的引用，其余应用配置（包括静态资源路由、兼容日期、别名及 DO 声明）跟随新版更新。Cloudflare 中的 secrets 不由工作流读取或修改。
+更新以原项目代码为准，会替换应用文件并删除上游已经移除的文件，不适用于需要保留自行修改应用代码的部署。同步 `wrangler.jsonc` 时保留 Worker 名称、账号、自定义路由、`workers_dev` / `preview_urls`、已有变量、同名 R2/D1/KV 资源和 Queue 名称；Durable Object 绑定保留对外部 Worker 的引用，其余应用配置（包括静态资源路由、兼容日期、别名及 DO 声明）跟随新版更新。Cloudflare 中的 secrets 不由工作流读取或修改。
 
 已有 `.github/workflows/` 文件会保留，上游的新工作流或工作流修改不会自动覆盖它们；以后更新工作流本身时，按下方步骤重新复制对应文件。
 
@@ -128,7 +130,7 @@ npm run dev
 
 本地后台用户名为 `admin`，密码使用你在 `.dev.vars` 中填写的 `ADMIN_PASSWORD`，没有默认值。本地配置只用于开发，生产部署时请设置独立的随机长密码。
 
-空库首次启动会将 [rss/apple.js](https://github.com/ltaoo/findrss-scripts/blob/main/rss/apple.js) 保存为已发布的 `1.0.0` 版本，并创建公开订阅源 `{{hostname}}/rss/apple/apps/update/us/id408709785`，地址随当前访问域名解析，无需设备或 Cookie。初始化只执行一次；已有脚本或订阅源的部署跳过默认数据，修改、停用或删除默认记录后重启不会恢复。文章内容由快照任务从 Apple 获取，首次抓取前可以先看到订阅源记录。登录后台后，可在「订阅源」中添加外部 RSS / Atom 地址；需要生成自己的订阅源时，先在「脚本」中发布脚本，再添加对应的订阅地址。
+本地 D1 初始为空。登录后台后，可在「订阅源」中添加外部 RSS / Atom 地址；需要生成自己的订阅源时，先导入并发布采集脚本，再添加对应订阅地址。
 
 手动或定时生成快照时，会同步 RSS / Atom 中的频道图标到订阅源头像；图标内容未变时保留原头像地址。图标缺失或抓取失败时保留已有头像，不影响文章快照更新。
 
@@ -196,7 +198,7 @@ if (rendered.error) return rendered;
 
 ## 手动部署与配置
 
-需要可使用 Workers、SQLite Durable Objects 和 R2 的 Cloudflare 账号。部署使用本项目的 [wrangler.jsonc](../wrangler.jsonc)，后台与广场静态资源随 Worker 一起发布。
+需要可使用 Workers、D1、KV、Queues、Durable Objects 和 R2 的 Cloudflare 账号。部署使用本项目的 [wrangler.jsonc](../wrangler.jsonc)，后台与广场静态资源随 Worker 一起发布。
 
 在本项目根目录执行：
 

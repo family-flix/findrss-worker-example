@@ -1,32 +1,70 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { register } from 'node:module';
-import { ServiceCookiePushSettings } from '../server/service/durable_object/cookie_push_settings.js';
+import { ServiceCookiePushSettings } from '../server/service/application/cookie_push_settings.js';
 import { create_script_agent_credentials } from '../server/infra/script_agent_credentials.js';
 register('./support/quickjs_wasm_hook.js', import.meta.url);
-const { ServiceScript } = await import('../server/service/durable_object/scripts.js');
-function setup() {
+const {
+  ServiceScript
+} = await import('../server/service/application/scripts.js');
+async function setup() {
   let saved, settings;
-  const service = Object.create(ServiceScript.prototype);
-  service.repo = { rss_cookies: { get: () => saved || [], put: cookies => { saved = cookies; } } };
-  service.app = { cookie_push_settings: new ServiceCookiePushSettings({
-    repo: { get: () => settings, put: (uuid, encrypted_key) => { settings = { uuid, encrypted_key }; } },
-    credentials: create_script_agent_credentials('test-admin'),
-  }) };
+  const service = await Object.create(ServiceScript.prototype);
+  service.repo = {
+    rss_cookies: {
+      get: () => saved || [],
+      put: cookies => {
+        saved = cookies;
+      }
+    }
+  };
+  service.app = {
+    cookie_push_settings: new ServiceCookiePushSettings({
+      repo: {
+        get: () => settings,
+        put: (uuid, encrypted_key) => {
+          settings = {
+            uuid,
+            encrypted_key
+          };
+        }
+      },
+      credentials: create_script_agent_credentials('test-admin')
+    })
+  };
   service.invalidate_routes = () => {};
-  return { service, saved: () => saved };
+  return {
+    service,
+    saved: () => saved
+  };
 }
-function request(cookies) { return new Request('https://local/api/cookies/update', { method: 'POST', body: JSON.stringify({ data: JSON.stringify(cookies), crypto_type: 'none' }) }); }
+function request(cookies) {
+  return new Request('https://local/api/cookies/update', {
+    method: 'POST',
+    body: JSON.stringify({
+      data: JSON.stringify(cookies),
+      crypto_type: 'none'
+    })
+  });
+}
 test('重复 Cookie 同步不写库或清缓存，值变化和清空仍立即保存', async t => {
-  const ctx = setup();
+  const ctx = await setup();
   const put = t.mock.method(ctx.service.repo.rss_cookies, 'put');
   const invalidate = t.mock.method(ctx.service, 'invalidate_routes');
-  const cookie = { domain: '.example.com', name: 'sid', value: 'original', path: '/' };
+  const cookie = {
+    domain: '.example.com',
+    name: 'sid',
+    value: 'original',
+    path: '/'
+  };
   await ctx.service.update_rss_cookies(request([cookie]));
   for (let index = 0; index < 100; index++) await ctx.service.update_rss_cookies(request([cookie]));
   assert.equal(put.mock.calls.length, 1);
   assert.equal(invalidate.mock.calls.length, 1);
-  await ctx.service.update_rss_cookies(request([{ ...cookie, value: 'changed' }]));
+  await ctx.service.update_rss_cookies(request([{
+    ...cookie,
+    value: 'changed'
+  }]));
   assert.equal(ctx.saved()[0].value, 'changed');
   await ctx.service.update_rss_cookies(request([]));
   assert.deepEqual(ctx.saved(), []);
@@ -34,29 +72,65 @@ test('重复 Cookie 同步不写库或清缓存，值变化和清空仍立即保
   assert.equal(invalidate.mock.calls.length, 3);
 });
 test('Cookie 管理读取需要管理员身份，读取和编辑复用已有存储', async () => {
-  const { route } = await import('../durable_object_router.js');
-  const { default: worker } = await import('../api.js');
-  const ctx = setup();
-  const app = { scripts: ctx.service };
+  const {
+    route
+  } = await import('../application_router.js');
+  const {
+    default: worker
+  } = await import('../api.js');
+  const ctx = await setup();
+  const app = {
+    scripts: ctx.service
+  };
   let forwarded = 0;
-  const env = { ADMIN_PASSWORD: 'admin-fixture', API: { getByName: () => ({ fetch: async request => {
-    forwarded++;
-    return route(request, app);
-  } }) } };
+  const env = {
+    ADMIN_PASSWORD: 'admin-fixture',
+    APPLICATION: (() => ({
+      fetch: async request => {
+        forwarded++;
+        return route(request, app);
+      }
+    }))()
+  };
   const url = 'https://local/admin/api/cookies';
   assert.equal((await worker.fetch(new Request(url), env)).status, 401);
   assert.equal(forwarded, 0);
-  const headers = { Authorization: 'Bearer admin-fixture' };
-  const empty = await worker.fetch(new Request(url, { headers }), env);
-  assert.deepEqual(await empty.json(), { cookies: [] });
-  assert.match(empty.headers.get('Cache-Control'), /no-store/);
-  const cookie = { name: 'sid', value: 'submitted', domain: '.example.com', path: '/account', secure: true };
+  const headers = {
+    Authorization: 'Bearer admin-fixture'
+  };
+  const empty = await worker.fetch(new Request(url, {
+    headers
+  }), env);
+  assert.deepEqual(await empty.json(), {
+    cookies: []
+  });
+  assert.match(await empty.headers.get('Cache-Control'), /no-store/);
+  const cookie = {
+    name: 'sid',
+    value: 'submitted',
+    domain: '.example.com',
+    path: '/account',
+    secure: true
+  };
   await ctx.service.update_rss_cookies(request([cookie]));
-  let result = await worker.fetch(new Request(url, { headers }), env);
+  let result = await worker.fetch(new Request(url, {
+    headers
+  }), env);
   assert.equal((await result.json()).cookies[0].value, 'submitted');
-  const update = { method: 'POST', headers, body: JSON.stringify({ data: JSON.stringify([{ ...cookie, value: 'edited' }]) }) };
+  const update = {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      data: JSON.stringify([{
+        ...cookie,
+        value: 'edited'
+      }])
+    })
+  };
   assert.equal((await worker.fetch(new Request(url + '/update', update), env)).status, 200);
-  result = await worker.fetch(new Request(url, { headers }), env);
+  result = await worker.fetch(new Request(url, {
+    headers
+  }), env);
   const saved = (await result.json()).cookies[0];
   assert.equal(saved.value, 'edited');
   assert.equal(saved.path, '/account');
@@ -64,77 +138,190 @@ test('Cookie 管理读取需要管理员身份，读取和编辑复用已有存�
   assert.equal((await worker.fetch(new Request('https://local/api/cookies'), env)).status, 404);
 });
 test('加密 data 解密后保存；无效请求不覆盖已有 Cookie 或使缓存失效', async () => {
-  const ctx = setup();
+  const ctx = await setup();
   await ctx.service.app.cookie_push_settings.import_legacy('device', '0123456789abcdef');
   let invalidations = 0;
   ctx.service.invalidate_routes = () => invalidations++;
-  const cookie = { name: 'sid', value: 'encrypted', domain: '.example.com', path: '/', secure: true };
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('0123456789abcdef'), 'AES-CBC', false, ['encrypt']);
-  const send = body => ctx.service.update_rss_cookies(new Request('https://local/api/cookies/update', { method: 'POST', body: JSON.stringify(body) }));
-  const encrypt = async text => {
-    const encrypted = await crypto.subtle.encrypt({ name: 'AES-CBC', iv: new Uint8Array(16) }, key, new TextEncoder().encode(text));
-    return { uuid: 'device', crypto_type: 'aes-128-cbc-fixed', data: btoa(String.fromCharCode(...new Uint8Array(encrypted))) };
+  const cookie = {
+    name: 'sid',
+    value: 'encrypted',
+    domain: '.example.com',
+    path: '/',
+    secure: true
   };
-  const body = await encrypt(JSON.stringify({ '.example.com': [cookie] }));
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('0123456789abcdef'), 'AES-CBC', false, ['encrypt']);
+  const send = body => ctx.service.update_rss_cookies(new Request('https://local/api/cookies/update', {
+    method: 'POST',
+    body: JSON.stringify(body)
+  }));
+  const encrypt = async text => {
+    const encrypted = await crypto.subtle.encrypt({
+      name: 'AES-CBC',
+      iv: new Uint8Array(16)
+    }, key, new TextEncoder().encode(text));
+    return {
+      uuid: 'device',
+      crypto_type: 'aes-128-cbc-fixed',
+      data: btoa(String.fromCharCode(...new Uint8Array(encrypted)))
+    };
+  };
+  const body = await encrypt(JSON.stringify({
+    '.example.com': [cookie]
+  }));
   assert.equal((await send(body)).count, 1);
-  assert.deepEqual(ctx.saved(), [{ ...cookie, hostOnly: false, expirationDate: 0 }]);
-  for (const invalid of [{ cookies: [] }, { data: [] }, { data: '{' }, { data: 'null' },
-    { ...body, uuid: 'wrong' }, { ...body, data: 'invalid!' }, { data: '[]', crypto_type: 'unknown' },
-    await encrypt('{'), await encrypt(JSON.stringify({ cookie_data: { example: null } }))]) {
+  assert.deepEqual(ctx.saved(), [{
+    ...cookie,
+    hostOnly: false,
+    expirationDate: 0
+  }]);
+  for (const invalid of [{
+    cookies: []
+  }, {
+    data: []
+  }, {
+    data: '{'
+  }, {
+    data: 'null'
+  }, {
+    ...body,
+    uuid: 'wrong'
+  }, {
+    ...body,
+    data: 'invalid!'
+  }, {
+    data: '[]',
+    crypto_type: 'unknown'
+  }, await encrypt('{'), await encrypt(JSON.stringify({
+    cookie_data: {
+      example: null
+    }
+  }))]) {
     await assert.rejects(send(invalid), error => error.status === 400);
     assert.equal(ctx.saved()[0].value, 'encrypted');
   }
   assert.equal(invalidations, 1);
 });
 test('浏览器无名 Cookie 被跳过，合法 Cookie 仍原样保存', async () => {
-  const ctx = setup();
-  const cookie = { name: 'sessionid', value: 'fixture', domain: '.douyin.com', path: '/', secure: true };
-  const result = await ctx.service.update_rss_cookies(request([{ name: '', value: 'douyin.com', domain: 'www.douyin.com', path: '/user' }, cookie]));
+  const ctx = await setup();
+  const cookie = {
+    name: 'sessionid',
+    value: 'fixture',
+    domain: '.douyin.com',
+    path: '/',
+    secure: true
+  };
+  const result = await ctx.service.update_rss_cookies(request([{
+    name: '',
+    value: 'douyin.com',
+    domain: 'www.douyin.com',
+    path: '/user'
+  }, cookie]));
   assert.equal(result.count, 1);
   assert.equal(result.skipped, 1);
   assert.equal(ctx.saved()[0].name, 'sessionid');
   assert.equal(ctx.saved()[0].secure, true);
 });
 test('逐条增改删按域名/name/path 定位，保留其他 Cookie 和原属性', async () => {
-  const ctx = setup();
-  const cookie = { name: 'sid', value: 'original', domain: '.example.com', path: '/', secure: true, hostOnly: true, expirationDate: 1900000000 };
-  await ctx.service.update_rss_cookies(request([cookie, { ...cookie, path: '/account' }, { ...cookie, domain: '.other.com' }]));
-  const result = ctx.service.edit_rss_cookie({ domain: cookie.domain, name: cookie.name, path: '/', value: 'edited', secure: false }, 'PATCH');
+  const ctx = await setup();
+  const cookie = {
+    name: 'sid',
+    value: 'original',
+    domain: '.example.com',
+    path: '/',
+    secure: true,
+    hostOnly: true,
+    expirationDate: 1900000000
+  };
+  await ctx.service.update_rss_cookies(request([cookie, {
+    ...cookie,
+    path: '/account'
+  }, {
+    ...cookie,
+    domain: '.other.com'
+  }]));
+  const result = await ctx.service.edit_rss_cookie({
+    domain: cookie.domain,
+    name: cookie.name,
+    path: '/',
+    value: 'edited',
+    secure: false
+  }, 'PATCH');
   assert.equal(result.cookie.value, 'edited');
   assert.equal(result.cookie.secure, true);
   assert.equal(result.cookie.hostOnly, true);
   assert.equal(result.cookie.expirationDate, 1900000000);
   assert.equal(ctx.saved()[1].value, 'original');
   assert.equal(ctx.saved()[2].value, 'original');
-  assert.throws(() => ctx.service.edit_rss_cookie({ ...cookie, value: 'invalid;value' }, 'PATCH'), /invalid/);
-  assert.throws(() => ctx.service.edit_rss_cookie({ ...cookie, path: 'invalid' }, 'DELETE'), /path/);
-  assert.throws(() => ctx.service.edit_rss_cookie(cookie, 'POST'), error => error.status === 409);
-  assert.throws(() => ctx.service.edit_rss_cookie({ ...cookie, name: 'missing' }, 'DELETE'), error => error.status === 404);
+  await assert.rejects(async () => await ctx.service.edit_rss_cookie({
+    ...cookie,
+    value: 'invalid;value'
+  }, 'PATCH'), /invalid/);
+  await assert.rejects(async () => await ctx.service.edit_rss_cookie({
+    ...cookie,
+    path: 'invalid'
+  }, 'DELETE'), /path/);
+  await assert.rejects(async () => await ctx.service.edit_rss_cookie(cookie, 'POST'), error => error.status === 409);
+  await assert.rejects(async () => await ctx.service.edit_rss_cookie({
+    ...cookie,
+    name: 'missing'
+  }, 'DELETE'), error => error.status === 404);
   assert.equal(ctx.saved().length, 3);
-  const added = ctx.service.edit_rss_cookie({ domain: cookie.domain, name: 'new', value: '' }, 'POST');
+  const added = await ctx.service.edit_rss_cookie({
+    domain: cookie.domain,
+    name: 'new',
+    value: ''
+  }, 'POST');
   assert.equal(added.count, 4);
   assert.equal(added.cookie.path, '/');
-  ctx.service.edit_rss_cookie({ ...cookie, path: '/account' }, 'DELETE');
-  assert.deepEqual(ctx.saved().map(item => [item.domain, item.name, item.path]), [
-    ['.example.com', 'sid', '/'], ['.other.com', 'sid', '/'], ['.example.com', 'new', '/'],
-  ]);
+  await ctx.service.edit_rss_cookie({
+    ...cookie,
+    path: '/account'
+  }, 'DELETE');
+  assert.deepEqual(ctx.saved().map(item => [item.domain, item.name, item.path]), [['.example.com', 'sid', '/'], ['.other.com', 'sid', '/'], ['.example.com', 'new', '/']]);
 });
 test('管理员单条接口要求鉴权，拒绝非法 JSON/值并复用缓存失效', async () => {
-  const { route } = await import('../durable_object_router.js');
-  const { default: worker } = await import('../api.js');
-  const ctx = setup();
+  const {
+    route
+  } = await import('../application_router.js');
+  const {
+    default: worker
+  } = await import('../api.js');
+  const ctx = await setup();
   let invalidations = 0;
   ctx.service.invalidate_routes = () => invalidations++;
-  const env = { ADMIN_PASSWORD: 'admin-fixture', API: { getByName: () => ({ fetch: request => route(request, { scripts: ctx.service }) }) } };
-  const send = (method, body, authorized = true) => worker.fetch(new Request('https://local/admin/api/cookies', {
-    method, body: typeof body === 'string' ? body : JSON.stringify(body),
-    headers: authorized ? { Authorization: 'Bearer admin-fixture' } : {},
+  const env = {
+    ADMIN_PASSWORD: 'admin-fixture',
+    APPLICATION: (() => ({
+      fetch: request => route(request, {
+        scripts: ctx.service
+      })
+    }))()
+  };
+  const send = async (method, body, authorized = true) => await worker.fetch(new Request('https://local/admin/api/cookies', {
+    method,
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+    headers: authorized ? {
+      Authorization: 'Bearer admin-fixture'
+    } : {}
   }), env);
-  const cookie = { domain: '.example.com', name: 'sid', value: 'test' };
+  const cookie = {
+    domain: '.example.com',
+    name: 'sid',
+    value: 'test'
+  };
   for (const method of ['POST', 'PATCH', 'DELETE']) assert.equal((await send(method, cookie, false)).status, 401);
   assert.equal((await send('POST', cookie)).status, 200);
-  assert.equal((await send('PATCH', { ...cookie, value: 'edited' })).status, 200);
-  for (const body of ['{', 'null', '[]', { ...cookie, value: 'bad\nvalue' }, { ...cookie, name: '' }]) {
+  assert.equal((await send('PATCH', {
+    ...cookie,
+    value: 'edited'
+  })).status, 200);
+  for (const body of ['{', 'null', '[]', {
+    ...cookie,
+    value: 'bad\nvalue'
+  }, {
+    ...cookie,
+    name: ''
+  }]) {
     assert.equal((await send('PATCH', body)).status, 400);
   }
   assert.equal(ctx.saved()[0].value, 'edited');
@@ -144,50 +331,119 @@ test('管理员单条接口要求鉴权，拒绝非法 JSON/值并复用缓存�
   assert.equal(invalidations, 3);
 });
 test('全为无名 Cookie 不清空存储，危险 Cookie 仍拒绝；显式空数组允许清空', async () => {
-  const ctx = setup();
-  await assert.rejects(ctx.service.update_rss_cookies(request([{ name: '', value: 'x', domain: '.douyin.com' }])), /no valid named/);
+  const ctx = await setup();
+  await assert.rejects(ctx.service.update_rss_cookies(request([{
+    name: '',
+    value: 'x',
+    domain: '.douyin.com'
+  }])), /no valid named/);
   assert.equal(ctx.saved(), undefined);
-  await assert.rejects(ctx.service.update_rss_cookies(request([{ name: 'sessionid', value: 'a\r\nb', domain: '.douyin.com' }])), /invalid/);
+  await assert.rejects(ctx.service.update_rss_cookies(request([{
+    name: 'sessionid',
+    value: 'a\r\nb',
+    domain: '.douyin.com'
+  }])), /invalid/);
   assert.equal(ctx.saved(), undefined);
-  await ctx.service.update_rss_cookies(request([{ domain: '.douyin.com', name: 'sessionid', value: 'previous' }]));
+  await ctx.service.update_rss_cookies(request([{
+    domain: '.douyin.com',
+    name: 'sessionid',
+    value: 'previous'
+  }]));
   const result = await ctx.service.update_rss_cookies(request([]));
   assert.equal(result.count, 0);
   assert.deepEqual(ctx.saved(), []);
 });
-
 test('管理员整域删除覆盖所有名称和路径，精确匹配域名并使缓存失效', async () => {
-  const { route } = await import('../durable_object_router.js');
-  const { default: worker } = await import('../api.js');
-  const ctx = setup();
-  const cookie = { domain: '.example.com', name: 'sid', value: 'original', path: '/' };
-  await ctx.service.update_rss_cookies(request([
-    cookie, { ...cookie, path: '/account' }, { ...cookie, name: 'other' },
-    { ...cookie, domain: 'example.com' }, { ...cookie, domain: 'sub.example.com' }, { ...cookie, domain: '.other.com' },
-  ]));
+  const {
+    route
+  } = await import('../application_router.js');
+  const {
+    default: worker
+  } = await import('../api.js');
+  const ctx = await setup();
+  const cookie = {
+    domain: '.example.com',
+    name: 'sid',
+    value: 'original',
+    path: '/'
+  };
+  await ctx.service.update_rss_cookies(request([cookie, {
+    ...cookie,
+    path: '/account'
+  }, {
+    ...cookie,
+    name: 'other'
+  }, {
+    ...cookie,
+    domain: 'example.com'
+  }, {
+    ...cookie,
+    domain: 'sub.example.com'
+  }, {
+    ...cookie,
+    domain: '.other.com'
+  }]));
   let invalidations = 0;
   let writes = 0;
   const put = ctx.service.repo.rss_cookies.put;
-  ctx.service.repo.rss_cookies.put = cookies => { writes++; put(cookies); };
+  ctx.service.repo.rss_cookies.put = cookies => {
+    writes++;
+    put(cookies);
+  };
   ctx.service.invalidate_routes = () => invalidations++;
-  const env = { ADMIN_PASSWORD: 'admin-fixture', API: { getByName: () => ({ fetch: request => route(request, { scripts: ctx.service }) }) } };
-  const send = (body, authorized = true) => worker.fetch(new Request('https://local/admin/api/cookies/domain', {
-    method: 'DELETE', body: typeof body === 'string' ? body : JSON.stringify(body),
-    headers: authorized ? { Authorization: 'Bearer admin-fixture' } : {},
+  const env = {
+    ADMIN_PASSWORD: 'admin-fixture',
+    APPLICATION: (() => ({
+      fetch: request => route(request, {
+        scripts: ctx.service
+      })
+    }))()
+  };
+  const send = async (body, authorized = true) => await worker.fetch(new Request('https://local/admin/api/cookies/domain', {
+    method: 'DELETE',
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+    headers: authorized ? {
+      Authorization: 'Bearer admin-fixture'
+    } : {}
   }), env);
-  assert.equal((await send({ domain: cookie.domain }, false)).status, 401);
-  for (const body of ['{', 'null', '[]', {}, { domain: '' }, { domain: 1 }, { domain: 'example.com/path' }, { domain: 'example com' }]) {
+  assert.equal((await send({
+    domain: cookie.domain
+  }, false)).status, 401);
+  for (const body of ['{', 'null', '[]', {}, {
+    domain: ''
+  }, {
+    domain: 1
+  }, {
+    domain: 'example.com/path'
+  }, {
+    domain: 'example com'
+  }]) {
     assert.equal((await send(body)).status, 400);
   }
   assert.equal(writes, 0);
   assert.equal(ctx.saved().length, 6);
-  const result = await send({ domain: ' .EXAMPLE.COM ' });
+  const result = await send({
+    domain: ' .EXAMPLE.COM '
+  });
   assert.equal(result.status, 200);
-  assert.match(result.headers.get('Cache-Control'), /no-store/);
-  assert.deepEqual(await result.json(), { domain: '.example.com', deleted: 3, count: 3 });
+  assert.match(await result.headers.get('Cache-Control'), /no-store/);
+  assert.deepEqual(await result.json(), {
+    domain: '.example.com',
+    deleted: 3,
+    count: 3
+  });
   assert.deepEqual(ctx.saved().map(cookie => cookie.domain), ['example.com', 'sub.example.com', '.other.com']);
   assert.equal(writes, 1);
   assert.equal(invalidations, 1);
-  assert.deepEqual(await (await send({ domain: '.example.com' })).json(), { domain: '.example.com', deleted: 0, count: 3 });
-  for (const domain of ['example.com', 'sub.example.com', '.other.com']) assert.equal((await send({ domain })).status, 200);
+  assert.deepEqual(await (await send({
+    domain: '.example.com'
+  })).json(), {
+    domain: '.example.com',
+    deleted: 0,
+    count: 3
+  });
+  for (const domain of ['example.com', 'sub.example.com', '.other.com']) assert.equal((await send({
+    domain
+  })).status, 200);
   assert.deepEqual(ctx.saved(), []);
 });

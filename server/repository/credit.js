@@ -4,8 +4,10 @@
 // 过滤片段（keyset where / 归属子查询）由调用方（domain 的 ActivityCursorModel）拼好后传入。
 
 export class RepositoryCredit {
-  /** @param {{ sql: SqlStorage }} deps */
-  constructor({ sql }) {
+  /** @param {{ sql: D1Store }} deps */
+  constructor({
+    sql
+  }) {
     this.sql = sql;
   }
 
@@ -17,21 +19,10 @@ export class RepositoryCredit {
    * }} fields
    * @returns {void}
    */
-  insert(fields) {
-    this.sql.exec(
-      `INSERT INTO credit_transactions (
+  async insert(fields) {
+    await this.sql.exec(`INSERT INTO credit_transactions (
         id, access_token_id, task_id, type, amount, balance_after, method, subject, note, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      fields.id,
-      fields.access_token_id,
-      fields.task_id,
-      fields.type,
-      fields.amount,
-      fields.balance_after,
-      fields.method,
-      fields.subject ?? "",
-      fields.note,
-      fields.created_at);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, fields.id, fields.access_token_id, fields.task_id, fields.type, fields.amount, fields.balance_after, fields.method, fields.subject ?? "", fields.note, fields.created_at);
   }
 
   /**
@@ -42,16 +33,10 @@ export class RepositoryCredit {
    * @param {number} limit 调用方传「页大小 + 1」
    * @returns {Record<string, unknown>[]}
    */
-  rows_for_user(user_id, clause_suffix, params, limit) {
-    return this.sql
-      .exec(
-        `SELECT * FROM credit_transactions
+  async rows_for_user(user_id, clause_suffix, params, limit) {
+    return (await this.sql.exec(`SELECT * FROM credit_transactions
          WHERE access_token_id IN (SELECT id FROM access_tokens WHERE user_id = ?)${clause_suffix}
-         ORDER BY created_at DESC, id DESC LIMIT ?`,
-        user_id,
-        ...params,
-        limit)
-      .toArray();
+         ORDER BY created_at DESC, id DESC LIMIT ?`, user_id, ...params, limit)).toArray();
   }
 
   /**
@@ -63,7 +48,7 @@ export class RepositoryCredit {
    * @param {number} limit 调用方传「页大小 + 1」
    * @returns {Record<string, unknown>[]}
    */
-  list(access_token_id, user_id, cursor_clause, cursor_params, limit) {
+  async list(access_token_id, user_id, cursor_clause, cursor_params, limit) {
     const clauses = [];
     const params = [];
     if (access_token_id !== "") {
@@ -78,11 +63,6 @@ export class RepositoryCredit {
       params.push(...cursor_params);
     }
     const filter = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
-    return this.sql
-      .exec(
-        `SELECT * FROM credit_transactions${filter} ORDER BY created_at DESC, id DESC LIMIT ?`,
-        ...params,
-        limit)
-      .toArray();
+    return (await this.sql.exec(`SELECT * FROM credit_transactions${filter} ORDER BY created_at DESC, id DESC LIMIT ?`, ...params, limit)).toArray();
   }
 }

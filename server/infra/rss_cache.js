@@ -1,12 +1,14 @@
+import { async_map } from "../lib/async_array.js";
+import { sha256_hex } from "../lib/crypto.js";
 /**
- * 路由结果：普通脚本采用两级 TTL 缓存；后台生成的 XML 持久保存，不设过期时间。
- * 共用缓存键归一化、single-flight 去重与渲染结果记忆化。
- *
- * 纯模块，不依赖 Cloudflare API，也不 import repository——layering 规则不许
- * `infra/` 依赖 `repository/`（见 `test/layering.test.js` 的 `ALLOWED.infra`）。
- * 持久化因此走**注入的 store**，由组合根 `server/durable_object.js` 把
- * `RepositoryRssRouteCache` 传进来；store 为 null 时退化为纯内存缓存。
- */
+* 路由结果：普通脚本采用两级 TTL 缓存；后台生成的 XML 持久保存，不设过期时间。
+* 共用缓存键归一化、single-flight 去重与渲染结果记忆化。
+*
+* 纯模块，不依赖 Cloudflare API，也不 import repository——layering 规则不许
+* `infra/` 依赖 `repository/`（见 `test/layering.test.js` 的 `ALLOWED.infra`）。
+* 持久化因此走**注入的 store**，由组合根 `server/durable_object.js` 把
+* `RepositoryRssRouteCache` 传进来；store 为 null 时退化为纯内存缓存。
+*/
 
 /** L1 与 L2 共用的条目上限（条数）。真正的内存天花板由 `max_bytes` 兜底。 */
 const DEFAULT_MAX_ENTRIES = 1024;
@@ -14,23 +16,19 @@ const DEFAULT_MAX_ENTRIES = 1024;
 const DEFAULT_MAX_BYTES = 32 * 1024 * 1024;
 /** 单条目落 L2 的大小上限：`SCRIPT_OUTPUT_BYTES` 允许 10MB 的产出，整条进 SQLite 不合适。 */
 const DEFAULT_PERSIST_MAX_BYTES = 256 * 1024;
-
 function is_xml_key(key) {
   return key.startsWith("public-snapshot:") || key.startsWith("private-snapshot:");
 }
-
 function snapshot_object_keys(entry) {
   return [entry?.object_key, ...(entry?.object_rendered || []).map(([, object_key]) => object_key)];
 }
-
 function snapshot_format(format) {
   const types = {
     rss: ["xml", "application/rss+xml"],
     atom: ["atom", "application/atom+xml"],
-    html: ["html", "text/html"],
+    html: ["html", "text/html"]
   };
-  return Object.hasOwn(types, format) ? types[format]
-    : [encodeURIComponent(format), "text/plain"];
+  return Object.hasOwn(types, format) ? types[format] : [encodeURIComponent(format), "text/plain"];
 }
 
 /**
@@ -93,16 +91,19 @@ export class RssRouteCache {
    *   persist_max_bytes?: number,
    * }} [options]
    */
-  constructor(
-    ttl_ms = 600_000,
-    max_entries = DEFAULT_MAX_ENTRIES,
-    { store = null, object_store = null, max_bytes = DEFAULT_MAX_BYTES, persist_max_bytes = DEFAULT_PERSIST_MAX_BYTES, clock = Date.now } = {},
-  ) {
+  constructor(ttl_ms = 600_000, max_entries = DEFAULT_MAX_ENTRIES, {
+    store = null,
+    object_store = null,
+    max_bytes = DEFAULT_MAX_BYTES,
+    persist_max_bytes = DEFAULT_PERSIST_MAX_BYTES,
+    clock = Date.now
+  } = {}) {
     this.ttl_ms = ttl_ms;
     this.max_entries = max_entries;
     this.store = store;
     this.object_store = object_store;
     this.loading = new Map();
+    this.resolving = new Map();
     this.max_bytes = max_bytes;
     this.persist_max_bytes = persist_max_bytes;
     this.clock = clock;
@@ -134,7 +135,13 @@ export class RssRouteCache {
       return null;
     }
     this.l1_hits += 1;
-    return { output: entry.output, invoked: entry.invoked, ...(entry.snapshot ? { rendered: entry.rendered } : {}) };
+    return {
+      output: entry.output,
+      invoked: entry.invoked,
+      ...(entry.snapshot ? {
+        rendered: entry.rendered
+      } : {})
+    };
   }
 
   /**
@@ -143,10 +150,61 @@ export class RssRouteCache {
    * @param {number} now
    * @returns {Promise<{ output: string, invoked: boolean } | null>}
    */
-  async resolve(key, now) {
+  async resolve(key, now, public_origin = "") {
     const hit = this.lookup(key, now);
     if (hit !== null) return hit;
-    let stored = this.store === null ? null : this.store.read(key);
+    if (this.resolving.has(key)) return this.resolving.get(key);
+    const pending = this.resolve_stored(key, now, public_origin).finally(() => this.resolving.delete(key));
+    this.resolving.set(key, pending);
+    return pending;
+  }
+  async resolve_stored(key, now, public_origin = "") {
+    if (is_xml_key(key) && this.object_store?.available) {
+      try {
+        const name = await this.manifest_key(key);
+        const cache_key = public_origin ? new Request(new URL('/_internal/feed-cache/' + name, public_origin)) : null;
+        const cache = cache_key ? globalThis.caches?.default : null;
+        const cached = await cache?.match(cache_key);
+        if (cached) {
+          const value = await cached.json();
+          return {
+            output: value.output_json,
+            invoked: Boolean(value.invoked),
+            rendered: new Map(value.rendered)
+          };
+        }
+        const object = await this.object_store.get(name);
+        if (object) {
+          const manifest = JSON.parse(await object.text());
+          const value = await this.read_snapshot(manifest);
+          if (value) {
+            await cache?.put(cache_key, Response.json({
+              ...value,
+              invoked: manifest.invoked
+            }, {
+              headers: {
+                'Cache-Control': 'public,max-age=60'
+              }
+            }));
+            this.put(key, {
+              output: value.output_json,
+              invoked: Boolean(manifest.invoked),
+              rendered: value.rendered,
+              expires_at: 0,
+              saved_at: manifest.saved_at
+            }, now);
+            return {
+              output: value.output_json,
+              invoked: Boolean(manifest.invoked),
+              rendered: new Map(value.rendered)
+            };
+          }
+        }
+      } catch (error) {
+        console.warn('快照缓存读取失败，回源 D1', error.message);
+      }
+    }
+    let stored = this.store === null ? null : await this.store.read(key);
     if (stored === null || stored === undefined) return null;
     const xml = is_xml_key(key);
     if (!xml && Number(stored.expires_at) <= now) return null;
@@ -155,17 +213,20 @@ export class RssRouteCache {
       const object_key = stored.object_key;
       let pending = this.loading.get(object_key);
       if (!pending) {
-        pending = this.read_snapshot(stored)
-          .finally(() => this.loading.delete(object_key));
+        pending = this.read_snapshot(stored).finally(() => this.loading.delete(object_key));
         this.loading.set(object_key, pending);
       }
       const snapshot = await pending;
       // 读取期间刷新可能已切换指针并删除旧对象，不能把旧正文回填内存。
-      if (this.store.read(key)?.object_key !== object_key) return this.resolve(key, now);
+      if ((await this.store.read(key))?.object_key !== object_key) return await this.resolve_stored(key, now, public_origin);
       const current = this.lookup(key, now);
       if (current !== null) return current;
       if (!snapshot) return null;
-      stored = { ...stored, output_json: snapshot.output_json, rendered: snapshot.rendered };
+      stored = {
+        ...stored,
+        output_json: snapshot.output_json,
+        rendered: snapshot.rendered
+      };
     }
     this.l2_hits += 1;
     this.put(key, {
@@ -173,27 +234,56 @@ export class RssRouteCache {
       invoked: Number(stored.invoked) !== 0,
       expires_at: xml ? 0 : Number(stored.expires_at),
       saved_at: stored.saved_at ?? Number(stored.expires_at) - this.ttl_ms,
-      rendered: stored.rendered,
+      rendered: stored.rendered
     }, now);
-    return { output: stored.output_json, invoked: Number(stored.invoked) !== 0,
-      ...(stored.rendered ? { rendered: new Map(stored.rendered) } : {}) };
+    return {
+      output: stored.output_json,
+      invoked: Number(stored.invoked) !== 0,
+      ...(stored.rendered ? {
+        rendered: new Map(stored.rendered)
+      } : {})
+    };
+  }
+  async manifest_key(key) {
+    return 'rss/manifests/' + (await sha256_hex(key)) + '.json';
+  }
+  async publish_manifest(key, entry) {
+    const name = await this.manifest_key(key);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const previous = await this.object_store.get(name);
+      if ((await this.store.read(key))?.object_key !== entry.object_key) return;
+      const result = await this.object_store.put(name, JSON.stringify(entry), {
+        onlyIf: previous ? {
+          etagMatches: previous.etag
+        } : {
+          etagDoesNotMatch: '*'
+        },
+        httpMetadata: {
+          contentType: 'application/json'
+        }
+      });
+      if (result) return;
+    }
+    throw new Error('快照发布清单发生并发冲突，请重试');
   }
 
   /** 新版按文件读取正文；没有格式指针的旧对象仍按打包 JSON 解析。 */
   async read_snapshot(stored) {
     if (stored.object_rendered !== undefined) {
-      const objects = await Promise.all(snapshot_object_keys(stored).map(async object_key => {
+      const objects = await Promise.all(await async_map(snapshot_object_keys(stored), async object_key => {
         const object = await this.object_store.get(object_key);
         return object ? object.text() : null;
       }));
       if (objects.some(body => body === null)) return null;
-      return { output_json: objects[0], rendered: stored.object_rendered.map(([render_key], index) => [render_key, objects[index + 1]]) };
+      return {
+        output_json: objects[0],
+        rendered: stored.object_rendered.map(([render_key], index) => [render_key, objects[index + 1]])
+      };
     }
     const object = await this.object_store.get(stored.object_key);
     if (!object) return null;
     const snapshot = JSON.parse(await object.text());
-    if (!snapshot || typeof snapshot.output_json !== "string" || !Array.isArray(snapshot.rendered)
-      || snapshot.rendered.some(pair => !Array.isArray(pair) || pair.length !== 2 || pair.some(value => typeof value !== "string"))) {
+    if (!snapshot || typeof snapshot.output_json !== "string" || !Array.isArray(snapshot.rendered) || snapshot.rendered.some(pair => !Array.isArray(pair) || pair.length !== 2 || pair.some(value => typeof value !== "string"))) {
       throw new Error("RSS snapshot is invalid");
     }
     return snapshot;
@@ -207,39 +297,52 @@ export class RssRouteCache {
    * @param {() => Promise<{ output: string, invoked: boolean }>} produce
    * @returns {Promise<{ output: string, invoked: boolean, cached: boolean }>}
    */
-  async run(key, now, produce, { force = false, signal } = {}) {
+  async run(key, now, produce, {
+    force = false,
+    signal
+  } = {}) {
     signal?.throwIfAborted();
     const generation = this.generation;
     const hit = force ? null : await this.resolve(key, now);
-    if (hit !== null) return { ...hit, cached: true };
+    if (hit !== null) return {
+      ...hit,
+      cached: true
+    };
     this.misses += 1;
     const invalidated = generation !== this.generation && !is_xml_key(key);
     let pending = invalidated ? undefined : this.inflight.get(key);
     if (pending === undefined) {
       this.executions += 1;
-      pending = Promise.resolve()
-        .then(produce)
-        .then(async (result) => {
-          signal?.throwIfAborted();
-          // 失效发生在执行期间时（如脚本刚被更新）不回填，避免旧内容重新进入缓存。
-          if (this.inflight.get(key) === pending) {
-            result.assert_current?.();
-            const completed_at = this.clock();
-            const value = { ...result, saved_at: completed_at, expires_at: is_xml_key(key) ? 0 : completed_at + this.ttl_ms };
-            // 先持久化再替换内存；刷新失败时仍可读取旧快照。
-            await this.persist(key, value, signal);
-            if (this.inflight.get(key) === pending) this.put(key, value, completed_at);
-          }
-          return result;
-        })
-        .finally(() => {
-          if (this.inflight.get(key) === pending) this.inflight.delete(key);
-        });
+      pending = Promise.resolve().then(produce).then(async result => {
+        signal?.throwIfAborted();
+        // 失效发生在执行期间时（如脚本刚被更新）不回填，避免旧内容重新进入缓存。
+        if (this.inflight.get(key) === pending) {
+          await result.assert_current?.();
+          const completed_at = this.clock();
+          const value = {
+            ...result,
+            saved_at: completed_at,
+            expires_at: is_xml_key(key) ? 0 : completed_at + this.ttl_ms
+          };
+          // 先持久化再替换内存；刷新失败时仍可读取旧快照。
+          await this.persist(key, value, signal);
+          if (this.inflight.get(key) === pending) this.put(key, value, completed_at);
+        }
+        return result;
+      }).finally(() => {
+        if (this.inflight.get(key) === pending) this.inflight.delete(key);
+      });
       if (!invalidated) this.inflight.set(key, pending);
     }
     const result = await pending;
-    return { output: result.output, invoked: result.invoked, cached: false,
-      ...(result.rendered ? { rendered: new Map(result.rendered) } : {}) };
+    return {
+      output: result.output,
+      invoked: result.invoked,
+      cached: false,
+      ...(result.rendered ? {
+        rendered: new Map(result.rendered)
+      } : {})
+    };
   }
 
   /**
@@ -266,11 +369,11 @@ export class RssRouteCache {
   }
 
   /** 配置变更只使普通缓存失效，保留已生成和正在生成的 XML。 */
-  invalidate_all(cancel_refreshes = false) {
+  async invalidate_all(cancel_refreshes = false) {
     this.generation += 1;
     for (const key of this.entries.keys()) if (!is_xml_key(key)) this.drop(key);
     for (const key of this.inflight.keys()) if (cancel_refreshes || !is_xml_key(key)) this.inflight.delete(key);
-    if (this.store !== null) this.store.clear();
+    if (this.store !== null) await this.store.clear();
   }
 
   /** 观测用：命中分布与积压。 */
@@ -282,24 +385,26 @@ export class RssRouteCache {
       l1_hits: this.l1_hits,
       l2_hits: this.l2_hits,
       misses: this.misses,
-      executions: this.executions,
+      executions: this.executions
     };
   }
 
   /** 管理端只读状态；XML 无过期时间，不计命中，也不返回正文。 */
-  inspect(key, now = Date.now()) {
+  async inspect(key, now = Date.now()) {
     const memory = this.entries.get(key);
-    const stored = this.store?.read(key);
+    const stored = await this.store?.read(key);
     const expires_at = Number(memory?.expires_at ?? stored?.expires_at ?? 0);
     const exists = Boolean(memory || stored);
     const xml = is_xml_key(key);
     return {
       status: !exists ? "empty" : xml || expires_at > now ? "fresh" : "expired",
       saved_at: exists ? memory?.saved_at ?? stored?.saved_at ?? expires_at - this.ttl_ms : 0,
-      ...(!xml ? { expires_at } : {}),
+      ...(!xml ? {
+        expires_at
+      } : {}),
       bytes: memory?.bytes ?? stored?.bytes ?? (stored ? stored.output_json.length + (stored.rendered || []).reduce((total, [, body]) => total + body.length, 0) : 0),
       persistent: Boolean(stored && (xml || Number(stored.expires_at) === expires_at)),
-      refreshing: this.inflight.has(key),
+      refreshing: this.inflight.has(key)
     };
   }
 
@@ -321,7 +426,7 @@ export class RssRouteCache {
       saved_at: value.saved_at,
       bytes,
       rendered,
-      snapshot: Boolean(value.rendered),
+      snapshot: Boolean(value.rendered)
     });
     this.bytes += bytes;
     this.evict(now);
@@ -335,7 +440,7 @@ export class RssRouteCache {
    */
   async persist(key, result, signal) {
     signal?.throwIfAborted();
-    result.assert_current?.();
+    await result.assert_current?.();
     if (this.store === null) return;
     if (!result.rendered && result.output.length > this.persist_max_bytes) return;
     const entry = {
@@ -345,41 +450,76 @@ export class RssRouteCache {
       expires_at: result.expires_at,
       saved_at: result.saved_at,
       created_at: result.saved_at,
-      ...(result.rendered ? { rendered: [...result.rendered] } : {}),
+      ...(result.rendered ? {
+        rendered: [...result.rendered]
+      } : {})
     };
     if (is_xml_key(key) && result.rendered && this.object_store?.available) {
-      const previous = this.store.read(key);
+      const previous = await this.store.read(key);
       const prefix = "rss/snapshots/" + crypto.randomUUID() + "/";
       const object_key = prefix + "feed.json";
-      const files = [{ key: object_key, body: entry.output_json, content_type: "application/json" }];
+      const files = [{
+        key: object_key,
+        body: entry.output_json,
+        content_type: "application/json"
+      }];
       const object_rendered = entry.rendered.map(([render_key, body]) => {
         const [extension, content_type] = snapshot_format(render_key.split("\n", 1)[0]);
         // 同格式的不同 self_url 分别保存，避免覆盖；通常每种格式只有一份。
         let file_key = prefix + "feed." + extension;
         for (let index = 2; files.some(file => file.key === file_key); index++) file_key = prefix + "feed-" + index + "." + extension;
-        files.push({ key: file_key, body, content_type });
+        files.push({
+          key: file_key,
+          body,
+          content_type
+        });
         return [render_key, file_key];
       });
+      let committed = false;
       try {
         for (const file of files) {
           signal?.throwIfAborted();
-          await this.object_store.put(file.key, file.body,
-            { httpMetadata: { contentType: file.content_type + "; charset=utf-8" } });
+          await this.object_store.put(file.key, file.body, {
+            httpMetadata: {
+              contentType: file.content_type + "; charset=utf-8"
+            }
+          });
         }
         signal?.throwIfAborted();
-        result.assert_current?.();
-        this.store.write({ ...entry, output_json: "", rendered: undefined, object_key, object_rendered,
-          bytes: result.output.length + entry.rendered.reduce((total, [, body]) => total + body.length, 0) });
+        await result.assert_current?.();
+        const pointer = {
+          ...entry,
+          output_json: "",
+          rendered: undefined,
+          object_key,
+          object_rendered,
+          bytes: result.output.length + entry.rendered.reduce((total, [, body]) => total + body.length, 0)
+        };
+        await this.commit(pointer, result, signal);
+        committed = true;
+        await this.publish_manifest(key, pointer);
       } catch (error) {
-        await this.object_store.delete_many(files.map(file => file.key), { best_effort: true });
+        if (!committed) await this.object_store.delete_many(files.map(file => file.key), {
+          best_effort: true
+        });
         throw error;
       }
-      await this.object_store.delete_many(snapshot_object_keys(previous), { best_effort: true });
+      await this.object_store.delete_many(snapshot_object_keys(previous), {
+        best_effort: true
+      });
     } else {
-      this.store.write(entry);
+      await this.commit(entry, result, signal);
     }
-    const total = this.store.count();
-    if (total > this.max_entries) this.store.delete_oldest(this.max_entries);
+    const total = await this.store.count();
+    if (total > this.max_entries) await this.store.delete_oldest(this.max_entries);
+  }
+  async commit(entry, result, signal) {
+    const write = async () => {
+      signal?.throwIfAborted();
+      await result.assert_current?.();
+      await this.store.write(entry);
+    };
+    if (this.store.transaction) await this.store.transaction(write);else await write();
   }
 
   /**
