@@ -106,4 +106,6 @@ DISCOVERY_API_ORIGIN=https://your-worker.example FINDRSS_HOSTNAME=https://feeds.
 
 发布失败会保留 SQL 修改、删除旧 R2 产物，并返回 503「目录已保存，静态发布失败，稍后自动重试」。持久化的待发布标记配合已有 DO alarm 重试，DO 重启也能恢复；不要把此错误理解为修改已回滚。`{{hostname}}` 在发布时使用占位 origin，读取时按当前 `FINDRSS_HOSTNAME` 或访问 origin 展开，避免首次访问将域名固化。
 
+刷新快照接口将抓取结果与首页发布结果分开返回：发布失败通过 `catalog_error` 单独提示，仍返回最新的 XML 和文章快照状态；后台任务按抓取结果记录成功或失败，首页发布继续自动重试。
+
 `run_worker_first` 只覆盖首页、后台和动态接口；JS/图标和兼容 CSS 地址由 Static Assets 分发，静态安全响应头由根构建生成统一 `_headers`，首页 CSP 包含内嵌样式哈希，动态响应使用同一份安全策略。订阅详情页已移除，`/s/<id>` 返回 404。构建时通过公开接口生成首页快照，运行时继续通过 R2 自动发布更新。

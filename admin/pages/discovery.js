@@ -1926,9 +1926,9 @@ function SourceRowView({ store: vm$, source, now }) {
                 },
               },
               [
-                computed(
-                  vm$.state.snapshot_errors,
-                  (errors) => errors.get(source.id) || "",
+                combine(
+                  { errors: vm$.state.snapshot_errors, catalog_errors: vm$.state.catalog_errors },
+                  ({ errors, catalog_errors }) => errors.get(source.id) || catalog_errors.get(source.id) || "",
                 ),
               ],
             ),

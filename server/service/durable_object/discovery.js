@@ -433,14 +433,22 @@ export class ServiceDiscovery {
         await this.schedule_alarm?.();
       }
       signal?.throwIfAborted();
+      let catalog_error = "";
       if (!source.require_token || avatar_changed) {
-        if (automatic) await this.defer_catalog();
-        else await this.publish_catalog();
+        try {
+          if (automatic) await this.defer_catalog();
+          else await this.publish_catalog();
+        } catch (error) {
+          signal?.throwIfAborted();
+          console.warn("discovery snapshot catalog update failed", error.message);
+          catalog_error = String(error.message || "静态发布失败，稍后自动重试");
+        }
       }
       const latest = this.repo.discovery.snapshot_get(source_id) || {};
       const value = this.source_value({ ...(this.repo.discovery.find(source_id) || source), ...latest, snapshot_attempted_at: latest.attempted_at }, true);
       return { snapshot: source.require_token ? { saved_at: 0, articles: [], error: String(latest.error || "") }
-        : snapshot_value(latest, true), avatar_url: value.avatar_url, cache: value.cache, poll_effective: value.poll_effective, next_snapshot_at: value.next_snapshot_at };
+        : snapshot_value(latest, true), avatar_url: value.avatar_url, cache: value.cache, poll_effective: value.poll_effective, next_snapshot_at: value.next_snapshot_at,
+        ...(catalog_error ? { catalog_error } : {}) };
     })();
     this.snapshot_pending.set(source_id, pending);
     return pending;

@@ -1181,6 +1181,43 @@ test("刷新失败在对应行显示错误、警示时间与原因提示，重�
   } finally { card.onUnmounted(); other_card.onUnmounted(); }
 });
 
+test("静态发布失败更新抓取时间并单独提示，不将 XML 和文章快照标为失败", async () => {
+  ui.DOM = {};
+  context.document = { querySelector: () => null };
+  const catalog_error = "目录已保存，静态发布失败，稍后自动重试";
+  context.FindRSSAdminShell = {};
+  let fail = true;
+  const saved_at = Date.now();
+  context.FindRSSAdminAuth = { fetch: async () => Response.json({
+    snapshot: { saved_at, articles: [{ title: "新文章" }], error: "" },
+    cache: { status: "fresh", saved_at, refreshing: false },
+    ...(fail ? { catalog_error } : {}),
+  }) };
+  vm.runInContext("(() => {\n" + page_source("discovery.js") +
+    "\nglobalThis.catalog_refresh_model = DiscoveryAdminViewModel(); globalThis.catalog_refresh_card = source => SourceRowView({ store: catalog_refresh_model, source: normalize_source(source) }); })();", context);
+  const model = context.catalog_refresh_model;
+  model.state.sources.as([{ id: "one", enabled: true, feed_url: "{{hostname}}/rss/demo",
+    cache: { status: "empty", saved_at: 0 }, snapshot: { saved_at: 0, articles: [], error: "" } }]);
+  let card;
+  try {
+    assert.equal(await model.methods.refresh_snapshot("one"), true);
+    const source = model.state.sources.value[0];
+    assert.equal(source.cache.saved_at, saved_at);
+    assert.equal(source.snapshot.saved_at, saved_at);
+    assert.equal(model.state.snapshot_errors.value.get("one"), "");
+    card = context.catalog_refresh_card(source);
+    assert.equal(find(card, "discovery-source-snapshot-error").children[0].state.value, catalog_error);
+    for (const name of ["xml-saved-at", "snapshot-saved-at"]) {
+      assert.equal(find(card, "discovery-source-" + name).children[0].state.value, "刚刚");
+      assert.equal(find(card, "discovery-source-" + name).state.styleSet.includes("text-warning"), false);
+      assert.equal(find(card, "discovery-source-" + name + "-info"), null);
+    }
+    fail = false;
+    await model.methods.refresh_snapshot("one");
+    assert.equal(model.state.catalog_errors.value.get("one"), "");
+  } finally { card?.onUnmounted(); model.methods.destroy(); }
+});
+
 test("自动抓取失败保留成功时间，info 图标悬停展示原因且不触发 Toaster，私密源仅提示 XML 错误", () => {
   ui.DOM = {};
   context.FindRSSAdminAuth = { fetch: async () => Response.json({ sources: [] }) };

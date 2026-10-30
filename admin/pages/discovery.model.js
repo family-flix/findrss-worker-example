@@ -154,6 +154,7 @@ function DiscoveryAdminViewModel() {
   let task_error = "";
   let disposed = false;
   const snapshot_errors_ = ref(new Map());
+  const catalog_errors_ = ref(new Map());
   const scripts_ = ref([]);
   const scripts_error_ = ref("");
   const scripts_loading_ = ref(false);
@@ -220,6 +221,7 @@ function DiscoveryAdminViewModel() {
     ]),
     snapshot_refreshing: snapshot_refreshing_,
     snapshot_errors: snapshot_errors_,
+    catalog_errors: catalog_errors_,
     scripts: scripts_,
     scripts_error: scripts_error_,
     scripts_loading: scripts_loading_,
@@ -763,6 +765,7 @@ function DiscoveryAdminViewModel() {
       local_refreshing.add(source_id);
       sync_refreshing();
       snapshot_errors_.set(new Map(snapshot_errors_.value).set(source_id, ""));
+      catalog_errors_.set(new Map(catalog_errors_.value).set(source_id, ""));
       try {
         const result = await request_json(
           "/admin/api/discovery/sources/" +
@@ -791,6 +794,7 @@ function DiscoveryAdminViewModel() {
               : item,
           ),
         );
+        catalog_errors_.set(new Map(catalog_errors_.value).set(source_id, result.catalog_error || ""));
         snapshot_errors_.set(
           new Map(snapshot_errors_.value).set(
             source_id,
@@ -1151,6 +1155,9 @@ function DiscoveryAdminViewModel() {
         const errors = new Map(snapshot_errors_.value);
         errors.delete(source_id);
         snapshot_errors_.set(errors);
+        const catalog_errors = new Map(catalog_errors_.value);
+        catalog_errors.delete(source_id);
+        catalog_errors_.set(catalog_errors);
         if (editing_id_.value === source_id) methods.reset_draft();
         show_list_message(source.title + " 已删除。");
         if (!bulk_busy_.value) await fill_empty_page();

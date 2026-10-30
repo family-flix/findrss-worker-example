@@ -4,7 +4,9 @@ import { RepositoryBackgroundTasks } from "../server/repository/background_tasks
 import { ServiceBackgroundTasks } from "../server/service/durable_object/background_tasks.js";
 import { ServiceDiscovery } from "../server/service/durable_object/discovery.js";
 import { ServiceTask } from "../server/service/durable_object/tasks.js";
-import { RssRouteCache } from "../server/infra/rss_cache.js";
+import { RssRouteCache, rss_route_cache_key } from "../server/infra/rss_cache.js";
+import { RepositoryDiscoverySource } from "../server/repository/discovery_source.js";
+import { DISCOVERY_CATALOG_KEY } from "../server/lib/discovery_catalog.js";
 import { snapshot_store } from "./support/snapshot_store.js";
 import { register } from "node:module";
 
@@ -19,6 +21,53 @@ function fixture(t) {
   return { ...store, tasks_repo: repo, tasks: new ServiceBackgroundTasks({ repo, wait_until: promise => promise.catch(() => {}) }) };
 }
 const descriptor = { kind: "snapshot", title: "刷新快照：测试", target: "https://example.com/feed" };
+
+test("静态发布失败仍返回最新 XML 和文章快照，抓取任务成功且目录可自动重试", async t => {
+  const f = fixture(t), metadata = new Map();
+  const discovery_repo = new RepositoryDiscoverySource({ sql: f.sql });
+  f.sql.exec("INSERT INTO discovery_sources (id, title, feed_url, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    "source", "测试源", "{{hostname}}/rss/demo", "", 1, 1);
+  const cache = new RssRouteCache(undefined, undefined, { store: f.repo, object_store: f.object_store });
+  const key = "public-snapshot:" + rss_route_cache_key("/demo", []);
+  let calls = 0;
+  const discovery = new ServiceDiscovery({ background_tasks: f.tasks, repo: { discovery: discovery_repo }, route_cache: cache,
+    storage: { get: async key => metadata.get(key), put: async (key, value) => metadata.set(key, value), delete: async key => metadata.delete(key) },
+    object_store: f.object_store, render_catalog: JSON.stringify, schedule_alarm: async () => {},
+    load_snapshot: async () => {
+      calls++;
+      await cache.run(key, Date.now(), async () => ({ output: "{}", invoked: false,
+        rendered: new Map([["rss\n", "<rss/>"], ["atom\n", "<feed/>"]]) }), { force: true });
+      f.bucket.fail_next({ op: "put" });
+      return { articles: [{ title: "新文章" }] };
+    } });
+  const pending = discovery.snapshot_task("source");
+  const result = await pending.promise;
+  assert.equal(result.cache.status, "fresh");
+  assert.ok(result.cache.saved_at > 0);
+  assert.equal(result.cache.refreshing, false);
+  assert.equal(result.snapshot.error, "");
+  assert.equal(result.snapshot.articles[0].title, "新文章");
+  assert.match(result.catalog_error, /静态发布失败/);
+  assert.equal(f.tasks_repo.find(pending.task.id).status, "completed");
+  assert.equal(metadata.get("discovery_catalog_dirty"), true);
+  assert.ok(discovery.catalog_retry_at >= Date.now());
+  const restored = new RssRouteCache(undefined, undefined, { store: f.repo, object_store: f.object_store });
+  assert.equal((await restored.resolve(key, Date.now())).rendered.get("rss\n"), "<rss/>");
+  assert.equal(restored.inspect(key).saved_at, result.cache.saved_at);
+  await discovery.publish_catalog();
+  assert.ok(await f.object_store.get(DISCOVERY_CATALOG_KEY));
+  assert.equal(metadata.has("discovery_catalog_dirty"), false);
+  assert.equal(calls, 1);
+  discovery.load_snapshot = async () => { throw new Error("XML 抓取失败"); };
+  f.bucket.fail_next({ op: "put" });
+  const failed = discovery.snapshot_task("source");
+  const stale = await failed.promise;
+  assert.equal(stale.snapshot.error, "XML 抓取失败");
+  assert.match(stale.catalog_error, /静态发布失败/);
+  assert.equal(stale.cache.saved_at, result.cache.saved_at);
+  assert.equal(f.tasks_repo.find(failed.task.id).status, "failed");
+  assert.equal(f.tasks_repo.find(failed.task.id).error, "XML 抓取失败");
+});
 
 test("后台任务开始、终止、结束与清理通知实时订阅，结束通知发生在释放运行状态之后", async t => {
   const f = fixture(t), events = [];
