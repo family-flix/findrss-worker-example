@@ -1,6 +1,6 @@
 # 后端存储与任务执行
 
-本实现使用全新的 D1 数据库，不读取、迁移或恢复旧 DO 数据。部署前必须创建 D1、KV、Queue 和 R2，并完成数据库初始化；不能直接用旧 DO 绑定启动新版。已有线上资源不会被初始化命令清空。
+本实现使用全新的 D1 数据库，不读取、迁移或恢复旧 DO 数据。部署前必须创建 D1、KV 和 R2，并完成数据库初始化；不能直接用旧 DO 绑定启动新版。已有线上资源不会被初始化命令清空。
 
 已有部署的 `APIDurableObject` 类和命名空间继续保留，避免升级时删除旧数据；该类不再执行业务，待执行的 Alarm 直接结束。新连接使用独立的 `RealtimeHubDO`。
 
@@ -12,8 +12,7 @@
 | D1 `DB` | 用户、凭证摘要、积分与账本、配置、授权、脚本索引、设备任务、后台任务和调度索引 | 权威数据；多表写入原子提交 |
 | KV `CACHE` | 脚本路由候选、来源列表、标签列表 | 可重建的查询缓存；不作授权依据 |
 | R2 `API_STORAGE` | 源码、RSS/Atom、头像、剪藏、检测历史、私有草稿预览、目录与热榜页面 | 数据库保存指针，文件按版本保存 |
-| Queue `JOBS` | 后台任务 ID 的投递 | 允许重复投递，D1 租约防止重复执行 |
-| Cron | 每分钟扫描到期调度、补投任务、回收租约和清理历史 | 分钟级调度，不保证秒级启动 |
+| Cron | 每分钟扫描到期调度、直接执行 D1 任务、回收租约和清理历史 | 分钟级调度，不保证秒级启动 |
 | DO `REALTIME` | 设备和管理端 WebSocket、消息转发、设备调用等待器 | 使用连接附件和内存，不调用 DO storage 或 Alarm |
 
 HTTP 入口在 `index.js`，`server/application.js` 组装业务服务，`application_router.js` 分派内部请求，业务代码位于 `server/service/application/`。WebSocket DO 通过 `APPLICATION_SERVICE` 调用同一 Worker 的 `ApplicationEntrypoint`，把业务执行交回 Worker。内部请求路径不对公网开放。
@@ -27,7 +26,6 @@ npm ci
 npx wrangler login
 npx wrangler d1 create findrss-db
 npx wrangler kv namespace create CACHE
-npx wrangler queues create findrss-jobs
 npx wrangler r2 bucket create findrss-storage
 ```
 
@@ -35,7 +33,7 @@ npx wrangler r2 bucket create findrss-storage
 
 - `d1_databases[0].database_id`：D1 的真实 UUID，`database_name` 对应创建的数据库名称。
 - `kv_namespaces[0].id`：KV 的真实 namespace ID。
-- Queue 生产者与消费者使用同一队列名称，R2 桶名对应实际桶。
+- R2 桶名对应实际桶；无需创建 Queue 或配置 JOBS 绑定。
 - 自定义 Worker 名称时，同时修改 `name` 和 `services` 中 `APPLICATION_SERVICE.service`，二者必须一致；保留 `entrypoint: "ApplicationEntrypoint"`。
 
 然后初始化业务表、配置密钥并部署：
@@ -56,7 +54,7 @@ Cloudflare Builds 部署前也需完成资源创建、填入 ID 和远程建表�
 
 KV 是最终一致缓存，因此新增路由或列表变更可能延迟显示。脚本是否启用、当前版本、源的公开性、Cookie 授权、用户状态和余额始终通过 D1 校验，缓存不能恢复已撤销的权限。Cookie 与凭证明文、余额、租约不写 KV。
 
-RSS/Atom 请求先完成权限和计费检查，再从响应缓存或 R2 读取快照。R2 的 `rss/manifests/` 保存当前快照的文件清单，正文在 `rss/snapshots/<UUID>/`；响应缓存按公开 origin 隔离，缓存 60 秒。缺少清单时回源 D1 指针。已有快照继续可读，首次缺少快照时创建 Queue 任务并返回 `503 FEED_GENERATING` 与 `Retry-After: 5`。
+RSS/Atom 请求先完成权限和计费检查，再从响应缓存或 R2 读取快照。R2 的 `rss/manifests/` 保存当前快照的文件清单，正文在 `rss/snapshots/<UUID>/`；响应缓存按公开 origin 隔离，缓存 60 秒。缺少清单时回源 D1 指针。已有快照继续可读，首次缺少快照时创建 D1 后台任务，等待下一轮 Cron 执行并返回 `503 FEED_GENERATING` 与 `Retry-After: 5`。
 
 这里缓存的是正文；鉴权、私密源扣费仍会访问 D1。公开目录和头像、公开版本源码等静态文件直接由 Worker/R2 分发。
 
@@ -72,9 +70,11 @@ D1 不提供原来的 DO 同步事务回调。`server/infra/d1.js` 采用乐观�
 
 ## 后台执行与恢复
 
-每条任务先落 D1 `jobs`，再向 Queue 投递 ID。同一任务键仅允许一条排队或执行中的记录。消费者用一条条件 UPDATE 领取任务，同时检查全局运行数；并发上限沿用后台设置，范围 1–16，默认 4。
+每条任务先落 D1 `jobs`，由每分钟 Cron 直接领取执行，无需 Queue。同一任务键仅允许一条排队或执行中的记录。每个执行者使用独立应用实例，用一条条件 UPDATE 领取任务，同时检查全局运行数；并发上限沿用后台设置，范围 1–16，默认 4。手动刷新和首次生成 XML 同样等待下一轮 Cron，有积压时按可执行时间依次领取。
 
-任务租约为 15 分钟，执行信号最长 14 分钟。Queue 重复投递不会再次执行已领取或完成的任务。Cron 会回收失效租约、重投未发送或超过 5 分钟未确认的待办。任务最多执行三次，失败按次数退避，终态记录保留七天；最近任务接口返回 100 条，按源 ID 查询执行中任务不受此上限影响。
+每轮最多选择 50 条到期任务，只在执行步骤的前 50 秒领取新任务，剩余待办留给下一轮。整轮 Cron 共用从启动起 14 分钟的截止信号，慢任务不会重置本轮时限；目录发布、设备维护和历史清理先于采集执行，避免被慢任务阻塞。任务租约为 15 分钟，重叠 Cron 不会重复执行已领取的任务。Cron 回收失效租约后直接重试，最多执行三次，失败按次数退避。终态记录保留七天；最近任务接口返回 100 条，按源 ID 查询执行中任务不受此上限影响。
+
+升级不需要清理 D1 或应用新的迁移；已有 queued 任务直接接续，running 任务等待原租约过期后回收，旧 sent_at 不再限制领取。代码保留仅确认旧消息的 Queue 兼容入口，不再投递新消息；旧部署应在 Cloudflare 队列中移除该 Worker 消费者，避免继续消耗旧消息的读取/删除额度，无需删除队列或业务数据。Cron 直接执行仍受 Workers CPU、子请求及 D1/KV/R2 额度限制，500 个源每小时刷新的实际吞吐需部署后观察。
 
 自动任务开始前重新校验启停和仅手动规则。取消保存为 D1 状态，运行者每 5 秒检查一次，向采集链路传播取消信号；D1 写入同时校验租约，R2 发布前也重新检查任务状态。取消不会撤销已提交的结果，已经发往上游的网络请求可能稍后才停止。
 
@@ -90,6 +90,6 @@ node --test scripts/d1_smoke.test.mjs
 node --test scripts/script_storage_smoke.test.mjs
 ```
 
-后两项启动隔离的本地 Workers 运行时，通过 HTTP/WebSocket 验证 D1/KV/R2/Queue、RPC、公开快照权限和大脚本发布回退，不调用浏览器，也不部署线上资源。
+后两项启动隔离的本地 Workers 运行时，通过 HTTP/WebSocket 验证 D1/KV/R2/Cron、RPC、公开快照权限和大脚本发布回退，不调用浏览器，也不部署线上资源。
 
-平台语义见 [D1 batch](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch)、[KV 一致性](https://developers.cloudflare.com/kv/concepts/how-kv-works/)、[Queue 时限](https://developers.cloudflare.com/queues/platform/limits/)与 [Worker RPC 流](https://developers.cloudflare.com/workers/runtime-apis/rpc/#readablestream-writablestream-request-and-response)。
+平台语义见 [D1 batch](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch)、[KV 一致性](https://developers.cloudflare.com/kv/concepts/how-kv-works/)、[Cron 执行时限](https://developers.cloudflare.com/workers/platform/limits/)与 [Worker RPC 流](https://developers.cloudflare.com/workers/runtime-apis/rpc/#readablestream-writablestream-request-and-response)。

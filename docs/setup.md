@@ -2,13 +2,13 @@
 
 [返回项目介绍](../README.md)。本指南包含部署、本地运行、自定义订阅源与设备配置。
 
-**当前实现使用空 D1 库，不迁移旧 DO 数据。** 首次部署必须先按[后端资源配置与建表](backend-architecture.md#首次部署)完成 D1、KV、Queue 和 R2 配置；下列网页构建流程不能替代这一步。
+**当前实现使用空 D1 库，不迁移旧 DO 数据。** 首次部署必须先按[后端资源配置与建表](backend-architecture.md#首次部署)完成 D1、KV 和 R2 配置；下列网页构建流程不能替代这一步。
 
 ## Fork 部署到 Cloudflare Workers
 
 **推荐使用此流程**。先 Fork 项目，再连接 Cloudflare Workers Builds，后续可以在 GitHub 通过 **Sync fork → Update branch** 更新。连接构建可在网页完成；初始化 D1 需使用 Wrangler。
 
-需要 GitHub 账号，以及可使用 Workers、D1、KV、Queues、Durable Objects 和 R2 的 Cloudflare 账号。
+需要 GitHub 账号，以及可使用 Workers、D1、KV、Durable Objects 和 R2 的 Cloudflare 账号。
 
 ### 1. Fork 仓库
 
@@ -18,7 +18,7 @@
 
 1. 在 Cloudflare 打开 **Workers & Pages → Create application**，通过 Hello World 创建一个 Worker，名称填写 `findrss-worker`，先完成初始部署。
 2. 进入该 Worker 的 **Settings → Variables and Secrets → Add**，类型选择 **Secret**，名称填写 `ADMIN_PASSWORD`，值设置为自行生成的随机长密码，保存并部署。这是 FindRSS 后台的登录密码。[Cloudflare Secrets 说明](https://developers.cloudflare.com/workers/configuration/secrets/#via-the-dashboard)
-3. 在 Cloudflare **R2 Object Storage** 中启用 R2，并创建名为 `findrss-storage` 的桶；已有该桶时可直接使用。部署会按 `wrangler.jsonc` 绑定此桶，并创建 WebSocket Durable Object。另按[后端资源步骤](backend-architecture.md#首次部署)创建 D1、KV、Queue，填入 ID 并执行远程建表。
+3. 在 Cloudflare **R2 Object Storage** 中启用 R2，并创建名为 `findrss-storage` 的桶；已有该桶时可直接使用。部署会按 `wrangler.jsonc` 绑定此桶，并创建 WebSocket Durable Object。另按[后端资源步骤](backend-architecture.md#首次部署)创建 D1、KV，填入 ID 并执行远程建表。
 
 Worker 名称必须与仓库 `wrangler.jsonc` 中的 `name` 和 `APPLICATION_SERVICE.service` 一致，R2 桶名必须与 `r2_buckets` 中的 `bucket_name` 一致。上面的默认名称可以直接使用原配置；若要自定义，请在自己的 Fork 中同步修改配置后再连接构建。旧 DO 版本不能直接无损升级到本实现；此版本不会读取旧 DO 数据。
 
@@ -81,7 +81,7 @@ Cloudflare 会根据锁文件安装依赖，`npm run deploy` 会先构建后台�
 
 工作流已声明仓库内容写权限；如果提交时报权限错误，请检查仓库或组织的 Actions 策略，在 **Settings → Actions → General → Workflow permissions** 中允许 **Read and write permissions**。如果生产分支要求通过 Pull Request 才能更新，此工作流的直接推送会被拒绝，需要先调整对应分支规则或自行通过 PR 更新。
 
-更新以原项目代码为准，会替换应用文件并删除上游已经移除的文件，不适用于需要保留自行修改应用代码的部署。同步 `wrangler.jsonc` 时保留 Worker 名称、账号、自定义路由、`workers_dev` / `preview_urls`、已有变量、同名 R2/D1/KV 资源和 Queue 名称；Durable Object 绑定保留对外部 Worker 的引用，其余应用配置（包括静态资源路由、兼容日期、别名及 DO 声明）跟随新版更新。Cloudflare 中的 secrets 不由工作流读取或修改。
+更新以原项目代码为准，会替换应用文件并删除上游已经移除的文件，不适用于需要保留自行修改应用代码的部署。同步 `wrangler.jsonc` 时保留 Worker 名称、账号、自定义路由、`workers_dev` / `preview_urls`、已有变量、同名 R2/D1/KV 资源；Durable Object 绑定保留对外部 Worker 的引用，其余应用配置（包括静态资源路由、兼容日期、别名及 DO 声明）跟随新版更新。Cloudflare 中的 secrets 不由工作流读取或修改。
 
 已有 `.github/workflows/` 文件会保留，上游的新工作流或工作流修改不会自动覆盖它们；以后更新工作流本身时，按下方步骤重新复制对应文件。
 
@@ -200,7 +200,7 @@ if (rendered.error) return rendered;
 
 ## 手动部署与配置
 
-需要可使用 Workers、D1、KV、Queues、Durable Objects 和 R2 的 Cloudflare 账号。部署使用本项目的 [wrangler.jsonc](../wrangler.jsonc)，后台与广场静态资源随 Worker 一起发布。
+需要可使用 Workers、D1、KV、Durable Objects 和 R2 的 Cloudflare 账号。部署使用本项目的 [wrangler.jsonc](../wrangler.jsonc)，后台与广场静态资源随 Worker 一起发布。
 
 在本项目根目录执行：
 

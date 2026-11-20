@@ -37,13 +37,13 @@ Browser
 
 主 Worker 的 `admin.js` 提供后台登录、会话和页面路由；本目录没有 Worker 入口。登录表单只需输入密码，请求只提交 `password`；后端固定使用用户名 `admin`，密码来自 Worker secret `ADMIN_PASSWORD`；验证成功后签发 12 小时有效、`HttpOnly`、`SameSite=Strict` 的签名 Session Cookie。各管理页在 `beforeReady` 阶段检查当前路由是否需要登录，未登录时通过 `location.replace` 进入登录页；会话失效或主动退出也会回到登录页。代理管理 API 时，管理 HTTP 边界 在服务端注入管理员 Bearer Token，不向浏览器暴露 Secret。
 
-`POST /admin/api/hot/snapshot` 可提交全部内置 Hot 示例的 JSON 快照更新及 rank HTML 重建任务，接口接受后台会话或管理员 Bearer/Basic 凭证，立即返回 HTTP 202 和 `{ task_id, task }`。JSON 保存完成后继续生成并发布完整 HTML，此前任务保持进行中；HTML 发布失败也记录为任务失败。后台「任务」页 `/admin/tasks` 展示任务 ID、进行中、完成、失败及已终止状态，沿用实时通知和终止操作；错误原因保存在任务记录中。定时和手动提交合并正在运行的同类任务。调用示例和错误状态见 [排行榜说明](../rank/README.md)。
+`POST /admin/api/hot/snapshot` 可提交全部内置 Hot 示例的 JSON 快照更新及 rank HTML 重建任务，接口接受后台会话或管理员 Bearer/Basic 凭证，立即返回 HTTP 202 和 `{ task_id, task }`。JSON 保存完成后继续生成并发布完整 HTML，此前任务保持进行中；HTML 发布失败也记录为任务失败。后台「任务」页 `/admin/tasks` 展示任务 ID、排队中、进行中、完成、失败及已终止状态，沿用实时通知和终止操作；错误原因保存在任务记录中。定时和手动提交合并正在运行的同类任务。调用示例和错误状态见 [排行榜说明](../rank/README.md)。
 
 管理后台页面统一由 `components/shell.js` 承载：桌面端使用固定侧边栏，移动端切换为底部导航；各业务页面共用这套外壳、页头和组件样式。新增子页面时，先建立 `xx.js` 与 `xx.model.js`，再在 `store.js` 的 `routes_configure.admin.children` 中声明路径、页面、标题和图标，并让页面根 View 调用 `FindRSSAdminShell.Page({ page_id, title, description }, children)`，业务 View 作为 `children` 传入，并导出页面函数供路由绑定；页面不再通过 `window.FindRSSAdminPages` 注册或自行挂载。
 
 页面布局由 `frui/PageLayout`、`PageHeader`、`PageContent` 共同负责：`PageLayout` 使用全部可用宽度，统一桌面 16px、窄屏 12px 的页边距，以及页头与内容之间的 12px 间距；`PageHeader` 只承载页面标题、数量和全局操作，操作区根据可用空间换行；`PageContent` 承载筛选、Tabs、列表及业务工作区，区块间距默认 12px。布局复用 `--frui-space-*` 和控件高度 token，各页面不再添加外层限宽或整页留白。脚本页的类型 Tabs 和列表属于内容区，安装、新增按钮统一放入页头。加载占位也复用同一布局，避免进入页面前后边距变化。
 
-“任务”页（`/admin/tasks`）展示最近 100 条后台任务及其状态、耗时和错误，进入页面时加载，通过“刷新”按钮手动更新。手动、定时及首次生成 XML 的快照刷新均记录任务；进行中的刷新可终止，已保存的快照继续可用，下次定时刷新仍按原计划执行。已下发且可能被其他刷新共享的设备调用继续按原租约结束，终止仅移除本次刷新对结果的等待。订阅源列表点击“刷新快照”后按钮保持加载，完成后更新该条记录；接口另支持通过 `Prefer: respond-async` 返回 202 和任务信息。
+“任务”页（`/admin/tasks`）展示最近 100 条后台任务及其状态、耗时和错误，进入页面时加载，通过“刷新”按钮手动更新。手动、定时及首次生成 XML 的快照刷新均写入 D1，由每分钟 Cron 直接领取执行，无需 Queue；排队中和进行中的刷新均可终止，已保存的快照继续可用，下次定时刷新仍按原计划执行。已下发且可能被其他刷新共享的设备调用继续按原租约结束，终止仅移除本次刷新对结果的等待。订阅源列表点击“刷新快照”后按钮保持加载，完成后更新该条记录；接口另支持通过 `Prefer: respond-async` 返回 202 和任务信息。
 
 订阅源列表在进入页面、翻页、修改每页条数及搜索筛选后，调用 `GET /admin/api/background-tasks?source_ids=id1,id2` 批量获取当前页的进行中任务，恢复“刷新快照”按钮的加载状态。该管理员接口接受 1–100 个逗号分隔的源 ID，返回 `{ tasks: [...] }`，每个任务包含 `source_id`，不受最近 100 条任务列表的限制。存在进行中任务时每 2 秒查询一次，任务结束后更新当前页快照和 XML 状态，离开页面停止轮询。
 
