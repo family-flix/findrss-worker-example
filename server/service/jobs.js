@@ -6,13 +6,13 @@ import { CallModel } from "../domain/call.js";
 export class ServiceJobs {
   constructor({
     store,
-    queue,
+    run_job,
     app,
     wait_until
   }) {
     Object.assign(this, {
       store,
-      queue,
+      run_job,
       app,
       wait_until
     });
@@ -22,14 +22,12 @@ export class ServiceJobs {
   async rows(sql, ...values) {
     return (await this.store.exec(sql, ...values)).toArray();
   }
-  async enqueue(key, descriptor, dispatch = true) {
-    if (!this.queue) throw do_error("缺少 JOBS 队列绑定", 503);
+  async enqueue(key, descriptor) {
     const id = crypto.randomUUID(),
       now = Date.now();
     await this.store.exec(`INSERT INTO jobs(id,task_key,descriptor_json,status,created_at,available_at)
       VALUES(?,?,?,'queued',?,?) ON CONFLICT DO NOTHING`, id, key, JSON.stringify(descriptor), now, now);
     const task = (await this.rows("SELECT * FROM jobs WHERE id=? OR (task_key=? AND status IN ('queued','running')) ORDER BY created_at DESC LIMIT 1", id, key))[0];
-    if (dispatch) this.wait_until(this.dispatch().catch(error => console.warn("任务投递失败，Cron 将重试", error.message)));
     this.notify();
     return this.value(task);
   }
@@ -75,22 +73,24 @@ export class ServiceJobs {
   notify() {
     this.wait_until(Promise.resolve().then(() => this.app.events?.invalidate('background-tasks.changed')).catch(error => console.warn('任务通知失败', error.message)));
   }
-  async dispatch() {
+  async dispatch(signal = AbortSignal.timeout(840000)) {
     const now = Date.now();
-    await this.store.exec("UPDATE jobs SET status=CASE WHEN attempts>=3 THEN 'failed' ELSE 'queued' END,sent_at=NULL,lease_token=NULL,error=CASE WHEN attempts>=3 THEN '执行租约已过期，重试次数已用尽' ELSE error END,finished_at=CASE WHEN attempts>=3 THEN ? ELSE NULL END WHERE status='running' AND lease_until<?", now, now);
-    const rows = await this.rows("SELECT id FROM jobs WHERE status='queued' AND available_at<=? AND (sent_at IS NULL OR sent_at<?) ORDER BY available_at LIMIT 50", now, now - 300000);
-    for (const row of rows) {
-      const claim = await this.store.exec("UPDATE jobs SET sent_at=? WHERE id=? AND status='queued' AND (sent_at IS NULL OR sent_at<?)", now, row.id, now - 300000);
-      if (!claim.rowsWritten) continue;
-      try {
-        await this.queue.send({
-          id: row.id
-        });
-      } catch (error) {
-        await this.store.exec("UPDATE jobs SET sent_at=NULL WHERE id=? AND sent_at=?", row.id, now);
-        throw error;
+    const recovered = await this.store.exec("UPDATE jobs SET status=CASE WHEN attempts>=3 THEN 'failed' ELSE 'queued' END,sent_at=NULL,lease_token=NULL,error=CASE WHEN attempts>=3 THEN '执行租约已过期，重试次数已用尽' ELSE '执行租约已过期，等待重试' END,finished_at=CASE WHEN attempts>=3 THEN ? ELSE NULL END WHERE status='running' AND lease_until<=?", now, now);
+    if (recovered.rowsWritten) this.notify();
+    const rows = await this.rows("SELECT id FROM jobs WHERE status='queued' AND available_at<=? ORDER BY available_at,created_at LIMIT 50", now);
+    if (!rows.length) return;
+    const settings = await this.app.snapshot_settings.settings();
+    const tasks = rows.values();
+    // 每轮只在前 50 秒领取新任务，慢任务共用本轮截止信号，避免连续执行超过 Cron 时限。
+    const deadline = now + 50000;
+    const results = await Promise.allSettled(Array.from({ length: Math.min(settings.max_concurrency, rows.length) }, async () => {
+      for (const row of tasks) {
+        if (signal.aborted || Date.now() >= deadline) break;
+        if ((await this.run_job(row.id, signal))?.retry) break;
       }
-    }
+    }));
+    const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, '后台任务执行异常');
   }
   async reschedule(kind, id) {
     let row;
@@ -136,20 +136,24 @@ export class ServiceJobs {
           public_url: feed.self_url,
           automatic: true
         };
-      } else descriptor = {
-        kind: row.kind === 'discovery' ? 'snapshot' : row.kind,
-        title: '自动刷新',
-        target: row.target_id,
-        source_id: row.kind === 'discovery' ? row.target_id : '',
-        automatic: true
-      };
-      if (descriptor) await this.enqueue(key, descriptor, false);
+      } else {
+        const source = (await this.rows(`SELECT * FROM ${row.kind === 'discovery' ? 'discovery_sources' : row.kind === 'clip' ? 'clips' : 'detections'} WHERE id=?`, row.target_id))[0];
+        if (source) descriptor = {
+          kind: row.kind === 'discovery' ? 'snapshot' : row.kind,
+          title: '自动刷新：' + source.title,
+          target: source.feed_url || source.script_url || source.url,
+          source_id: row.kind === 'discovery' ? row.target_id : '',
+          automatic: true
+        };
+      }
+      if (descriptor) await this.enqueue(key, descriptor);
       await this.store.exec('UPDATE schedules SET due_at=? WHERE kind=? AND target_id=?', Date.now() + 300000, row.kind, row.target_id);
     }
   }
   async scheduled(at = Date.now()) {
     const errors = [];
-    for (const [name, run] of [['调度', () => this.schedule_due()], ['投递', () => this.dispatch()], ['目录', () => this.app.discovery.ensure_catalog()], ['热榜', () => new Date(at).getUTCMinutes() % 5 === 0 ? this.app.hot_snapshots.start() : undefined], ['源码清理', () => this.prune_sources()], ['维护', () => this.maintenance()]]) {
+    const signal = AbortSignal.timeout(840000);
+    for (const [name, run] of [['调度', () => this.schedule_due()], ['目录', () => this.app.discovery.ensure_catalog()], ['热榜', () => new Date(at).getUTCMinutes() % 5 === 0 ? this.app.hot_snapshots.start() : undefined], ['源码清理', () => this.prune_sources()], ['维护', () => this.maintenance()], ['执行', () => this.dispatch(signal)]]) {
       try {
         await run();
       } catch (error) {
@@ -202,7 +206,8 @@ export class ServiceJobs {
     const row = (await this.rows("SELECT status,lease_token,lease_until FROM jobs WHERE id=?", this.current.id))[0];
     if (!row || row.status !== 'running' || row.lease_token !== this.token || row.lease_until <= Date.now()) throw do_error("任务已取消或执行租约已失效", 409);
   }
-  async consume(id) {
+  async consume(id, parent_signal) {
+    if (parent_signal?.aborted) return;
     const token = crypto.randomUUID(),
       now = Date.now();
     const settings = await this.app.snapshot_settings.settings();
@@ -224,7 +229,7 @@ export class ServiceJobs {
     };
     const descriptor = JSON.parse(row.descriptor_json),
       abort = new AbortController();
-    const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(840000)]);
+    const signal = AbortSignal.any([abort.signal, parent_signal || AbortSignal.timeout(840000)]);
     this.signal = signal;
     let checking = false;
     const monitor = setInterval(async () => {
@@ -239,6 +244,7 @@ export class ServiceJobs {
       }
     }, 5000);
     try {
+      signal.throwIfAborted();
       if (descriptor.automatic && !(await this.automatic_enabled(row.task_key))) {
         await this.cancel(id);
         return;
@@ -268,9 +274,10 @@ export class ServiceJobs {
           signal
         });
       } else throw new Error('未知任务类型：' + descriptor.kind);
+      signal.throwIfAborted();
       await this.assert_current();
       this.store.job = null;
-      await this.store.exec("UPDATE jobs SET status='completed',finished_at=?,lease_token=NULL WHERE id=? AND lease_token=?", Date.now(), id, token);
+      await this.store.exec("UPDATE jobs SET status='completed',error='',finished_at=?,lease_token=NULL WHERE id=? AND lease_token=?", Date.now(), id, token);
     } catch (error) {
       this.store.job = null;
       const retry = row.attempts < 3;

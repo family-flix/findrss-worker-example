@@ -87,10 +87,6 @@
   ],
   "d1_databases": [{ "binding": "DB", "database_name": "findrss-db", "database_id": "82c74e18-9e2b-4fb6-843e-753ed0ab60f1", "migrations_dir": "migrations" }],
   "kv_namespaces": [{ "binding": "CACHE", "id": "8f43a430c17a4cd5999ed68c0a9314e6" }],
-  "queues": {
-    "producers": [{ "binding": "JOBS", "queue": "findrss-jobs" }],
-    "consumers": [{ "queue": "findrss-jobs", "max_batch_size": 1, "max_concurrency": 16, "max_retries": 10 }]
-  },
   "services": [{ "binding": "APPLICATION_SERVICE", "service": "findrss-worker-example", "entrypoint": "ApplicationEntrypoint" }],
   "durable_objects": { "bindings": [{ "name": "REALTIME", "class_name": "RealtimeHubDO" }] },
   "exports": {

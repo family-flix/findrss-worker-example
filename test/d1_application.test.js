@@ -3,6 +3,7 @@ import test from "node:test";
 import { register } from "node:module";
 import { d1_fixture } from "./support/d1.js";
 import { D1Store } from "../server/infra/d1.js";
+import { ServiceHotSnapshots } from "../server/service/application/hot_snapshots.js";
 register("./support/quickjs_wasm_hook.js", import.meta.url);
 register("./support/application_hook.js", import.meta.url);
 const {
@@ -16,9 +17,6 @@ const make_app = (db, extra = {}) => new Application({
       broadcast: async () => {},
       connections: async () => []
     })
-  },
-  JOBS: {
-    send: async () => {}
   },
   ...extra
 }, {
@@ -60,14 +58,9 @@ test('concurrent D1 feed charges never overdraw or leave a partial ledger', asyn
   assert.equal(db.sql.prepare("SELECT COUNT(*) AS n FROM credit_transactions WHERE type='charge'").get().n, 1);
   db.sql.close();
 });
-test('fresh Worker instances keep queued jobs and queue redelivery is idempotent', async () => {
+test('fresh Worker instances keep queued jobs without Queue and repeated execution is idempotent', async () => {
   const db = d1_fixture(),
-    messages = [],
-    app = make_app(db, {
-      JOBS: {
-        send: async value => messages.push(value)
-      }
-    });
+    app = make_app(db);
   const task = await app.jobs.enqueue('hot-snapshot', {
     kind: 'hot_snapshot',
     title: 'hot',
@@ -84,6 +77,26 @@ test('fresh Worker instances keep queued jobs and queue redelivery is idempotent
   assert.equal(count, 1);
   assert.equal(db.sql.prepare('SELECT status FROM jobs WHERE id=?').get(task.id).status, 'completed');
   db.sql.close();
+});
+test('Cron creates independent application and lease guards for concurrent jobs', async t => {
+  const db = d1_fixture(), app = make_app(db), workers = [];
+  t.after(() => db.sql.close());
+  t.mock.method(ServiceHotSnapshots.prototype, 'start', async function () {
+    const jobs = this.background_tasks.jobs;
+    workers.push(jobs);
+    await new Promise(setImmediate);
+    await jobs.store.put('result-' + jobs.current.id, jobs.current.id);
+  });
+  const tasks = await Promise.all(['first', 'second'].map(key => app.jobs.enqueue(key, { kind: 'hot_snapshot' })));
+  await app.jobs.dispatch();
+  assert.equal(workers.length, 2);
+  assert.notEqual(workers[0].store, workers[1].store);
+  assert.notEqual(workers[0].store, app.storage);
+  for (const task of tasks) {
+    assert.equal(await app.storage.get('result-' + task.id), task.id);
+    assert.equal(db.sql.prepare('SELECT status FROM jobs WHERE id=?').get(task.id).status, 'completed');
+  }
+  assert.equal(app.storage.job, undefined);
 });
 test('D1 script publication and discovery CRUD keep route metadata usable', async () => {
   const db = d1_fixture(),
@@ -111,9 +124,6 @@ test("application reads and writes D1 without invoking a Durable Object", async 
     ADMIN_PASSWORD: "test-password",
     REALTIME: {
       getByName: () => ({})
-    },
-    JOBS: {
-      send: async () => {}
     }
   }, {
     waitUntil: promise => pending.push(promise)
@@ -263,11 +273,11 @@ test('clip and detection lists keep running state across fresh Worker instances'
   const clip = await app.jobs.enqueue('clip:clip', {
     kind: 'clip',
     target: 'clip'
-  }, false);
+  });
   const detect = await app.jobs.enqueue('detect:detect', {
     kind: 'detect',
     target: 'detect'
-  }, false);
+  });
   assert.equal((await make_app(db).app.clips.list()).clips[0].refreshing, true);
   assert.equal((await make_app(db).app.detections.list()).detections[0].running, true);
   await app.jobs.cancel(clip.id);
@@ -312,7 +322,7 @@ test('source recovery recognizes XML jobs under a different task key across Work
   const task = await app.jobs.enqueue('public-snapshot:/source', {
     kind: 'snapshot',
     source_id: 'source'
-  }, false);
+  });
   assert.equal(await make_app(db).app.background_tasks.is_source_running('source'), true);
   await app.jobs.cancel(task.id);
   assert.equal(await make_app(db).app.background_tasks.is_source_running('source'), false);

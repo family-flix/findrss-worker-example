@@ -8,7 +8,7 @@ import { start_local_worker } from './local_worker.js';
 import { request as http_request } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import WebSocket from 'ws';
-test('real Workers D1/KV/Queue and WS-only DO application', {
+test('real Workers D1/KV/Cron and WS-only DO application', {
   timeout: 120000
 }, async t => {
   const root = fileURLToPath(new URL('../', import.meta.url));
@@ -28,8 +28,10 @@ test('real Workers D1/KV/Queue and WS-only DO application', {
     export { RealtimeHubDO, APIDurableObject, ApplicationEntrypoint } from ${JSON.stringify(join(root, 'index.js'))};
     export default { ...application, async fetch(request,env,ctx) {
       if(new URL(request.url).pathname==='/_smoke/consume') {
-        const jobs=await env.DB.prepare("SELECT id FROM jobs WHERE status='queued'").all();
-        await application.queue({messages:jobs.results.map(row=>({body:row,ack(){},retry(){throw Error('retry')}}))},env,ctx);
+        let acknowledged=false;
+        await application.queue({ackAll(){acknowledged=true;}});
+        if(!acknowledged) throw Error('legacy queue must acknowledge without executing');
+        await application.scheduled({scheduledTime:Date.parse('2026-11-11T00:01:00Z')},env,ctx);
         return Response.json(await env.DB.prepare('SELECT status,error FROM jobs').all());
       }
       if(new URL(request.url).pathname==='/_smoke/read-budget') {

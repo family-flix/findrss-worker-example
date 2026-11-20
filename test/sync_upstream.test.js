@@ -335,4 +335,6 @@ test('更新保留 D1/KV/Queue 资源身份，自调用服务跟随现有 Worker
   assert.equal(merged.queues.producers[0].queue, 'my-jobs');
   assert.equal(merged.queues.consumers[0].queue, 'my-jobs');
   assert.equal(merged.services[0].service, 'my-worker');
+  const { queues, ...cron_config } = upstream;
+  assert.equal(merge_deployment_config(cron_config, local).queues, undefined, 'Cron 部署不恢复旧 Queue 绑定');
 });

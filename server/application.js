@@ -2,7 +2,7 @@ import { DiscoverySourceModel } from "./domain/discovery_source.js";
 import { render_embedded_home } from "./infra/discovery_home.js";
 import { DISCOVERY_CATALOG_ORIGIN } from "./lib/discovery_catalog.js";
 import { feed_hostname_origin } from "./service/worker/discovery.js";
-// Worker 组合根：D1 业务存储、KV 查询缓存、R2 文件和 Queue 后台任务。
+// Worker 组合根：D1 业务存储、KV 查询缓存、R2 文件和 Cron 后台任务。
 import { route } from "../application_router.js";
 import { RssRouteCache } from "./infra/rss_cache.js";
 import { create_api_object_store } from "./infra/object_store.js";
@@ -74,7 +74,8 @@ import { ReadCache } from "./infra/read_cache.js";
 import { observe_application_changes } from "./service/application_events.js";
 export class Application {
   constructor(env, ctx) {
-    // Queue cancellation and lease fencing also apply before publishing stable R2 keys.
+    const job_env = env;
+    // Task cancellation and lease fencing also apply before publishing stable R2 keys.
     if (env.API_STORAGE) env = {
       ...env,
       API_STORAGE: new Proxy(env.API_STORAGE, {
@@ -203,7 +204,7 @@ export class Application {
     this.app = {};
     this.jobs = new ServiceJobs({
       store: this.storage,
-      queue: env.JOBS,
+      run_job: (id, signal) => new Application(job_env, ctx).jobs.consume(id, signal),
       app: this.app,
       wait_until: this.wait_until
     });

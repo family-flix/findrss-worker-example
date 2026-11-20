@@ -31,17 +31,8 @@ export default {
     const application = new Application(env, ctx);
     await application.jobs.scheduled(controller.scheduledTime || Date.now());
   },
-  async queue(batch, env, ctx) {
-    for (const message of batch.messages) {
-      try {
-        const result = await new Application(env, ctx).jobs.consume(message.body.id);
-        if (result?.retry) message.retry({
-          delaySeconds: 30
-        });else message.ack();
-      } catch (error) {
-        console.warn('队列消费失败', error.message);
-        message.retry();
-      }
-    }
+  async queue(batch) {
+    // 兼容升级前尚未解绑的消费者，任务仍由 Cron 从 D1 领取。
+    batch.ackAll();
   }
 };
