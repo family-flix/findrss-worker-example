@@ -109,12 +109,12 @@ test("手动加载避免重复请求，停止后忽略迟到响应，并可再�
 });
 
 test("状态筛选覆盖全部状态和空结果，刷新保留筛选，清除后恢复完整列表", async () => {
-  const statuses = ["running", "completed", "failed", "cancelled"];
+  const statuses = ["queued", "running", "completed", "failed", "cancelled"];
   let tasks = statuses.map(status => ({ ...task, id: status, status }));
   let calls = 0;
   const model = TasksModel({ ui, fetch_impl: async () => { calls++; return Response.json({ tasks }); } });
   await model.methods.load();
-  assert.equal(model.state.visible_tasks.value.length, 4);
+  assert.equal(model.state.visible_tasks.value.length, 5);
   for (const status of statuses) {
     model.methods.set_status(status);
     assert.deepEqual(model.state.visible_tasks.value.map(task => task.id), [status]);
@@ -127,7 +127,21 @@ test("状态筛选覆盖全部状态和空结果，刷新保留筛选，清除�
   assert.equal(model.state.status.value, "cancelled");
   assert.deepEqual(model.state.visible_tasks.value, []);
   model.methods.set_status("");
-  assert.equal(model.state.visible_tasks.value.length, 3);
+  assert.equal(model.state.visible_tasks.value.length, 4);
+});
+
+test("排队任务显示中文状态，可筛选并取消后等待下一轮 Cron", async () => {
+  const queued = { ...task, status: "queued" };
+  const model = TasksModel({ ui, fetch_impl: async (_url, options) => options.method === "POST"
+    ? Response.json({ task: { ...queued, status: "cancelled", finished_at: Date.now() } })
+    : Response.json({ tasks: [queued] }) });
+  await model.methods.load();
+  model.methods.set_status("queued");
+  assert.equal(model.state.visible_tasks.value[0].status_label, "排队中");
+  assert.equal(model.state.visible_tasks.value[0].cancellable, true);
+  await model.methods.cancel(task.id);
+  assert.deepEqual(model.state.visible_tasks.value, []);
+  assert.equal(model.state.tasks.value[0].status, "cancelled");
 });
 
 test("终止任务后立即从进行中筛选移除，并出现在已终止筛选中", async () => {

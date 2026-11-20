@@ -21,7 +21,7 @@ export function TasksPage({ view } = {}) {
     View({ class: "grid min-w-0 gap-space-3", attributes: { n: "tasks-page", "aria-busy": computed(busy, String) },
       onMounted() { stop_show = view?.onShow(methods.start); stop_hide = view?.onBeforeHide(methods.stop); methods.start(); },
       onUnmounted() { stop_show?.(); stop_hide?.(); methods.stop(); } }, [
-      View({ class: "text-muted text-sm", attributes: { n: "tasks-description" } }, ["最近 100 条后台任务分页展示，默认每页 20 条，任务状态实时更新。清理会从数据库移除全部已完成和失败任务。终止刷新会保留上次成功保存的快照；下次定时刷新仍按原计划执行。"]),
+      View({ class: "text-muted text-sm", attributes: { n: "tasks-description" } }, ["最近 100 条后台任务分页展示，默认每页 20 条，任务状态实时更新。每分钟领取排队任务执行，排队中和进行中的任务均可终止。清理会从数据库移除全部已完成和失败任务。终止刷新会保留上次成功保存的快照；下次定时刷新仍按原计划执行。"]),
       View({ class: "flex flex-wrap items-center gap-space-2", attributes: { n: "tasks-filters" } }, [
         View({ class: "text-muted text-sm", attributes: { n: "tasks-status-label", id: "tasks-status-label" } }, ["状态"]),
         Select({ value: state.status, options: task_status_options, style: { width: "10rem" },

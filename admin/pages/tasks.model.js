@@ -3,6 +3,7 @@ import { PaginationModel } from "../components/pagination.js";
 
 export const task_status_options = [
   { value: "", label: "全部状态" },
+  { value: "queued", label: "排队中" },
   { value: "running", label: "进行中" },
   { value: "completed", label: "已完成" },
   { value: "failed", label: "失败" },
@@ -20,13 +21,13 @@ export function TasksModel({ ui = window.FindRSSAdminUI, fetch_impl = (...args) 
   state.paged_tasks = ui.combine({ tasks: state.visible_tasks, page: pagination.state }, ({ tasks, page }) =>
     tasks.slice(page.page * page.page_size, (page.page + 1) * page.page_size));
   let controller = null, stop_realtime = null, visible = false, load_pending = false;
-  const status_labels = { running: "进行中", completed: "已完成", failed: "失败", cancelled: "已终止" };
+  const status_labels = { queued: "排队中", running: "进行中", completed: "已完成", failed: "失败", cancelled: "已终止" };
   function task_value(task) {
     return { ...task, status_label: status_labels[task.status] || task.status,
       tone: ({ completed: "success", failed: "danger", running: "brand" })[task.status] || "neutral",
       started_label: format_datetime(task.started_at),
       elapsed_label: Math.max(0, Math.round(((task.finished_at || Date.now()) - task.started_at) / 1000)) + " 秒",
-      cancellable: task.status === "running" };
+      cancellable: ["queued", "running"].includes(task.status) };
   }
   function sync_tasks(tasks) {
     state.tasks.as(tasks.map(task_value));
