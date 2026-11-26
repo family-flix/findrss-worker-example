@@ -2,10 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { rss_fetch_headers, rss_fetch_request, rss_fetch_timeout, rss_cookie_headers, RSS_FETCH_CREDENTIAL_HEADERS } from '../server/infra/rss_fetch_headers.js';
 
-test('每请求超时只能缩短默认预算，拒绝非法值', () => {
-  assert.equal(rss_fetch_timeout(), 10000);
+test('每请求超时默认 30 秒，可显式延长至 60 秒，拒绝非法值', () => {
+  assert.equal(rss_fetch_timeout(), 30000);
+  assert.equal(rss_fetch_timeout({}), 30000);
+  assert.equal(rss_fetch_timeout({ timeout_ms: undefined }), 30000);
+  assert.equal(rss_fetch_timeout({ timeout_ms: 10000 }), 10000);
   assert.equal(rss_fetch_timeout({ timeout_ms: 3000 }), 3000);
-  for (const timeout_ms of [null, 0, -1, 10001, 1.5, '3000', Infinity, NaN]) assert.throws(() => rss_fetch_timeout({ timeout_ms }));
+  assert.equal(rss_fetch_timeout({ timeout_ms: 1 }), 1);
+  assert.equal(rss_fetch_timeout({ timeout_ms: 60000 }), 60000);
+  for (const timeout_ms of [null, 0, -1, 60001, 1.5, '3000', Infinity, NaN]) assert.throws(() => rss_fetch_timeout({ timeout_ms }));
 });
 
 test('微博 profile 请求头和 Cookie 派生 XSRF，跨 origin 时作为认证头移除', () => {

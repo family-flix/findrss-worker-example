@@ -1,4 +1,4 @@
-import { load_douyin_sdk, sign_douyin_request } from './douyin_sdk.js';
+import { get_douyin_signature, invalidate_douyin_signature, douyin_signature_rejected } from './douyin_sdk.js';
 import { load_kuaishou_sdk, sign_kuaishou_request } from './kuaishou_sdk.js';
 import { rss_fetch_headers, rss_cookie_headers, rss_fetch_request, rss_fetch_timeout, RSS_FETCH_CREDENTIAL_HEADERS } from "./rss_fetch_headers.js";
 import { create_sandbox_promises } from "./sandbox_promises.js";
@@ -376,42 +376,71 @@ export function run_in_sandbox_queue(task) {
  * @param {AbortSignal} [signal] 任务取消信号
  * @param {Function | null} [puppeteer_navigate] 宿主页面渲染能力
  * @param {number} [output_limit] 宿主输出上限；剪藏允许保存较大的静态片段
+ * @param {object | null} [timing] Debug 宿主阶段计时器，不注入脚本上下文
  * @returns {Promise<{ output: string, invoked: boolean, lines: { level: string, text: string }[] }>}
  *   路由返回值的 JSON 串、是否调用过设备与 ctx.log/ctx.error 收集到的行
  */
-export function execute_script(script, route_metadata, invoke_impl = null, request_context = {
-  method: "GET",
-  pathname: "/rss/",
-  params: {},
-  query: {}
-}, cookies = [], mock_ctx_source = "", cookie_access = null, signal, puppeteer_navigate = null, output_limit = SCRIPT_OUTPUT_BYTES) {
-  return run_in_sandbox_queue(() => execute_script_inner(script, route_metadata, invoke_impl, request_context, cookies, mock_ctx_source, cookie_access, signal, puppeteer_navigate, output_limit));
+export function execute_script(
+  script,
+  route_metadata,
+  invoke_impl = null,
+  request_context = { method: "GET", pathname: "/rss/", params: {}, query: {} },
+  cookies = [],
+  mock_ctx_source = "",
+  cookie_access = null,
+  signal,
+  puppeteer_navigate = null,
+  output_limit = SCRIPT_OUTPUT_BYTES,
+  timing = null,
+) {
+  return run_in_sandbox_queue(() =>
+    execute_script_inner(
+      script,
+      route_metadata,
+      invoke_impl,
+      request_context,
+      cookies,
+      mock_ctx_source,
+      cookie_access,
+      signal,
+      puppeteer_navigate,
+      output_limit,
+      timing,
+    ));
 }
-export async function execute_script_inner(script, route_metadata, invoke_impl, request_context, cookies, mock_ctx_source, cookie_access = null, task_signal, puppeteer_navigate = null, output_limit = SCRIPT_OUTPUT_BYTES) {
+
+export async function execute_script_inner(
+  script,
+  route_metadata,
+  invoke_impl,
+  request_context,
+  cookies,
+  mock_ctx_source,
+  cookie_access = null,
+  task_signal,
+  puppeteer_navigate = null,
+  output_limit = SCRIPT_OUTPUT_BYTES,
+  timing = null,
+) {
+  timing?.mark("沙箱参数准备");
   task_signal?.throwIfAborted();
   const clip_request = script_type(script, route_metadata.kind ?? route_metadata.script_type) === "clip";
   if (clip_request) output_limit = ClipModel.MAX_BYTES * 3;
   const detect_request = script_type(script, route_metadata.kind ?? route_metadata.script_type) === "detect";
   if (detect_request) output_limit = DETECT_RESULT_BYTES;
-  request_context = {
-    ...request_context,
-    previous: normalize_detect_previous(request_context?.previous)
-  };
+  request_context = { ...request_context, previous: normalize_detect_previous(request_context?.previous) };
+  timing?.mark("QuickJS/Wasm 初始化");
   const QuickJS = await get_quickjs_module();
   const runtime = QuickJS.newRuntime();
   const vm = runtime.newContext();
   const promises = create_sandbox_promises(vm);
   const upstream_requests = [];
   try {
+    timing?.mark("沙箱上下文与工具初始化");
     inject_script_globals(vm);
     try {
-      route_metadata = {
-        ...route_metadata,
-        config: route_metadata.config_schema ? script_config_value(route_metadata.config_schema, route_metadata.config) : {}
-      };
-    } catch (error) {
-      throw new ScriptError("runtime", "脚本配置无效，请在脚本卡片中配置：" + error.message);
-    }
+      route_metadata = { ...route_metadata, config: route_metadata.config_schema ? script_config_value(route_metadata.config_schema, route_metadata.config) : {} };
+    } catch (error) { throw new ScriptError("runtime", "脚本配置无效，请在脚本卡片中配置：" + error.message); }
     const get_cookies = promises.bind("cookies.get", async id_handle => {
       task_signal?.throwIfAborted();
       if (!cookie_access) throw new Error("Cookie 权限尚未获得管理员确认");
@@ -421,40 +450,38 @@ export async function execute_script_inner(script, route_metadata, invoke_impl, 
     get_cookies.dispose();
     const detect = promises.bind("detect", async (operation_handle, value_handle) => {
       task_signal?.throwIfAborted();
-      const operation = vm.getString(operation_handle),
-        value = JSON.parse(vm.getString(value_handle));
-      const data = operation === "snapshot" ? normalize_detect_snapshot(value) : operation === "compare" ? compare_detect_snapshots(value.previous, value.current) : (() => {
-        throw new Error("未知检测操作");
-      })();
+      const operation = vm.getString(operation_handle), value = JSON.parse(vm.getString(value_handle));
+      const data = operation === "snapshot" ? normalize_detect_snapshot(value)
+        : operation === "compare" ? compare_detect_snapshots(value.previous, value.current) : (() => { throw new Error("未知检测操作"); })();
       return vm.newString(JSON.stringify(data));
     });
-    vm.setProp(vm.global, "__detectOperation", detect);
-    detect.dispose();
+    vm.setProp(vm.global, "__detectOperation", detect); detect.dispose();
     const navigate = promises.bind("puppeteer.navigate", async spec_handle => {
       task_signal?.throwIfAborted();
       if (!puppeteer_navigate) throw new Error("Puppeteer 不可用，请配置 Worker 的 BROWSER 绑定或提供 puppeteer.navigate mock");
-      const {
-        url,
-        options,
-        evaluate
-      } = JSON.parse(vm.getString(spec_handle));
-      const value = await puppeteer_navigate(url, options, evaluate, task_signal);
-      return vm.newString(JSON.stringify(value));
+      const { url, options, evaluate } = JSON.parse(vm.getString(spec_handle));
+      const finish = timing?.span("浏览器页面获取");
+      try {
+        const value = await puppeteer_navigate(url, options, evaluate, task_signal);
+        return vm.newString(JSON.stringify(value));
+      } finally { finish?.(); }
     });
     vm.setProp(vm.global, "__puppeteerNavigate", navigate);
     navigate.dispose();
     const fetch_text = promises.bind("fetchText", async (url_handle, options_handle) => {
+      const finish = timing?.span("上游 HTTP 请求");
+      let active_trace, trace_started_at, signal;
+      try {
       task_signal?.throwIfAborted();
       const url = vm.getString(url_handle);
       const fetch_options = options_handle ? vm.dump(options_handle) : null;
+      if (fetch_options?.include_headers !== undefined && typeof fetch_options.include_headers !== "boolean") throw new Error("fetchText include_headers 必须为布尔值");
       const headers = rss_fetch_headers(fetch_options);
       const transport = fetch_options?.transport === undefined ? "fetch" : fetch_options.transport;
       if (!["fetch", "tcp"].includes(transport)) throw new Error("fetchText transport 只支持 fetch 或 tcp");
       const timeout_ms = rss_fetch_timeout(fetch_options);
-      let {
-        method,
-        body
-      } = rss_fetch_request(fetch_options);
+      let douyin_signature, douyin_retries = 0;
+      let { method, body } = rss_fetch_request(fetch_options);
       rss_cookie_headers(fetch_options, "");
       if (fetch_options?.douyin_sign !== undefined && typeof fetch_options.douyin_sign !== "boolean") throw new Error("douyin_sign 必须为布尔值");
       if (fetch_options?.kuaishou_sign !== undefined && typeof fetch_options.kuaishou_sign !== "boolean") throw new Error("kuaishou_sign 必须为布尔值");
@@ -467,144 +494,188 @@ export async function execute_script_inner(script, route_metadata, invoke_impl, 
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
         throw new Error("脚本只允许请求 HTTP(S) 地址");
       }
-      if (headers.cookie !== undefined) throw new Error("请使用 ctx.cookies.get 和 fetchText 的 cookies 参数，禁止直接填写 Cookie 请求头");
+      const inline_cookie = headers.cookie || "";
+      delete headers.cookie;
       const cookie_handle = fetch_options?.cookies;
+      if (fetch_options?.include_headers && cookie_handle) throw new Error("fetchText include_headers 不支持 Cookie 句柄");
       if (cookie_handle && (!cookie_access || !(await cookie_access.allows(cookie_handle, parsed)))) throw new Error("Cookie 句柄无效或请求地址超出授权范围");
       if (fetch_options?.cookie_headers && !cookie_handle) throw new Error("cookie_headers 需要显式的 Cookie 句柄");
       let response;
-      let signal;
       let credentials_allowed = true;
-      for (let redirects = 0;; redirects += 1) {
-        const request_cookie = credentials_allowed && cookie_handle ? await cookie_access.header(cookie_handle, parsed, fetch_options?.cookie_headers) : "";
-        let signed_headers = {};
-        let outgoing_url = parsed.toString();
-        if (fetch_options?.kuaishou_sign) {
-          if (parsed.origin !== 'https://www.kuaishou.com' || parsed.pathname !== '/rest/v/profile/feed' || method !== 'POST') {
-            throw new Error('快手签名只允许 POST www.kuaishou.com/rest/v/profile/feed');
+      for (let redirects = 0; ; redirects += 1) {
+      const request_cookie = credentials_allowed
+        ? inline_cookie || (cookie_handle ? await cookie_access.header(cookie_handle, parsed, fetch_options?.cookie_headers) : "") : "";
+      let signed_headers = {};
+      let outgoing_url = parsed.toString();
+      if (fetch_options?.kuaishou_sign) {
+        if (parsed.origin !== 'https://www.kuaishou.com' || parsed.pathname !== '/rest/v/profile/feed' || method !== 'POST') {
+          throw new Error('快手签名只允许 POST www.kuaishou.com/rest/v/profile/feed');
+        }
+        const sdk = await load_kuaishou_sdk();
+        // fetchText 正挂起主沙箱的 Asyncify 栈，签名必须使用独立 wasm 实例。
+        outgoing_url = sign_kuaishou_request(await get_quickjs_module(), sdk, { url: outgoing_url, method, body, cookie: request_cookie });
+      }
+      if (fetch_options?.douyin_sign) {
+        if (method !== 'GET' || !['https://www.douyin.com', 'https://www-hj.douyin.com'].includes(parsed.origin) || !parsed.pathname.startsWith('/aweme/v1/web/')) {
+          throw new Error('抖音签名只允许 GET www.douyin.com 或 www-hj.douyin.com 作品接口');
+        }
+        douyin_signature = await get_douyin_signature(get_quickjs_module, {
+          url: outgoing_url, cookie: request_cookie, user_agent: headers["user-agent"],
+        }, cookie_access?.signature_cache);
+        outgoing_url = douyin_signature.url; signed_headers = douyin_signature.headers;
+      }
+      signal ||= task_signal ? AbortSignal.any([AbortSignal.timeout(timeout_ms), task_signal]) : AbortSignal.timeout(timeout_ms);
+      const derived_headers = rss_cookie_headers(fetch_options, request_cookie);
+      if (!credentials_allowed) for (const name of RSS_FETCH_CREDENTIAL_HEADERS) delete derived_headers[name];
+      const trace = route_metadata.debug === true ? {
+        url: outgoing_url,
+        method, host: parsed.host, pathname: parsed.pathname.slice(0, 1024), status: null,
+        transport,
+        credentials: {
+          source: request_cookie ? (inline_cookie ? "script_inline" : "script_grant") : "none",
+          headers_sent: [
+            ...(request_cookie ? ["Cookie"] : []),
+            ...RSS_FETCH_CREDENTIAL_HEADERS.filter(name => headers[name] || signed_headers[name] || derived_headers[name]),
+          ],
+        },
+        ...(timing ? { started_ms: timing.offset(), duration_ms: 0, timings: {} } : {}),
+      } : null;
+      if (trace && upstream_requests.length < SCRIPT_LOG_MAX_LINES) upstream_requests.push(trace);
+      active_trace = trace;
+      trace_started_at = timing ? Date.now() : 0;
+      try {
+      response = await (transport === "tcp" ? tcp_http_fetch : fetch)(outgoing_url, {
+        method,
+        body,
+        redirect: "manual",
+        signal,
+        ...(transport === "tcp" && timing ? { timing: trace?.timings } : {}),
+        headers: {
+          ...headers,
+          ...signed_headers,
+          ...derived_headers,
+          ...(request_cookie ? { Cookie: request_cookie } : {}),
+        },
+      });
+      if (trace) {
+        trace.status = response.status;
+        const rate_limit = Object.fromEntries(["retry-after", "x-rate-limit-limit", "x-rate-limit-remaining", "x-rate-limit-reset"]
+          .map(name => [name, response.headers.get(name)]).filter(([, value]) => /^\d{1,13}$/.test(value || ""))
+          .map(([name, value]) => [name, Number(value)]));
+        if (Object.keys(rate_limit).length) trace.rate_limit = rate_limit;
+      }
+      } catch (failure) {
+        task_signal?.throwIfAborted();
+        if (!signal.aborted && public_feed_failure(failure)) throw failure;
+        const timed_out = signal.aborted;
+        throw Object.assign(new Error(timed_out ? "脚本上游请求超时，请稍后重试" : "脚本上游连接失败，请稍后重试"), {
+          name: "FeedError", code: timed_out ? "UPSTREAM_TIMEOUT" : "UPSTREAM_FETCH_FAILED",
+        });
+      } finally {
+        if (timing && trace) {
+          trace.timings.response_ms = Date.now() - trace_started_at;
+          trace.duration_ms = trace.timings.response_ms;
+        }
+      }
+      if (![301, 302, 303, 307, 308].includes(response.status)) {
+        if (douyin_signature && [200, 403].includes(response.status)) {
+          const body_started_at = timing ? Date.now() : 0;
+          let douyin_buffer;
+          try { douyin_buffer = await response.arrayBuffer(); }
+          finally {
+            if (timing && trace) trace.timings.response_ms += Date.now() - body_started_at;
           }
-          const sdk = await load_kuaishou_sdk();
-          // fetchText 正挂起主沙箱的 Asyncify 栈，签名必须使用独立 wasm 实例。
-          outgoing_url = sign_kuaishou_request(await get_quickjs_module(), sdk, {
-            url: outgoing_url,
-            method,
-            body,
-            cookie: request_cookie
-          });
-        }
-        if (fetch_options?.douyin_sign && parsed.origin === "https://www.douyin.com") {
-          const sdk = await load_douyin_sdk();
-          const signed = sign_douyin_request(QuickJS, sdk, {
-            url: outgoing_url,
-            cookie: request_cookie,
-            user_agent: headers["user-agent"]
-          });
-          outgoing_url = signed.url;
-          signed_headers = signed.headers;
-        }
-        signal ||= task_signal ? AbortSignal.any([AbortSignal.timeout(timeout_ms), task_signal]) : AbortSignal.timeout(timeout_ms);
-        const derived_headers = rss_cookie_headers(fetch_options, request_cookie);
-        if (!credentials_allowed) for (const name of RSS_FETCH_CREDENTIAL_HEADERS) delete derived_headers[name];
-        const trace = route_metadata.debug === true ? {
-          method,
-          host: parsed.host,
-          pathname: parsed.pathname.slice(0, 1024),
-          status: null,
-          transport,
-          credentials: {
-            source: request_cookie ? "script_grant" : "none",
-            headers_sent: [...(request_cookie ? ["Cookie"] : []), ...RSS_FETCH_CREDENTIAL_HEADERS.filter(name => headers[name] || signed_headers[name] || derived_headers[name])]
+          if (douyin_buffer.byteLength > SCRIPT_FETCH_BYTES) throw new Error("脚本上游响应超过 10MB 限制");
+          if (douyin_signature_rejected(response.status, rss_response_text(douyin_buffer, response.headers.get("Content-Type") || ""))) {
+            await invalidate_douyin_signature(douyin_signature);
+            if (douyin_retries++ === 0) { redirects -= 1; continue; }
           }
-        } : null;
-        if (trace && upstream_requests.length < SCRIPT_LOG_MAX_LINES) upstream_requests.push(trace);
-        try {
-          response = await (transport === "tcp" ? tcp_http_fetch : fetch)(outgoing_url, {
-            method,
-            body,
-            redirect: "manual",
-            signal,
-            headers: {
-              ...headers,
-              ...signed_headers,
-              ...derived_headers,
-              ...(request_cookie ? {
-                Cookie: request_cookie
-              } : {})
-            }
-          });
-          if (trace) trace.status = response.status;
-        } catch (failure) {
-          task_signal?.throwIfAborted();
-          if (!signal.aborted && public_feed_failure(failure)) throw failure;
-          const timed_out = signal.aborted;
-          throw Object.assign(new Error(timed_out ? "脚本上游请求超时，请稍后重试" : "脚本上游连接失败，请稍后重试"), {
-            name: "FeedError",
-            code: timed_out ? "UPSTREAM_TIMEOUT" : "UPSTREAM_FETCH_FAILED"
-          });
+          response = new Response(douyin_buffer, { status: response.status, statusText: response.statusText, headers: response.headers });
         }
-        if (![301, 302, 303, 307, 308].includes(response.status)) break;
-        if (redirects >= 5) throw new Error("脚本上游重定向过多");
-        const location = response.headers.get("Location");
-        if (!location) throw new Error("脚本上游重定向缺少 Location");
-        const next = new URL(location, parsed);
-        if (response.status === 303 || [301, 302].includes(response.status) && method === "POST") {
-          method = "GET";
-          body = undefined;
-          delete headers["content-type"];
-        }
-        if (next.origin !== parsed.origin) {
-          if (body) throw new Error("fetchText 不允许跨 origin 重定向请求体");
-          credentials_allowed = false;
-          for (const name of RSS_FETCH_CREDENTIAL_HEADERS) delete headers[name];
-        }
-        if (cookie_handle && credentials_allowed && !(await cookie_access.allows(cookie_handle, next))) {
-          credentials_allowed = false;
-          for (const name of RSS_FETCH_CREDENTIAL_HEADERS) delete headers[name];
-        }
-        parsed = next;
-        if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("脚本只允许请求 HTTP(S) 地址");
+        break;
+      }
+      if (redirects >= 5) throw new Error("脚本上游重定向过多");
+      const location = response.headers.get("Location");
+      if (!location) throw new Error("脚本上游重定向缺少 Location");
+      const next = new URL(location, parsed);
+      if (response.status === 303 || ([301, 302].includes(response.status) && method === "POST")) {
+        method = "GET"; body = undefined; delete headers["content-type"];
+      }
+      if (next.origin !== parsed.origin) {
+        if (body) throw new Error("fetchText 不允许跨 origin 重定向请求体");
+        credentials_allowed = false;
+        for (const name of RSS_FETCH_CREDENTIAL_HEADERS) delete headers[name];
+      }
+      if (cookie_handle && credentials_allowed && !(await cookie_access.allows(cookie_handle, next))) {
+        credentials_allowed = false;
+        for (const name of RSS_FETCH_CREDENTIAL_HEADERS) delete headers[name];
+      }
+      parsed = next;
+      if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("脚本只允许请求 HTTP(S) 地址");
       }
       if (!response.ok) {
-        const code = {
-          401: "UPSTREAM_AUTH_REQUIRED",
-          403: "UPSTREAM_ACCESS_DENIED",
-          429: "UPSTREAM_RATE_LIMITED",
-          504: "UPSTREAM_TIMEOUT"
-        }[response.status] || "UPSTREAM_FETCH_FAILED";
-        throw Object.assign(new Error(`脚本上游 ${parsed.host} 返回 HTTP ${response.status}`), {
-          name: "FeedError",
-          code
-        });
+        const code = { 401: "UPSTREAM_AUTH_REQUIRED", 403: "UPSTREAM_ACCESS_DENIED", 429: "UPSTREAM_RATE_LIMITED", 504: "UPSTREAM_TIMEOUT" }[response.status] || "UPSTREAM_FETCH_FAILED";
+        throw Object.assign(new Error(`脚本上游 ${parsed.host} 返回 HTTP ${response.status}`), { name: "FeedError", code });
       }
-      const buffer = await response.arrayBuffer();
+      const body_started_at = timing ? Date.now() : 0;
+      let buffer;
+      try { buffer = await response.arrayBuffer(); }
+      finally {
+        if (timing && active_trace) active_trace.timings.body_read_ms = Date.now() - body_started_at;
+      }
       if (buffer.byteLength > SCRIPT_FETCH_BYTES) {
         throw new Error("脚本上游响应超过 10MB 限制");
       }
+      const decode_started_at = timing ? Date.now() : 0;
       const text = rss_response_text(buffer, response.headers.get("Content-Type") || "");
+      if (fetch_options?.include_headers) {
+        const headers = [...response.headers].filter(([name]) => name !== "set-cookie");
+        const cookies = response.headers.getSetCookie?.() ?? response.headers.getAll("Set-Cookie");
+        headers.push(...cookies.map(value => ["set-cookie", value]));
+        const value = vm.unwrapResult(vm.evalCode("(" + JSON.stringify({ text, headers }) + ")", "fetch-response.js"));
+        if (timing && active_trace) active_trace.timings.decode_and_transfer_ms = Date.now() - decode_started_at;
+        return value;
+      }
       // newString 使用 C 字符串，内嵌 NUL（如 X 的流式页面）会截断后续内容。
-      return text.includes("\0") ? vm.unwrapResult(vm.evalCode(JSON.stringify(text), "fetch-response.js")) : vm.newString(text);
+      const value = text.includes("\0")
+        ? vm.unwrapResult(vm.evalCode(JSON.stringify(text), "fetch-response.js"))
+        : vm.newString(text);
+      if (timing && active_trace) active_trace.timings.decode_and_transfer_ms = Date.now() - decode_started_at;
+      return value;
+      } catch (failure) {
+        task_signal?.throwIfAborted();
+        if (!signal?.aborted || public_feed_failure(failure)) throw failure;
+        throw Object.assign(new Error("脚本上游正文读取超时，请稍后重试"), {
+          name: "FeedError", code: "UPSTREAM_TIMEOUT",
+        });
+      } finally {
+        if (timing && active_trace) active_trace.duration_ms = Date.now() - trace_started_at;
+        finish?.();
+      }
     });
     vm.setProp(vm.global, "__fetchText", fetch_text);
     fetch_text.dispose();
     let invoked = false;
     if (invoke_impl !== null) {
       let invoke_count = 0;
-      const invoke_fn = promises.bind("invoke", async spec_handle => {
+      const invoke_fn = promises.bind("invoke", async (spec_handle) => {
         task_signal?.throwIfAborted();
         invoked = true;
         invoke_count += 1;
         if (invoke_count > MAX_SCRIPT_INVOKES) {
           throw new Error("脚本调用设备次数超过上限（" + MAX_SCRIPT_INVOKES + " 次）");
         }
-        const value = await invoke_impl(JSON.parse(vm.getString(spec_handle)));
-        return vm.newString(JSON.stringify(value === undefined ? null : value));
+        const spec = JSON.parse(vm.getString(spec_handle));
+        const finish = timing?.span("设备调用");
+        try {
+          const value = await invoke_impl(spec);
+          return vm.newString(JSON.stringify(value === undefined ? null : value));
+        } finally { finish?.(); }
       });
       vm.setProp(vm.global, "__invoke", invoke_fn);
       invoke_fn.dispose();
     }
-    const {
-      cookie_grant_id,
-      ...sandbox_metadata
-    } = route_metadata;
+    const { cookie_grant_id, ...sandbox_metadata } = route_metadata;
     const route_metadata_handle = vm.newString(JSON.stringify(sandbox_metadata));
     vm.setProp(vm.global, "__routeMetadataJSON", route_metadata_handle);
     route_metadata_handle.dispose();
@@ -617,15 +688,16 @@ export async function execute_script_inner(script, route_metadata, invoke_impl, 
       if (mock_result.error) {
         const detail = sandbox_error_detail(vm, mock_result.error);
         mock_result.error.dispose();
-        throw new ScriptError("mock", "mock ctx 无效：" + (detail.message || "未知错误"), detail);
+        throw new ScriptError(
+          "mock",
+          "mock ctx 无效：" + (detail.message || "未知错误"),
+          detail,
+        );
       }
       mock_result.value.dispose();
     }
     // ctx 在独立文件求值，脚本堆栈的行号直接对应编辑器源码。
-    const context_result = vm.evalCode(script_ctx_source({
-      has_invoke: invoke_impl !== null,
-      debug: route_metadata.debug_request === true
-    }), "rss-context.js");
+    const context_result = vm.evalCode(script_ctx_source({ has_invoke: invoke_impl !== null, debug: route_metadata.debug_request === true }), "rss-context.js");
     if (context_result.error) {
       const detail = sandbox_error_detail(vm, context_result.error);
       context_result.error.dispose();
@@ -635,14 +707,17 @@ export async function execute_script_inner(script, route_metadata, invoke_impl, 
     const code = script + "\n" + script_result_source();
     // module 模式支持顶层 await（async 脚本函数）；返回值是 module exports，
     // 因此脚本结果经 globalThis.__result 传出。
-    const result = await vm.evalCodeAsync(code, "script-source.js", {
-      type: "module"
-    });
+    timing?.mark("脚本执行（含外部调用等待）");
+    const result = await vm.evalCodeAsync(code, "script-source.js", { type: "module" });
     if (result.error) {
       // 语法/模块求值失败：QuickJS 对解析错误不给 stack，属预期。
       const detail = sandbox_error_detail(vm, result.error);
       result.error.dispose();
-      throw new ScriptError("module", "脚本执行失败：" + (detail.message || "未知错误"), detail);
+      throw new ScriptError(
+        "module",
+        "脚本执行失败：" + (detail.message || "未知错误"),
+        detail,
+      );
     }
     // TLA module 的续体在 pending jobs 中推进；读取结果前必须驱动完成，
     // 否则 globalThis.__result 尚未赋值。
@@ -656,7 +731,11 @@ export async function execute_script_inner(script, route_metadata, invoke_impl, 
       const detail = sandbox_error_detail(vm, module_state.error);
       module_state.error.dispose();
       result.value.dispose();
-      throw new ScriptError("runtime", "脚本执行失败：" + (detail.message || "未知错误"), detail);
+      throw new ScriptError(
+        "runtime",
+        "脚本执行失败：" + (detail.message || "未知错误"),
+        detail,
+      );
     }
     if (module_state.type === "fulfilled" && !module_state.notAPromise) {
       module_state.value.dispose();
@@ -666,6 +745,7 @@ export async function execute_script_inner(script, route_metadata, invoke_impl, 
       throw new ScriptError("runtime", "脚本异步任务未完成");
     }
     result.value.dispose();
+    timing?.mark("输出读取与校验");
     const result_handle = vm.getProp(vm.global, "__result");
     let output = vm.getString(result_handle);
     result_handle.dispose();
@@ -682,17 +762,17 @@ export async function execute_script_inner(script, route_metadata, invoke_impl, 
       if (detect_request || value?.kind === "detect") output = JSON.stringify(normalize_detect_result(value, request_context.previous));
       script_output(route_metadata, JSON.parse(output));
     } catch (failure) {
-      throw new ScriptError("output", "路由返回值无效：" + (failure instanceof Error ? failure.message : String(failure)));
+      throw new ScriptError(
+        "output",
+        "路由返回值无效：" +
+          (failure instanceof Error ? failure.message : String(failure)),
+      );
     }
     await cookie_access?.assert_grant();
-    return {
-      output,
-      invoked,
-      cookie_accesses: cookie_access?.records || [],
-      lines: sandbox_log_lines(vm, route_metadata.debug_request === true),
-      upstream_requests
-    };
+    timing?.mark("执行日志收集");
+    return { output, invoked, cookie_accesses: cookie_access?.records || [], lines: sandbox_log_lines(vm, route_metadata.debug_request === true), upstream_requests };
   } catch (failure) {
+    timing?.mark("错误诊断收集");
     // 失败路径也要把已经收集到的日志行带走，否则前几行 ctx.log 会随错误丢失。
     if (failure instanceof ScriptError) {
       failure.message = script_error_source(failure.message, script.split("\n").length);
@@ -701,13 +781,12 @@ export async function execute_script_inner(script, route_metadata, invoke_impl, 
       failure.upstream_requests = upstream_requests;
       failure.cookie_accesses = cookie_access?.records || [];
       const context_handle = vm.getProp(vm.global, "__actualRequestContextJSON");
-      try {
-        failure.request_context = JSON.parse(vm.getString(context_handle));
-      } catch {}
+      try { failure.request_context = JSON.parse(vm.getString(context_handle)); } catch {}
       context_handle.dispose();
     }
     throw failure;
   } finally {
+    timing?.mark("沙箱释放");
     // dispose 前必须清空 pending jobs；残留的 Promise 回调会触发
     // QuickJS 的 gc_obj_list 断言并中止 workerd。失败路径同样适用。
     try {

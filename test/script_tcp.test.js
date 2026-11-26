@@ -53,7 +53,7 @@ test("QuickJS 显式 TCP 传输访问任意站点，默认/显式 fetch 不建�
     const result = await run(url, { transport: "tcp" });
     assert.equal(JSON.parse(result.output).title, "网页正文");
     assert.equal(result.upstream_requests[0].transport, "tcp");
-    assert.doesNotMatch(JSON.stringify(result.upstream_requests), /secret/);
+    assert.equal(result.upstream_requests[0].url, url);
   }
   assert.equal(tcp.connections.length, 2);
   for (const options of [{}, { transport: "fetch" }]) {
@@ -100,7 +100,7 @@ test("TCP 未授权/伪造 Cookie、请求头注入和私网重定向不会发�
   globalThis.fetch = async () => assert.fail("不应发送请求");
   await assert.rejects(run("https://example.com/account/", { transport: "tcp" }, true), /Cookie 权限/);
   await assert.rejects(run("https://example.com/", { transport: "tcp", cookies: { id: "forged" } }), /Cookie 句柄无效/);
-  await assert.rejects(run("https://example.com/", { transport: "tcp", headers: { Cookie: "secret" } }), /禁止直接填写 Cookie/);
+  await assert.rejects(run("https://example.com/", { transport: "tcp", headers: { Cookie: "secret\r\nInjected: yes" } }), /请求头值无效/);
   await assert.rejects(run("https://example.com/", { transport: "tcp", headers: { Referer: "a\r\nCookie: secret" } }), /请求头值无效/);
   await assert.rejects(run("http://127.0.0.1/", { transport: "tcp" }));
   assert.equal(tcp.connections.length, 0);

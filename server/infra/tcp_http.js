@@ -165,6 +165,15 @@ export async function tcp_http_fetch(value, options = {}, connect_fn) {
     [...headers].map(([name, header]) => name + ": " + header + "\r\n").join("") + "\r\n");
   const signal = options.signal ?? AbortSignal.timeout(SCRIPT_FETCH_TIMEOUT_MS);
   signal.throwIfAborted();
+  const timing = options.timing;
+  let phase = "connect_ms", phase_started_at = timing ? Date.now() : 0;
+  const next_phase = name => {
+    if (!timing) return;
+    const now = Date.now();
+    if (phase) timing[phase] = now - phase_started_at;
+    phase = name;
+    phase_started_at = now;
+  };
   const connector = connect_fn ?? (await import("cloudflare:sockets")).connect;
   signal.throwIfAborted();
   const socket = connector({ hostname: url.hostname, port: url.protocol === "https:" ? 443 : 80 },
@@ -177,8 +186,10 @@ export async function tcp_http_fetch(value, options = {}, connect_fn) {
   signal.addEventListener("abort", on_abort, { once: true });
   const perform = async () => {
     await socket.opened;
+    next_phase("send_ms");
     await writer.write(request);
     if (body_bytes.length) await writer.write(body_bytes);
+    next_phase("wait_headers_ms");
     const http = new HttpReader(reader);
     let status, response_headers;
     do {
@@ -187,10 +198,14 @@ export async function tcp_http_fetch(value, options = {}, connect_fn) {
       if (status < 100 || status > 599 || !match || status === 101) throw invalid_response("HTTP 状态行无效");
       response_headers = await http.headers();
     } while (status < 200);
+    next_phase("receive_body_ms");
     let bytes = null;
     if (status >= 200 && status < 300 && ![204, 205].includes(status)) {
-      bytes = await decode_body(await http.body(response_headers), response_headers.get("content-encoding")?.toLowerCase());
+      const encoded = await http.body(response_headers);
+      next_phase("decompress_ms");
+      bytes = await decode_body(encoded, response_headers.get("content-encoding")?.toLowerCase());
     }
+    next_phase(null);
     for (const name of ["content-length", "transfer-encoding", "content-encoding", "connection"]) response_headers.delete(name);
     return new Response(bytes, { status, headers: response_headers });
   };
@@ -198,6 +213,7 @@ export async function tcp_http_fetch(value, options = {}, connect_fn) {
     if (signal.aborted) on_abort();
     return await Promise.race([perform(), aborted]);
   } finally {
+    next_phase(null);
     signal.removeEventListener("abort", on_abort);
     // 关闭握手不能延长请求或取消的超时预算。
     try { void socket.close().catch(() => {}); } catch {}

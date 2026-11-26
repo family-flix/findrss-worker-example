@@ -44,7 +44,7 @@ test("生产 QuickJS：跨 origin 重定向移除微博 XSRF，返回原 origin 
   assert.equal(requests[2].get('x-xsrf-token'), null);
 });
 
-test("Debug 上游请求记录实际发送的 Cookie 来源及每跳状态，不记录凭证值或 URL query", async () => {
+test("Debug 上游请求记录实际发送的 Cookie 来源及每跳状态，保留完整 URL，不记录凭证请求头值", async () => {
   const probe = `export const route = { async handler(ctx) { await ctx.fetchText('https://weibo.com/start?token=upstream-secret'); return {items: []}; } };`;
   await with_fetch(async url => url.includes('weibo.com')
     ? new Response(null, { status: 302, headers: { Location: 'https://other.example/failure?secret=redirect-secret' } })
@@ -58,7 +58,9 @@ test("Debug 上游请求记录实际发送的 Cookie 来源及每跳状态，不
         assert.equal(failure.upstream_requests[1].status, 403);
         assert.equal(failure.upstream_requests[1].credentials.source, 'none');
         assert.deepEqual(failure.upstream_requests[1].credentials.headers_sent, []);
-        assert.doesNotMatch(JSON.stringify(failure.upstream_requests), /upstream-secret|redirect-secret|private-cookie-value|private body/);
+        assert.equal(failure.upstream_requests[0].url, "https://weibo.com/start?token=upstream-secret");
+        assert.equal(failure.upstream_requests[1].url, "https://other.example/failure?secret=redirect-secret");
+        assert.doesNotMatch(JSON.stringify(failure.upstream_requests), /private-cookie-value|private body/);
         return true;
       }));
 });
@@ -91,12 +93,15 @@ test("生产 QuickJS：脚本不能覆盖 Host 或注入请求头", async () => 
   }
 });
 
-test('生产 QuickJS：禁止直接传入 Cookie 请求头', async () => {
+test('生产 QuickJS：允许经过校验的脚本内置 Cookie 请求头', async () => {
   const probe = `export const route = { async handler(ctx) {
     return { title: await ctx.fetchText('https://weibo.com/start', { headers: { Cookie: 'SUB=inline-fixture' } }), items: [] };
   } };`;
-  await with_fetch(() => assert.fail("禁止的 Cookie 不得发送"), () => assert.rejects(
-    execute_script_inner(probe, metadata, null, request_context, [], ''), /禁止直接填写/));
+  const result = await with_fetch(async (url, options) => {
+    assert.equal(options.headers.Cookie, "SUB=inline-fixture");
+    return new Response("feed");
+  }, () => execute_script_inner(probe, metadata, null, request_context, [], ""));
+  assert.equal(JSON.parse(result.output).title, "feed");
 });
 
 test('UIFID Cookie 派生头按每一跳域名匹配，跨域重定向不泄露', async () => {

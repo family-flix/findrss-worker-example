@@ -10,6 +10,18 @@ class RSSScript {
     return Result.Err("子类必须实现 fetch(ctx)，返回 Result<feed JSON>", "UPSTREAM_INVALID_RESPONSE");
   }
 
+  static async navigate(ctx, url, options = {}, evaluate) {
+    if (ctx.env?.BROWSER_ENABLED !== true) return Result.Err("浏览器未启用，请设置 BROWSER_ENABLED=true", "SOURCE_UNAVAILABLE");
+    try {
+      const rendered = await ctx.puppeteer.navigate(url, options, evaluate);
+      if (rendered.error) return rendered;
+      if (typeof rendered.data?.html !== "string" || !rendered.data.html.trim()) {
+        return Result.Err("浏览器未返回有效页面", "UPSTREAM_INVALID_RESPONSE");
+      }
+      return Result.Ok(rendered.data.html);
+    } catch (error) { return Result.Err(error, error?.code ?? "SOURCE_UNAVAILABLE"); }
+  }
+
   static timestamp(value) {
     try {
       if (value === undefined || value === null || value === "" || value === 0 || value === "0") return Result.Ok(undefined);

@@ -158,7 +158,12 @@ test("沙箱默认匿名；显式授权按名称发送，跨 origin 后不恢复
     assert.ok(!JSON.stringify(result.cookie_accesses).includes("secret=query"));
     await assert.rejects(execute_script(script, compiled.metadata), /Cookie 权限/);
     const inline = script.replace('{ cookies: jar, cookie_headers: { "x-xsrf-token": "XSRF-TOKEN" } }', '{ headers: { Cookie: "manual-secret" } }');
-    await assert.rejects(execute_script(inline, compiled.metadata, null, undefined, [], "", access), /禁止直接填写/);
+    calls.length = 0;
+    const inline_result = await execute_script(inline, { ...compiled.metadata, debug: true }, null, undefined, [], "", access);
+    assert.equal(calls[0].headers.Cookie, "manual-secret");
+    assert.ok(calls.slice(1).every(call => !call.headers.Cookie));
+    assert.equal(inline_result.upstream_requests[0].credentials.source, "script_inline");
+    assert.doesNotMatch(JSON.stringify(inline_result), /manual-secret/);
   } finally {
     globalThis.fetch = original_fetch;
   }

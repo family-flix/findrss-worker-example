@@ -1,7 +1,7 @@
 import puppeteer from "@cloudflare/puppeteer";
 import { MAX_SCRIPT_BYTES } from "../lib/constants.js";
 
-export function create_puppeteer_navigate(binding, puppeteer_impl = puppeteer) {
+export function create_puppeteer_navigate(binding, puppeteer_impl = puppeteer, session) {
   return async (url, options = {}, evaluate, signal) => {
     let target;
     try { target = new URL(url); } catch { throw new Error("navigate 需要完整的 HTTP(S) URL"); }
@@ -27,16 +27,34 @@ export function create_puppeteer_navigate(binding, puppeteer_impl = puppeteer) {
     if (new TextEncoder().encode(evaluation).length > MAX_SCRIPT_BYTES) throw new Error("navigate 的提取函数及参数过大");
     const combined = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(110000)]);
     combined.throwIfAborted();
-    const browser = await puppeteer_impl.launch(binding);
+    const restored = await session?.restore(target.href);
+    const verification = restored ? session : undefined;
+    let browser;
+    let reused = false;
+    if (restored?.session_id) {
+      try {
+        const previous = await puppeteer_impl.connect(binding, restored.session_id);
+        if (restored.session_expires_at > Date.now()) { browser = previous; reused = true; }
+        else await previous.close();
+      }
+      catch { /* 已关闭或被占用的会话按正常流程重建。 */ }
+    }
+    browser ||= verification ? await puppeteer_impl.launch(binding, { keep_alive: 600000 }) : await puppeteer_impl.launch(binding);
+    let page;
+    let captured = false;
+    const session_id = browser.sessionId?.();
+    const keep_open = !!verification && typeof session_id === "string" && session_id !== "unknown";
     let on_abort;
     try {
       combined.throwIfAborted();
       return await Promise.race([
         (async () => {
-          const page = await browser.newPage();
+          page = await browser.newPage();
           await page.setViewport({ width: viewport.width, height: viewport.height });
+          if (!reused && restored?.user_agent) await page.setUserAgent(restored.user_agent);
+          if (!reused && restored?.cookies?.length) await page.setCookie(...restored.cookies);
           await page.goto(target.href, { waitUntil: "networkidle2", timeout: 30000 });
-          if (options.selector) await page.waitForSelector(options.selector, { visible: true, timeout: 15000 });
+          if (options.selector) await page.waitForSelector(options.selector, { visible: true, timeout: verification ? 45000 : 15000 });
           await page.evaluate(async delay => {
             await new Promise(resolve => setTimeout(resolve, delay));
             await Promise.race([document.fonts?.ready, new Promise(resolve => setTimeout(resolve, 2000))]);
@@ -49,6 +67,14 @@ export function create_puppeteer_navigate(binding, puppeteer_impl = puppeteer) {
             return json;
           })()`);
           combined.throwIfAborted();
+          if (verification) await verification.capture({ url: target.href, final_url: page.url(),
+            cookies: await page.cookies(), user_agent: await page.evaluate("navigator.userAgent"), reused,
+            ...(keep_open ? { session_id, session_expires_at: Date.now() + 600000 } : {}),
+            close: keep_open && !reused ? async () => {
+              const active = await puppeteer_impl.connect(binding, session_id);
+              await active.close();
+            } : undefined });
+          captured = true;
           return JSON.parse(json);
         })(),
         new Promise((_, reject) => {
@@ -59,7 +85,9 @@ export function create_puppeteer_navigate(binding, puppeteer_impl = puppeteer) {
       ]);
     } finally {
       if (on_abort) combined.removeEventListener("abort", on_abort);
-      await browser.close();
+      if (keep_open && (captured || reused) && (!combined.aborted || reused)) {
+        try { if (page) await page.close(); } finally { await browser.disconnect(); }
+      } else await browser.close();
     }
   };
 }

@@ -1,4 +1,5 @@
 // 仅供隔离的 SDK VM 使用；没有文件、网络、浏览器或宿主凭证访问能力。
+// shortcut: 只模拟抖音页面校验和签名所用的浏览器 API，SDK 需要其他 API 时补齐环境。
 export const DOUYIN_SDK_ENVIRONMENT = String.raw`
 var request = JSON.parse(__sdk_request);
 var window = globalThis, self = globalThis;
@@ -42,33 +43,38 @@ Object.defineProperty(document,'cookie',{
  set:function(value){var parts=String(value).split(';'),pair=parts[0],i=pair.indexOf('=');if(i<1)return;var name=pair.slice(0,i).trim();var expired=parts.slice(1).some(function(attr){var p=attr.trim().split('='),key=p.shift().toLowerCase(),v=p.join('=');return key==='max-age'?Number(v)<=0:key==='expires'&&Date.parse(v)<=Date.now();});if(expired)sdk_cookies.delete(name);else sdk_cookies.set(name,pair.slice(i+1));}
 });
 var XMLHttpRequest = function(){};
-XMLHttpRequest.prototype.open=noop;XMLHttpRequest.prototype.send=noop;XMLHttpRequest.prototype.setRequestHeader=noop;
+// 只捕获官方 SDK 改写后的请求，不在 VM 内联网。
+var signed_request_url;
+XMLHttpRequest.prototype.open=function(method,url){this.url=String(url);this.headers={};};
+XMLHttpRequest.prototype.send=function(){
+  var url=new URL(this.url),target=new URL(request.url);
+  if(url.origin===target.origin && url.pathname===target.pathname)signed_request_url=url.href;
+};
+XMLHttpRequest.prototype.setRequestHeader=function(name,value){this.headers[name]=value;};
 var fetch=noop;
-var _sdkGlueVersionMap={sdkGlueVersion:'1.0.0.64-fix.01',bdmsVersion:'1.0.1.19-fix.01'};
 var onwheelx={_Ax:'0X21'};
 var gfdatav1={envName:'prod'};
-var _secsdk_uifid=String(request.cookie).split('; ').find(function(p){return p.indexOf('UIFID=')===0;});
-_secsdk_uifid=_secsdk_uifid?_secsdk_uifid.slice(6):'';
+var _secsdk_uifid=sdk_cookies.get('UIFID')||sdk_cookies.get('UIFID_TEMP')||'';
 var SSR_RENDER_DATA={app:{envService:'prod',odin:{user_id:_secsdk_uifid}}};
 function atob(value){var alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/',bits=0,count=0,out='';String(value).replace(/=+$/,'').split('').forEach(function(c){var n=alphabet.indexOf(c);if(n<0)return;bits=(bits<<6)|n;count+=6;if(count>=8){count-=8;out+=String.fromCharCode((bits>>>count)&255);}});return out;}
 function btoa(value){var alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/',out='';for(var i=0;i<value.length;i+=3){var n=(value.charCodeAt(i)<<16)|((value.charCodeAt(i+1)||0)<<8)|(value.charCodeAt(i+2)||0);out+=alphabet[(n>>>18)&63]+alphabet[(n>>>12)&63]+(i+1<value.length?alphabet[(n>>>6)&63]:'=')+(i+2<value.length?alphabet[n&63]:'=');}return out;}
 `;
-export const DOUYIN_SDK_RESULT = String.raw`
+export const DOUYIN_BDMS_REQUEST = String.raw`
 var target = new URL(request.url);
 target.searchParams.delete('a_bogus');
-// SDK 下载后再确定时钟，避免 URL 时间戳与安全签名过期头不一致。
 var signing_time = Math.floor(Date.now()/1000);
 target.searchParams.set('timestamp',String(signing_time));
 Date.now = function(){return signing_time*1000;};
-var signing = bdms.init._v[1][37];
-if(typeof signing !== 'function')throw new Error('Douyin signing SDK changed');
-var signing_query = [];
-// 浏览器原始请求用 %20；表单编码的 + 会改变 a_bogus 的输入。
-target.searchParams.forEach(function(value,key){signing_query.push(encodeURIComponent(key)+'='+encodeURIComponent(value));});
-target.searchParams.set('a_bogus',signing(signing_query.join('&'),'',request.user_agent));
 var verify_fp = sdk_cookies.get('s_v_web_id');
 if(verify_fp){target.searchParams.set('verifyFp',verify_fp);target.searchParams.set('fp',verify_fp);}
-var secured = use('webSignUrl')(target.href);
+bdms.init({aid:6383,pageId:6241,boe:false,paths:['^/aweme/v1/'],ddrt:8.5,ic:8.5});
+var xhr=new XMLHttpRequest();
+xhr.open('GET',target.href,true);
+xhr.send();
+if(!signed_request_url || !new URL(signed_request_url).searchParams.get('a_bogus'))throw new Error('Douyin BDMS did not sign the request');
+`;
+export const DOUYIN_SDK_RESULT = String.raw`
+var secured = use('webSignUrl')(signed_request_url);
 if(!secured.headers['x-secsdk-web-signature'])throw new Error('Douyin security SDK did not generate signature');
 JSON.stringify(secured);
 `;

@@ -19,7 +19,7 @@ export const RSS_FETCH_CREDENTIAL_HEADERS = ["authorization", "x-csrf-token", "x
 const cookie_header_names = new Map([["uifid", "UIFID"], ["kww", "kwfv1"], ["x-csrf-token", "ct0"], ["x-csrftoken", "csrftoken"], ["x-xsrf-token", "XSRF-TOKEN"]]);
 export function rss_fetch_timeout(options) {
   const timeout_ms = options?.timeout_ms === undefined ? SCRIPT_FETCH_TIMEOUT_MS : options.timeout_ms;
-  if (!Number.isInteger(timeout_ms) || timeout_ms < 1 || timeout_ms > SCRIPT_FETCH_TIMEOUT_MS) throw new Error("fetchText timeout_ms 必须为 1–10000 的整数");
+  if (!Number.isInteger(timeout_ms) || timeout_ms < 1 || timeout_ms > 60000) throw new Error("fetchText timeout_ms 必须为 1–60000 的整数");
   return timeout_ms;
 }
 export function rss_fetch_request(options) {

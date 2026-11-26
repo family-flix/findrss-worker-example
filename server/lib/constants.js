@@ -59,7 +59,7 @@ export const MAX_SCRIPTS = 200;
 export const MAX_SCRIPT_BYTES = 10 * 1024 * 1024;
 export const MAX_RSS_ROUTE_PATH_BYTES = 512;
 export const SCRIPT_MODULE_ROUTE_EXPORT = /\bexport\s+const\s+routes?\s*=/;
-export const SCRIPT_FETCH_TIMEOUT_MS = 10000;
+export const SCRIPT_FETCH_TIMEOUT_MS = 30000;
 export const SCRIPT_FETCH_BYTES = 10 * 1024 * 1024;
 export const SCRIPT_OUTPUT_BYTES = 10 * 1024 * 1024;
 export const SCRIPT_RUN_TIMEOUT_MS = 8000;

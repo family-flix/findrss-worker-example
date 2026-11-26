@@ -169,6 +169,7 @@ const __requestContext = JSON.parse(__requestContextJSON);
 const ctx = {
   route: JSON.parse(__routeMetadataJSON),
   config: JSON.parse(__routeMetadataJSON).config || {},
+  env: Object.freeze({ BROWSER_ENABLED: __requestContext.env?.BROWSER_ENABLED === true }),
   method: __requestContext.method,
   pathname: __requestContext.pathname,
   params: __requestContext.params,
@@ -351,6 +352,9 @@ const __metadata = __entries.map((entry, route_index) => {
   if (typeof entry.example !== "string" || !entry.example.startsWith("/")) {
     throw new Error("route.example 必须是以 / 开头的字符串");
   }
+  if (entry.example_name !== undefined && (typeof entry.example_name !== "string" || !entry.example_name.trim() || entry.example_name.length > 128)) {
+    throw new Error("route.example_name 必须是 1–128 字符的非空字符串");
+  }
   if (entry.parameters === null || typeof entry.parameters !== "object" || Array.isArray(entry.parameters)) {
     throw new Error("route.parameters 必须是对象");
   }
@@ -372,6 +376,7 @@ const __metadata = __entries.map((entry, route_index) => {
     tags: entry.tags,
     maintainers: entry.maintainers,
     example: entry.example,
+    ...(entry.example_name === undefined ? {} : { example_name: entry.example_name.trim() }),
     parameters: entry.parameters,
     description: entry.description,
   };
